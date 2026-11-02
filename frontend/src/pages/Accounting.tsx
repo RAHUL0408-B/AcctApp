@@ -141,3 +141,36 @@ export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: 
     </>
   );
 }
+
+/** Sales settings (invoice payment terms and terms printed on invoices) or purchases settings (bill payment terms). */
+export function DocDefaults({ org, side, canManage }: { org: Org; side: 'sales' | 'purchases'; canManage: boolean }) {
+  const [f, setF] = useState({ invoiceDueDays: '', billDueDays: '', invoiceTerms: '' });
+  const [ok, setOk] = useState('');
+  const { error, busy, run } = useAction();
+  useEffect(() => { api(`/orgs/${org.id}/settings`).then((s) => setF({ invoiceDueDays: s.invoiceDueDays ?? '', billDueDays: s.billDueDays ?? '', invoiceTerms: s.invoiceTerms ?? '' })); }, [org.id]);
+  const days = (v: string) => (v === '' ? null : Number(v));
+  const save = () => run(async () => {
+    await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: side === 'sales' ? { invoiceDueDays: days(String(f.invoiceDueDays)), invoiceTerms: f.invoiceTerms || null } : { billDueDays: days(String(f.billDueDays)) } });
+    setOk('Saved. New documents will use these defaults.');
+  });
+  const sales = side === 'sales';
+  return (
+    <>
+      <PageHeader title={sales ? 'Sales settings' : 'Purchases settings'} subtitle={sales ? 'Defaults for new invoices.' : 'Defaults for new bills.'} />
+      <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      <Card title="Payment terms">
+        <div className="grid gap-3 md:grid-cols-2">
+          {sales
+            ? <Field label="Invoices are due this many days after the invoice date" aria-label="Invoice due days" type="number" min={0} max={365} value={f.invoiceDueDays} disabled={!canManage} onChange={(e) => setF({ ...f, invoiceDueDays: e.target.value })} />
+            : <Field label="Bills are due this many days after the bill date" aria-label="Bill due days" type="number" min={0} max={365} value={f.billDueDays} disabled={!canManage} onChange={(e) => setF({ ...f, billDueDays: e.target.value })} />}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">Leave empty for no default. A due date typed on the document always wins.</p>
+        {sales && (
+          <label className="mt-4 block text-sm"><span className="mb-1 block font-medium text-slate-600">Terms printed on every invoice</span>
+            <textarea aria-label="Invoice terms" rows={3} maxLength={500} disabled={!canManage} className="w-full rounded-md border border-slate-300 px-3 py-2" placeholder="e.g. Please pay by NEFT to HDFC Bank, A/c 0001234, IFSC HDFC0000001" value={f.invoiceTerms} onChange={(e) => setF({ ...f, invoiceTerms: e.target.value })} /></label>
+        )}
+        {canManage && <div className="mt-3"><Button disabled={busy} onClick={save}>Save</Button></div>}
+      </Card>
+    </>
+  );
+}

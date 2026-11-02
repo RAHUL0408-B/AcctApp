@@ -8,63 +8,99 @@ import { Bank } from './Bank';
 import { Reports } from './Reports';
 import { Files, Import, Schedules, Tasks } from './Practice';
 import { PreDocs, Recurring } from './Sales';
-import { FixedAssets, Items, OrgSettings } from './Accounting';
+import { DocDefaults, FixedAssets, Items, OrgSettings } from './Accounting';
 import { Dashboard } from './Dashboard';
 import { PageHeader } from '../kit';
 import { Inventory } from './Inventory';
 import { Approvals, ExpenseClaims } from './Approvals';
 import { Budgets, Tracking, YearEnd } from './Planning';
+import { Overview } from './Overview';
+import { Money } from './Money';
+import { Projects } from './Projects';
 
 interface Account { id: number; code: string; name: string; type: string; group: string }
 interface Entry { id: number; date: string; narration: string; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface TB { accounts: { code: string; name: string; debit: number; credit: number }[]; totalDebit: number; totalCredit: number; balanced: boolean }
 
 export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
-  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking';
+  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking'
+  | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings';
 
-/** Sidebar structure. Entries marked manage are only shown to owners and accountants. */
-export const NAV: { group: string; items: { key: PageKey; label: string; manage?: boolean }[] }[] = [
-  { group: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard' }] },
-  { group: 'Sales', items: [{ key: 'invoices', label: 'Invoices' }, { key: 'quotes', label: 'Quotes' }, { key: 'recurring', label: 'Repeating invoices' }, { key: 'customers', label: 'Customers' }] },
-  { group: 'Purchases', items: [{ key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' }, { key: 'expenses', label: 'Expense claims' }, { key: 'suppliers', label: 'Suppliers' }, { key: 'approvals', label: 'Awaiting approval' }] },
-  { group: 'Accounting', items: [{ key: 'bank', label: 'Bank accounts' }, { key: 'journal', label: 'Manual journals' }, { key: 'coa', label: 'Chart of accounts' }, { key: 'assets', label: 'Fixed assets' }, { key: 'items', label: 'Products and services' }, { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'year-end', label: 'Year-end close' }] },
-  { group: 'Reporting', items: [{ key: 'reports', label: 'Reports' }] },
-  { group: 'Compliance', items: [{ key: 'tasks', label: 'Tasks and deadlines' }, { key: 'files', label: 'Documents' }] },
-  { group: 'Setup', items: [{ key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true }, { key: 'tracking', label: 'Tracking categories' }, { key: 'settings', label: 'Organisation settings' }] },
+/** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
+export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; heading?: string; divider?: boolean; gear?: boolean }
+
+/** Top-bar menus. Entries marked manage are only shown to owners and accountants. */
+export const NAV: { group: string; items: NavItem[] }[] = [
+  { group: 'Home', items: [{ key: 'dashboard', label: 'Home' }] },
+  { group: 'Sales', items: [
+    { key: 'sales-overview', label: 'Sales overview' }, { key: 'invoices', label: 'Invoices' }, { key: 'quotes', label: 'Quotes' }, { key: 'recurring', label: 'Repeating invoices' },
+    { key: 'items', label: 'Products and services' }, { key: 'customers', label: 'Customers' },
+    { key: 'sales-settings', label: 'Sales settings', divider: true, gear: true, manage: true }] },
+  { group: 'Purchases', items: [
+    { key: 'purchases-overview', label: 'Purchases overview' }, { key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' },
+    { key: 'expenses', label: 'Expense claims' }, { key: 'approvals', label: 'Awaiting approval' }, { key: 'suppliers', label: 'Suppliers' },
+    { key: 'purchases-settings', label: 'Purchases settings', divider: true, gear: true, manage: true }] },
+  { group: 'Reporting', items: [
+    { key: 'reports', label: 'All reports' },
+    { key: 'reports', sub: 'stcf', label: 'Short-term cash flow', heading: 'Analytics', divider: true }, { key: 'reports', sub: 'snap', label: 'Business snapshot' },
+    { key: 'reports', sub: 'pnlm', label: 'P&L by month' }, { key: 'reports', sub: 'bva', label: 'Budget vs actual' }] },
+  { group: 'Accounting', items: [
+    { key: 'bank', label: 'Bank accounts', heading: 'Banking' }, { key: 'bank-rules', label: 'Bank rules' },
+    { key: 'money', sub: 'spend', label: 'Spend money' }, { key: 'money', sub: 'receive', label: 'Receive money' }, { key: 'money', sub: 'transfer', label: 'Transfer money' },
+    { key: 'files', label: 'Documents', divider: true },
+    { key: 'coa', label: 'Chart of accounts', heading: 'Accounting tools', divider: true }, { key: 'assets', label: 'Fixed assets' }, { key: 'journal', label: 'Manual journals' },
+    { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'tracking', label: 'Tracking categories' }, { key: 'year-end', label: 'Year-end close' },
+    { key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true },
+    { key: 'settings', label: 'Organisation settings', divider: true, gear: true }] },
+  { group: 'Tax', items: [
+    { key: 'reports', sub: 'gstr1', label: 'GSTR-1', heading: 'GST' }, { key: 'reports', sub: 'gstr3b', label: 'GSTR-3B' },
+    { key: 'reports', sub: 'tds', label: 'TDS deducted', heading: 'TDS', divider: true },
+    { key: 'tasks', label: 'Tasks and deadlines', divider: true }] },
+  { group: 'Contacts', items: [{ key: 'contacts', label: 'All contacts' }, { key: 'customers', label: 'Customers' }, { key: 'suppliers', label: 'Suppliers' }] },
+  { group: 'Projects', items: [{ key: 'projects', label: 'Projects' }] },
 ];
 
-export function OrgPage({ org, role, page, go, onOrgChanged }: { org: Org; role: string; page: PageKey; go: (p: PageKey) => void; onOrgChanged: () => void }) {
+export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const reloadAccounts = () => api<Account[]>(`/orgs/${org.id}/accounts`).then(setAccounts);
   useEffect(() => { reloadAccounts(); }, [org.id]);
   const canPost = role !== 'client';
   const canManage = role === 'owner' || role === 'accountant';
+  const isNew = sub === 'new';
   switch (page) {
-    case 'dashboard': return <Dashboard org={org} go={(p) => go(p as PageKey)} />;
-    case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} />;
-    case 'quotes': return <PreDocs org={org} kind="quote" canPost={canPost} accounts={accounts} />;
+    case 'dashboard': return <Dashboard org={org} go={go} lastLogin={lastLogin} />;
+    case 'sales-overview': return <Overview org={org} side="sales" go={go} />;
+    case 'purchases-overview': return <Overview org={org} side="purchases" go={go} />;
+    case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} startNew={isNew} />;
+    case 'quotes': return <PreDocs org={org} kind="quote" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'recurring': return <Recurring org={org} canPost={canPost} accounts={accounts} />;
-    case 'customers': return <Contacts org={org} canPost={canPost} only="customer" />;
-    case 'bills': return <Documents org={org} kind="purchases" canPost={canPost} accounts={accounts} />;
-    case 'purchase-orders': return <PreDocs org={org} kind="purchase_order" canPost={canPost} accounts={accounts} />;
-    case 'suppliers': return <Contacts org={org} canPost={canPost} only="supplier" />;
-    case 'bank': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} />;
+    case 'customers': return <Contacts org={org} canPost={canPost} only="customer" startNew={isNew} />;
+    case 'contacts': return <Contacts org={org} canPost={canPost} startNew={isNew} />;
+    case 'bills': return <Documents org={org} kind="purchases" canPost={canPost} accounts={accounts} startNew={isNew} />;
+    case 'purchase-orders': return <PreDocs org={org} kind="purchase_order" canPost={canPost} accounts={accounts} startNew={isNew} />;
+    case 'suppliers': return <Contacts org={org} canPost={canPost} only="supplier" startNew={isNew} />;
+    case 'bank': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="reconcile" />;
+    case 'bank-rules': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="rules" />;
+    case 'money': return <Money org={org} canPost={canPost} accounts={accounts} tab={sub === 'receive' || sub === 'transfer' ? sub : 'spend'} go={go} />;
     case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} /></>;
     case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Every account that transactions can post to." /><Chart org={org} accounts={accounts} canManage={canManage} reload={reloadAccounts} /></>;
     case 'assets': return <FixedAssets org={org} canManage={canManage} />;
     case 'items': return <Items org={org} canPost={canPost} accounts={accounts} />;
-    case 'reports': return <><PageHeader title="Reports" subtitle="Financial statements, ageing and GST summaries. Export to PDF or Excel." /><Reports org={org} accounts={accounts} /></>;
+    case 'reports': return <><PageHeader title="Reports" subtitle="Financial statements, analytics, ageing, GST and TDS. Star a report to add it to the Reporting menu." /><Reports org={org} accounts={accounts} initial={sub} /></>;
     case 'tasks': return <><PageHeader title="Tasks and deadlines" subtitle="Filing due dates and anything else the team needs to do for this client." /><Tasks org={org} canPost={canPost} /></>;
     case 'files': return <><PageHeader title="Documents" subtitle="Files shared between the firm and the client." /><Files org={org} canManage={canManage} /></>;
     case 'import': return canManage ? <><PageHeader title="Import data" subtitle="Bring in contacts, accounts and opening balances from other software." /><Import org={org} /></> : null;
     case 'schedules': return canManage ? <><PageHeader title="Scheduled emails" subtitle="Reports sent to you or your client automatically." /><Schedules org={org} /></> : null;
     case 'settings': return <OrgSettings org={org} canManage={canManage} onSaved={onOrgChanged} />;
+    case 'sales-settings': return <DocDefaults org={org} side="sales" canManage={canManage} />;
+    case 'purchases-settings': return <DocDefaults org={org} side="purchases" canManage={canManage} />;
     case 'approvals': return <Approvals org={org} canManage={canManage} />;
     case 'expenses': return <ExpenseClaims org={org} canPost={canPost} canManage={canManage} accounts={accounts} />;
     case 'inventory': return <Inventory org={org} canManage={canManage} />;
     case 'budgets': return <Budgets org={org} canManage={canManage} accounts={accounts} />;
     case 'year-end': return <YearEnd org={org} canManage={canManage} />;
     case 'tracking': return <Tracking org={org} canManage={canManage} />;
+    case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
   }
 }
 

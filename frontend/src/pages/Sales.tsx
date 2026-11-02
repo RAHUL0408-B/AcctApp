@@ -9,11 +9,12 @@ import { Account, emptyLine, Line, LinesEditor, linesToApi } from './Lines';
 
 interface Pre { id: number; kind: string; number: string; contactName: string; issueDate: string; expiryDate: string | null; status: string; total: number; convertedDocId: number | null }
 
-export function PreDocs({ org, kind, canPost, accounts }: { org: Org; kind: 'quote' | 'purchase_order'; canPost: boolean; accounts: Account[] }) {
+export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { org: Org; kind: 'quote' | 'purchase_order'; canPost: boolean; accounts: Account[]; startNew?: boolean }) {
   const sales = kind === 'quote';
   const [list, setList] = useState<Pre[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(startNew);
+  useEffect(() => { if (startNew) setShow(true); }, [startNew]);
   const [f, setF] = useState({ contactId: '', issueDate: today(), expiryDate: '' });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const [ok, setOk] = useState('');

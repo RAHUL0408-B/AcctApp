@@ -65,7 +65,8 @@ await page.getByRole('button', { name: 'Post entry' }).click();
 await page.getByRole('alert').getByText(/unbalanced/).waitFor();
 step('unbalanced entry rejected');
 
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reports', exact: true }).click();
+await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reporting', exact: true }).click();
+await page.getByRole('button', { name: 'All reports', exact: true }).click();
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
 await page.getByTestId('tb-debit').waitFor();
 assert.equal(await page.getByTestId('tb-debit').innerText(), '5,000.50');
@@ -76,7 +77,8 @@ await page.getByRole('navigation', { name: 'Client sections' }).getByRole('butto
 await page.getByRole('button', { name: 'Manual journals', exact: true }).click();
 await page.getByRole('button', { name: 'Reverse' }).first().click();
 await page.getByText('Reversal posted.').waitFor();
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reports', exact: true }).click();
+await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reporting', exact: true }).click();
+await page.getByRole('button', { name: 'All reports', exact: true }).click();
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
 await page.getByText('✓').first().waitFor();
 step('entry reversed; books still balanced');
@@ -90,6 +92,7 @@ await page.getByRole('button', { name: 'Turn on 2FA' }).click();
 await page.getByTestId('recovery-codes').waitFor();
 step('2FA enabled, recovery codes shown');
 
+await page.getByRole('button', { name: 'Account menu' }).click();
 await page.getByRole('button', { name: 'Log out' }).click();
 await page.getByLabel('Email').fill(email);
 await page.getByLabel('Password').fill(password);

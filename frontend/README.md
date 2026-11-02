@@ -12,8 +12,8 @@ Production build: `npm run build -w frontend` (output in `frontend/dist`).
 ## Structure
 | Path | What it holds |
 |---|---|
-| `src/App.tsx` | Top bar with dropdown menus, client switcher, account menu, hash routing (`#/o/<client>/<page>`) |
-| `src/pages/` | One file per area: `Dashboard`, `Documents` (invoices and bills), `Sales` (quotes, POs, repeating), `Contacts`, `Bank`, `Accounting` (items, fixed assets, settings), `Inventory`, `Approvals` (approvals, expense claims), `Planning` (tracking, budgets, year-end), `Reports`, `Practice` (tasks, files, import, schedules), `PracticeOverview`, `Account` (billing, privacy, help), `Security`, `Auth` |
+| `src/App.tsx` | Top bar: organisation menu, dropdown menus, "+" create menu with Alt shortcuts, search, notifications, account menu; hash routing (`#/o/<client>/<page>[/<sub>]`) |
+| `src/pages/` | One file per area: `Dashboard`, `Documents` (invoices and bills), `Sales` (quotes, POs, repeating), `Contacts`, `Bank`, `Accounting` (items, fixed assets, settings), `Inventory`, `Approvals` (approvals, expense claims), `Planning` (tracking, budgets, year-end), `Overview` (sales / purchases), `Money` (spend, receive, transfer), `Projects`, `Reports`, `Practice` (tasks, files, import, schedules), `PracticeOverview`, `Account` (billing, privacy, help), `Security`, `Auth` |
 | `src/pages/OrgWorkspace.tsx` | The menu structure (`NAV`) and which page each menu item opens |
 | `src/ui.tsx`, `src/kit.tsx` | Shared components: logo, buttons, fields, cards, page headers, stat tiles, badges, bar chart |
 | `src/api.ts` | Fetch wrapper with the login token, money formatting (paise to rupees) |
@@ -29,5 +29,9 @@ All brand colours are the `--color-brand-*` values at the top of `src/index.css`
 node e2e/smoke.mjs            # quick check: register, journal, reversal, 2FA
 node e2e/full.mjs             # full walk-through of every major feature
 node e2e/more.mjs             # exports, stock, approvals, expense claims, tracking, budgets, year-end
+node e2e/workspace.mjs        # login page, menus, shortcuts, search, money, cash forecast, TDS, projects
 ```
 Set `WEB_URL` to test another address (for example the live site) and `STEP_TIMEOUT=60000` for slow hosts.
+
+## Login page and parent company
+The login page introduces the product to first-time users and presents FinTaxVers, the parent company. Its details live in `PARENT` at the top of `src/pages/Auth.tsx`; add the phone number, email and office address there once confirmed.

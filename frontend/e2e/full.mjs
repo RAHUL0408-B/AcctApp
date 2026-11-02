@@ -24,7 +24,7 @@ const nav = async (name) => {
 };
 const account = async (name) => {
   const bar = page.getByRole('navigation', { name: 'Account' });
-  if (name !== 'Clients') await bar.getByRole('button', { name: 'Account menu' }).click();
+  await bar.getByRole('button', { name: 'Account menu' }).click();
   await bar.getByRole('button', { name, exact: true }).click();
 };
 const btn = (name) => page.getByRole('button', { name, exact: true });
@@ -54,7 +54,7 @@ await page.getByRole('listitem').getByText('Mehta Consulting').waitFor();
 await btn('Open books').click();
 await heading('Dashboard');
 await page.getByRole('navigation', { name: 'Client sections' }).waitFor();
-for (const g of ['Dashboard', 'Sales', 'Purchases', 'Accounting', 'Reports', 'Compliance', 'Setup']) await page.getByRole('navigation', { name: 'Client sections' }).getByText(g, { exact: true }).waitFor();
+for (const g of ['Home', 'Sales', 'Purchases', 'Reporting', 'Accounting', 'Tax', 'Contacts', 'Projects']) await page.getByRole('navigation', { name: 'Client sections' }).getByText(g, { exact: true }).waitFor();
 step('client opened; sidebar shows Sales, Purchases, Accounting, Reporting, Compliance, Setup');
 
 // ---- contacts and products
@@ -141,12 +141,16 @@ await page.getByLabel('Bank name').fill('HDFC Current');
 await page.getByLabel('Bank ledger account').selectOption({ label: '1010 Bank Account' });
 await btn('Add').click();
 await page.getByRole('heading', { name: 'Reconcile' }).waitFor();
+await nav('Bank rules');
+await heading('Bank rules');
 await page.getByLabel('Rule name').fill('Bank charges');
 await page.getByLabel('Narration contains').fill('Bank charges');
 await page.getByLabel('Rule direction').selectOption('out');
 await page.getByLabel('Rule account').selectOption({ label: '5560 Bank Charges' });
 await btn('Add rule').click();
 await page.getByText(/contains "Bank charges"/).waitFor();
+await nav('Bank accounts');
+await page.getByRole('heading', { name: 'Reconcile' }).waitFor();
 await page.getByLabel('Statement file').setInputFiles({ name: 'stmt.csv', mimeType: 'text/csv', buffer: Buffer.from(`Date,Narration,Debit,Credit\n${ddmmyyyy},NEFT Acme Retail,,1180\n${ddmmyyyy},Bank charges,15.50,\n`) });
 await page.getByText('Imported 2 lines (0 duplicates skipped).').waitFor();
 await page.getByText('Rule suggests Bank Charges').waitFor();
@@ -182,7 +186,7 @@ await page.getByRole('cell', { name: 'monthly' }).waitFor();
 step('repeating invoice scheduled');
 
 // ---- dashboard
-await nav('Dashboard');
+await nav('Home');
 await page.getByTestId('ytd-profit').waitFor();
 assert.match(await page.getByTestId('ytd-profit').innerText(), /59,115\.50/);
 assert.match(await page.getByTestId('receivables').innerText(), /590\.00/);
@@ -191,7 +195,7 @@ step('dashboard: profit -59,115.50, 590 owed to you, charts drawn');
 if (process.env.SHOT_DIR) await page.screenshot({ path: process.env.SHOT_DIR + '/dashboard.png' });
 
 // ---- reports
-await nav('Reports');
+await nav('All reports');
 await btn('Profit & loss').click();
 await page.getByTestId('net-profit').waitFor();
 assert.equal(await page.getByTestId('net-profit').innerText(), '-59,115.50');
@@ -229,7 +233,7 @@ await page.getByText(/Saved. State code is now 27/).waitFor();
 step('deadlines generated, file uploaded, import dry run passed, settings saved');
 
 // ---- URL routing: refresh and back button keep the page
-await nav('Reports');
+await nav('All reports');
 await heading('Reports');
 await page.reload();
 await heading('Reports');
@@ -251,7 +255,7 @@ await page.getByText('Getting started').waitFor();
 step('billing plan change with GST invoice; personal data export; help page');
 
 await page.screenshot({ path: process.env.SHOT ?? 'e2e-full.png', fullPage: true });
-await nav('Dashboard').catch(() => {});
+await nav('Home').catch(() => {});
 await browser.close();
 const real = errors.filter((e) => !/40[0-9]/.test(e));
 assert.equal(real.length, 0, 'console errors: ' + real.join(' | '));

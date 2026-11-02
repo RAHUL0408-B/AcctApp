@@ -9,7 +9,7 @@ interface Txn { id: number; date: string; description: string; amount: number; s
 interface Rule { id: number; name: string; matchText: string; direction: string; accountName: string }
 interface Account { id: number; code: string; name: string; type: string }
 
-export function Bank({ org, canPost, canManage, accounts }: { org: Org; canPost: boolean; canManage: boolean; accounts: Account[] }) {
+export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' }: { org: Org; canPost: boolean; canManage: boolean; accounts: Account[]; section?: 'reconcile' | 'rules' }) {
   const [banks, setBanks] = useState<BankAcc[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [txns, setTxns] = useState<Txn[]>([]);
@@ -46,6 +46,31 @@ export function Bank({ org, canPost, canManage, accounts }: { org: Org; canPost:
   const categorize = (txnId: number) => run(async () => { await api(`/orgs/${org.id}/bank-transactions/${txnId}/categorize`, { body: { accountId: Number(cat[txnId]) } }); setOk('Entry created and reconciled.'); refresh(); });
   const undo = (txnId: number) => run(async () => { await api(`/orgs/${org.id}/bank-transactions/${txnId}/unreconcile`, { method: 'POST', body: {} }); refresh(); });
   const bank = banks.find((b) => b.id === sel);
+
+  const rulesCard = (
+        <Card title="Bank rules">
+          <p className="mb-3 text-sm text-slate-600">If a bank line contains the text, suggest the account. Rules are checked in order; the first match wins.</p>
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Rule name" value={rf.name} onChange={(e) => setRf({ ...rf, name: e.target.value })} />
+            <Field label="Narration contains" value={rf.matchText} onChange={(e) => setRf({ ...rf, matchText: e.target.value })} />
+            <Select label="Money" aria-label="Rule direction" value={rf.direction} onChange={(e) => setRf({ ...rf, direction: e.target.value })}><option value="any">In or out</option><option value="out">Out only</option><option value="in">In only</option></Select>
+            <Select label="Post to" aria-label="Rule account" value={rf.accountId} onChange={(e) => setRf({ ...rf, accountId: e.target.value })}><option value="">Select…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>
+            <Button disabled={busy} onClick={() => run(async () => { await api(`/orgs/${org.id}/bank-rules`, { body: { name: rf.name, matchText: rf.matchText, direction: rf.direction, accountId: Number(rf.accountId) } }); setRf({ name: '', matchText: '', direction: 'any', accountId: '' }); loadRules(); loadTxns(); })}>Add rule</Button>
+          </div>
+          {rules.length === 0 ? <Empty text="No rules yet." /> : <ul className="mt-3 divide-y divide-slate-100 text-sm">{rules.map((r) => (
+            <li key={r.id} className="flex justify-between py-2"><span><b>{r.name}</b>: contains &quot;{r.matchText}&quot; ({r.direction}) → {r.accountName}</span>
+              <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/bank-rules/${r.id}/delete`, { method: 'POST', body: {} }); loadRules(); })}>Delete</Button></li>))}</ul>}
+        </Card>
+  );
+
+  if (section === 'rules') return (
+    <>
+      <PageHeader title="Bank rules" subtitle="Rules suggest an account for routine bank lines, such as bank charges or rent, when a statement is imported." />
+      <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      {!canManage && <Card><Empty text="Only owners and accountants can change bank rules." /></Card>}
+      {canManage && rulesCard}
+    </>
+  );
 
   return (
     <>
@@ -97,21 +122,6 @@ export function Bank({ org, canPost, canManage, accounts }: { org: Org; canPost:
                 </td>
               </tr>))}</tbody>
           </table>
-        </Card>
-      )}
-      {canManage && (
-        <Card title="Bank rules">
-          <p className="mb-3 text-sm text-slate-600">If a bank line contains the text, suggest the account. Rules are checked in order; the first match wins.</p>
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Rule name" value={rf.name} onChange={(e) => setRf({ ...rf, name: e.target.value })} />
-            <Field label="Narration contains" value={rf.matchText} onChange={(e) => setRf({ ...rf, matchText: e.target.value })} />
-            <Select label="Money" aria-label="Rule direction" value={rf.direction} onChange={(e) => setRf({ ...rf, direction: e.target.value })}><option value="any">In or out</option><option value="out">Out only</option><option value="in">In only</option></Select>
-            <Select label="Post to" aria-label="Rule account" value={rf.accountId} onChange={(e) => setRf({ ...rf, accountId: e.target.value })}><option value="">Select…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>
-            <Button disabled={busy} onClick={() => run(async () => { await api(`/orgs/${org.id}/bank-rules`, { body: { name: rf.name, matchText: rf.matchText, direction: rf.direction, accountId: Number(rf.accountId) } }); setRf({ name: '', matchText: '', direction: 'any', accountId: '' }); loadRules(); loadTxns(); })}>Add rule</Button>
-          </div>
-          {rules.length === 0 ? <Empty text="No rules yet." /> : <ul className="mt-3 divide-y divide-slate-100 text-sm">{rules.map((r) => (
-            <li key={r.id} className="flex justify-between py-2"><span><b>{r.name}</b>: contains &quot;{r.matchText}&quot; ({r.direction}) → {r.accountName}</span>
-              <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/bank-rules/${r.id}/delete`, { method: 'POST', body: {} }); loadRules(); })}>Delete</Button></li>))}</ul>}
         </Card>
       )}
     </>

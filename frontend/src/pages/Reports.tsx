@@ -8,12 +8,30 @@ const REPORTS = [
   ['tb', 'Trial balance'], ['pnl', 'Profit & loss'], ['bs', 'Balance sheet'], ['ledger', 'Ledger'],
   ['cf', 'Cash flow'], ['ar', 'Aged receivables'], ['ap', 'Aged payables'], ['gstr1', 'GSTR-1'], ['gstr3b', 'GSTR-3B'],
   ['pnlm', 'P&L by month'], ['pnlt', 'P&L by category'], ['bva', 'Budget vs actual'],
+  ['stcf', 'Short-term cash flow'], ['snap', 'Business snapshot'], ['tds', 'TDS deducted'],
 ] as const;
-const RANGED = ['pnl', 'ledger', 'gstr1', 'gstr3b', 'cf', 'pnlm', 'pnlt', 'bva'];
-const EXPORT: Record<string, string> = { tb: 'trial-balance', pnl: 'pnl', bs: 'balance-sheet', ledger: 'ledger', cf: '', ar: 'aged-receivables', ap: 'aged-payables', gstr1: 'gstr1-b2b', gstr3b: 'gstr3b', pnlm: '', pnlt: '', bva: '' };
 
-export function Reports({ org, accounts }: { org: Org; accounts: { id: number; code: string; name: string }[] }) {
-  const [rep, setRep] = useState<string>('pnl');
+/** Starred reports, kept in this browser and shown in the Reporting menu. */
+const FAV_KEY = 'favourite-reports';
+export const favouriteReports = (): { key: string; label: string }[] => {
+  let keys: string[] = [];
+  try { keys = JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]'); } catch { /* ignore a damaged value */ }
+  return REPORTS.filter(([k]) => keys.includes(k)).map(([key, label]) => ({ key, label }));
+};
+const toggleFavourite = (k: string) => {
+  const keys = favouriteReports().map((f) => f.key);
+  localStorage.setItem(FAV_KEY, JSON.stringify(keys.includes(k) ? keys.filter((x) => x !== k) : [...keys, k]));
+};
+const RANGED = ['pnl', 'ledger', 'gstr1', 'gstr3b', 'cf', 'pnlm', 'pnlt', 'bva', 'snap', 'tds'];
+const EXPORT: Record<string, string> = { tb: 'trial-balance', pnl: 'pnl', bs: 'balance-sheet', ledger: 'ledger', cf: '', ar: 'aged-receivables', ap: 'aged-payables', gstr1: 'gstr1-b2b', gstr3b: 'gstr3b', pnlm: '', pnlt: '', bva: '', stcf: '', snap: '', tds: '' };
+
+export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string }) {
+  const known = (k?: string) => (k && REPORTS.some(([x]) => x === k) ? k : undefined);
+  const [rep, setRep] = useState<string>(known(initial) ?? 'pnl');
+  useEffect(() => { const k = known(initial); if (k) setRep(k); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [days, setDays] = useState('30');
+  const [, setFavTick] = useState(0);
+  const isFav = favouriteReports().some((f) => f.key === rep);
   const [from, setFrom] = useState(fyStart()), [to, setTo] = useState(today()), [accountId, setAccountId] = useState('');
   const [categories, setCategories] = useState<{ id: number; name: string }[]>([]), [budgets, setBudgets] = useState<{ id: number; name: string }[]>([]);
   const [categoryId, setCategoryId] = useState(''), [budgetId, setBudgetId] = useState('');
@@ -31,6 +49,7 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
     if (rep === 'ledger') p.set('accountId', accountId);
     if (rep === 'pnlt') p.set('categoryId', categoryId);
     if (rep === 'bva') p.set('budgetId', budgetId);
+    if (rep === 'stcf') p.set('days', days);
     return p;
   };
   const load = () => run(async () => {
@@ -39,7 +58,8 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
     const q = query();
     const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/reports/ledger/${accountId}?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}`,
-      pnlm: `/reports/pnl-by-month?${q}`, pnlt: `/reports/pnl-by-tracking?${q}`, bva: `/reports/budget-vs-actual?${q}` }[rep]!;
+      pnlm: `/reports/pnl-by-month?${q}`, pnlt: `/reports/pnl-by-tracking?${q}`, bva: `/reports/budget-vs-actual?${q}`,
+      stcf: `/reports/short-term-cash-flow?${q}`, snap: `/reports/business-snapshot?${q}`, tds: `/reports/tds?${q}` }[rep]!;
     if ((rep === 'ledger' && !accountId) || (rep === 'pnlt' && !categoryId) || (rep === 'bva' && !budgetId)) return;
     const current = rep;
     const d = await api(`/orgs/${org.id}${url}`);
@@ -55,7 +75,8 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
       <Card>
         <div className="flex flex-wrap items-end gap-3 text-sm">
           {RANGED.includes(rep) && <label>From <input aria-label="From" type="date" className="rounded border border-slate-300 px-2 py-1" value={from} onChange={(e) => setFrom(e.target.value)} /></label>}
-          <label>{RANGED.includes(rep) ? 'To' : 'As at'} <input aria-label="To" type="date" className="rounded border border-slate-300 px-2 py-1" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          {rep === 'stcf' ? <label>Next <select aria-label="Days ahead" className="rounded border border-slate-300 px-2 py-1" value={days} onChange={(e) => setDays(e.target.value)}>{['30', '60', '90'].map((d) => <option key={d} value={d}>{d} days</option>)}</select></label>
+            : <label>{RANGED.includes(rep) ? 'To' : 'As at'} <input aria-label="To" type="date" className="rounded border border-slate-300 px-2 py-1" value={to} onChange={(e) => setTo(e.target.value)} /></label>}
           {rep === 'ledger' && <select aria-label="Ledger account" className="rounded border border-slate-300 px-2 py-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             <option value="">Account…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select>}
           {rep === 'pnlt' && (categories.length ? <select aria-label="Tracking category" className="rounded border border-slate-300 px-2 py-1" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
@@ -63,6 +84,7 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
           {rep === 'bva' && (budgets.length ? <select aria-label="Budget" className="rounded border border-slate-300 px-2 py-1" value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>{budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
             : <span className="text-slate-500">Create a budget under Accounting first.</span>)}
           <Button onClick={load}>Run</Button>
+          <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
           {EXPORT[rep] && <><Button variant="ghost" onClick={() => exp('pdf')}>Export PDF</Button>
           <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button></>}
         </div>
@@ -118,6 +140,9 @@ function ReportView({ rep, d }: { rep: string; d: any }) {
       <p className="text-xs text-slate-500">Working paper only. Review with your CA before filing on the GST portal.</p>
     </div>);
   if (rep === 'pnlm' || rep === 'pnlt') return <GridReport d={d} />;
+  if (rep === 'stcf') return <CashForecast d={d} />;
+  if (rep === 'snap') return <Snapshot d={d} />;
+  if (rep === 'tds') return <TdsReport d={d} />;
   if (rep === 'bva') return (
     <table className="w-full text-sm" data-testid="bva"><thead><tr className="text-left"><th>Account</th><th className="text-right">Budget</th><th className="text-right">Actual</th><th className="text-right">Variance</th></tr></thead>
       <tbody>{d.lines.map((l: any) => <tr key={l.code}><td>{l.code} {l.name}</td><td className="text-right">{fmt(l.budget)}</td><td className="text-right">{fmt(l.actual)}</td>
@@ -148,4 +173,66 @@ function GridReport({ d }: { d: any }) {
     <div className="overflow-x-auto"><table className="w-full text-sm" data-testid="grid-report"><thead><tr className="text-left"><th>Account</th>{d.columns.map((c: string) => <th key={c} className="text-right">{c}</th>)}<th className="text-right">Total</th></tr></thead>
       <tbody>{section('Income', d.income)}{section('Expenses', d.expenses)}
         <tr className="border-t-2 font-bold"><td>Net profit</td>{d.netProfit.map((v: number, k: number) => <td key={k} className="text-right">{fmt(v)}</td>)}<td className="text-right" data-testid="grid-net">{fmt(d.netProfitTotal)}</td></tr></tbody></table></div>);
+}
+
+/** Cash now plus money due in and out, week by week. */
+function CashForecast({ d }: { d: any }) {
+  return (
+    <div className="text-sm">
+      <div className="mb-4 grid gap-3 md:grid-cols-3">
+        <div className="rounded bg-slate-50 p-3"><p className="text-slate-500">Cash and bank today</p><p className="text-lg font-semibold">₹{fmt(d.opening)}</p></div>
+        <div className="rounded bg-slate-50 p-3"><p className="text-slate-500">Projected in {d.days} days</p><p className={`text-lg font-semibold ${d.projected < 0 ? 'text-red-700' : ''}`} data-testid="stcf-projected">₹{fmt(d.projected)}</p></div>
+        <div className="rounded bg-slate-50 p-3"><p className="text-slate-500">If overdue items are settled too</p><p className="text-lg font-semibold">₹{fmt(d.projectedIncludingOverdue)}</p>
+          <p className="text-xs text-slate-500">Overdue: ₹{fmt(d.overdue.cashIn)} in · ₹{fmt(d.overdue.cashOut)} out</p></div>
+      </div>
+      <table className="w-full" data-testid="stcf"><thead><tr className="text-left"><th>Week</th><th className="text-right">Money in</th><th className="text-right">Money out</th><th className="text-right">Net</th><th className="text-right">Balance</th></tr></thead>
+        <tbody>{d.weeks.map((w: any) => <tr key={w.start}><td>{w.start} to {w.end}</td><td className="text-right text-green-700">{fmt(w.cashIn)}</td><td className="text-right text-red-700">{fmt(w.cashOut)}</td><td className="text-right">{fmt(w.net)}</td>
+          <td className={`text-right font-medium ${w.closing < 0 ? 'text-red-700' : ''}`}>{fmt(w.closing)}</td></tr>)}</tbody></table>
+      {d.items.length > 0 && <><h3 className="mt-4 font-semibold">Invoices and bills behind these figures</h3>
+        <table className="w-full"><tbody>{d.items.map((i: any) => <tr key={i.number}><td>{i.date}{i.overdue && <span className="ml-2 text-xs text-red-700">overdue</span>}</td><td>{i.number}</td><td>{i.contact}</td>
+          <td className={`text-right ${i.direction === 'in' ? 'text-green-700' : 'text-red-700'}`}>{i.direction === 'in' ? '+' : '−'}{fmt(i.amount)}</td></tr>)}</tbody></table></>}
+      <p className="mt-3 text-xs text-slate-500">Based on due dates of unpaid invoices and bills. Repeating invoices not yet raised, salaries and taxes are not included.</p>
+    </div>
+  );
+}
+
+const TONE: Record<string, string> = { good: 'bg-green-100 text-green-800', watch: 'bg-amber-100 text-amber-800', concern: 'bg-red-100 text-red-800', 'n/a': 'bg-slate-100 text-slate-600' };
+
+/** Key figures and a simple health scorecard. */
+function Snapshot({ d }: { d: any }) {
+  const pct = (v: number | null) => (v == null ? '—' : `${v}%`), num = (v: number | null, u = '') => (v == null ? '—' : `${v}${u}`);
+  const tiles: [string, string][] = [['Income', `₹${fmt(d.income)}`], ['Gross profit', `₹${fmt(d.grossProfit)} (${pct(d.grossMarginPct)})`], ['Expenses', `₹${fmt(d.expenses)}`], ['Net profit', `₹${fmt(d.profit)} (${pct(d.netMarginPct)})`],
+    ['Cash and bank', `₹${fmt(d.cash)}`], ['Owed to you', `₹${fmt(d.receivables)}`], ['You owe', `₹${fmt(d.payables)}`], ['Current ratio', num(d.currentRatio, '×')],
+    ['Debtor days', num(d.debtorDays)], ['Creditor days', num(d.creditorDays)], ['Avg. days to get paid', num(d.daysToGetPaid)], ['Avg. days to pay suppliers', num(d.daysToPaySuppliers)]];
+  return (
+    <div className="text-sm">
+      <div className="grid gap-3 md:grid-cols-4">{tiles.map(([k, v]) => <div key={k} className="rounded bg-slate-50 p-3"><p className="text-slate-500">{k}</p><p className="font-semibold">{v}</p></div>)}</div>
+      <h3 className="mt-5 font-semibold">Business health scorecard</h3>
+      <table className="mt-2 w-full" data-testid="scorecard"><tbody>{d.scorecard.map((s: any) => (
+        <tr key={s.metric}><td className="font-medium">{s.metric}</td><td className="text-right">{s.value == null ? '—' : `${s.value} ${s.unit}`}</td>
+          <td><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONE[s.status]}`}>{s.status}</span></td><td className="text-slate-500">{s.help}</td></tr>))}</tbody></table>
+      <p className="mt-3 text-xs text-slate-500">Guidance only. Thresholds are general rules of thumb; what is healthy depends on the business.</p>
+    </div>
+  );
+}
+
+/** TDS deducted on bills, by section and by month, with deposit due dates. */
+function TdsReport({ d }: { d: any }) {
+  return (
+    <div className="space-y-4 text-sm">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div><h3 className="font-semibold">By section</h3><table className="w-full"><thead><tr className="text-left"><th>Section</th><th className="text-right">Bills</th><th className="text-right">Amount</th><th className="text-right">TDS</th></tr></thead>
+          <tbody>{d.bySection.map((x: any) => <tr key={x.section}><td>{x.section}</td><td className="text-right">{x.count}</td><td className="text-right">{fmt(x.amount)}</td><td className="text-right">{fmt(x.tds)}</td></tr>)}</tbody></table></div>
+        <div><h3 className="font-semibold">Deposit by</h3><table className="w-full"><thead><tr className="text-left"><th>Month deducted</th><th className="text-right">TDS</th><th>Deposit by</th></tr></thead>
+          <tbody>{d.byMonth.map((x: any) => <tr key={x.month}><td>{x.month}</td><td className="text-right">{fmt(x.tds)}</td><td>{x.depositBy}</td></tr>)}</tbody></table></div>
+      </div>
+      <div><h3 className="font-semibold">Deductions (for 26Q)</h3>
+        {d.rows.length === 0 ? <p className="text-slate-500">No TDS deducted in this period.</p> : (
+          <table className="w-full" data-testid="tds-rows"><thead><tr className="text-left"><th>Date</th><th>Quarter</th><th>Bill</th><th>Party</th><th>PAN</th><th>Section</th><th className="text-right">Amount</th><th className="text-right">TDS</th></tr></thead>
+            <tbody>{d.rows.map((x: any) => <tr key={x.id}><td>{x.date}</td><td>{x.quarter}</td><td>{x.number}</td><td>{x.party}</td><td>{x.pan ?? <span className="text-red-700">missing</span>}</td><td>{x.section}</td><td className="text-right">{fmt(x.amount)}</td><td className="text-right">{fmt(x.tds)}</td></tr>)}
+              <tr className="border-t-2 font-semibold"><td colSpan={7}>Total TDS</td><td className="text-right" data-testid="tds-total">{fmt(d.totalTds)}</td></tr></tbody></table>)}
+      </div>
+      <p className="text-xs text-amber-700">{d.note}</p>
+    </div>
+  );
 }

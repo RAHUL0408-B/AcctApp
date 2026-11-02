@@ -151,7 +151,7 @@ await page.getByRole('cell', { name: '4000 Service Revenue' }).waitFor();
 step('tracking category Branch (Mumbai, Pune) and a Rs 1,000/month revenue budget');
 
 // ---- reports
-await nav('Reports');
+await nav('All reports');
 await btn('P&L by month').click();
 await page.getByTestId('grid-net').waitFor();
 await btn('Budget vs actual').click();
@@ -165,6 +165,7 @@ step('P&L by month, budget vs actual and GSTR-3B with the zero-rated export');
 await nav('Year-end close');
 await heading('Year-end close');
 await page.getByTestId('year-profit').waitFor();
+await page.getByRole('button', { name: 'Account menu' }).click();
 await page.getByRole('navigation', { name: 'Account' }).getByRole('button', { name: 'Practice', exact: true }).click();
 await heading('Practice overview');
 await page.getByTestId('practice-table').getByText('Global Exports').waitFor();

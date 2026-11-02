@@ -8,10 +8,11 @@ export interface Contact { id: number; kind: string; name: string; gstin: string
 interface Statement { contact: { name: string }; openingBalance: number; closingBalance: number; lines: { date: string; ref: string; type: string; amount: number; balance: number }[] }
 
 /** Customers or suppliers (or both). Each row can open a running-balance statement. */
-export function Contacts({ org, canPost, only }: { org: Org; canPost: boolean; only?: 'customer' | 'supplier' }) {
+export function Contacts({ org, canPost, only, startNew = false }: { org: Org; canPost: boolean; only?: 'customer' | 'supplier'; startNew?: boolean }) {
   const [list, setList] = useState<Contact[]>([]);
   const [states, setStates] = useState<{ code: string; name: string }[]>([]);
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(startNew);
+  useEffect(() => { if (startNew) setShow(true); }, [startNew]);
   const [stmt, setStmt] = useState<Statement | null>(null);
   const [f, setF] = useState({ kind: only ?? 'customer', name: '', gstin: '', pan: '', stateCode: '', email: '', isIndividual: false, country: 'IN' });
   const { error, busy, run } = useAction();
@@ -25,7 +26,7 @@ export function Contacts({ org, canPost, only }: { org: Org; canPost: boolean; o
     setF({ ...f, name: '', gstin: '', pan: '', email: '' }); setShow(false); load();
   });
   const openStatement = (c: Contact) => run(async () => setStmt(await api(`/orgs/${org.id}/contacts/${c.id}/statement`)));
-  const label = only === 'customer' ? 'Customers' : only === 'supplier' ? 'Suppliers' : 'Contacts';
+  const label = only === 'customer' ? 'Customers' : only === 'supplier' ? 'Suppliers' : 'All contacts';
 
   return (
     <>

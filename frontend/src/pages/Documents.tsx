@@ -15,7 +15,7 @@ const SUPPLY = {
 
 const TYPES = { sales: [['invoice', 'Invoice'], ['credit_note', 'Credit note']], purchases: [['bill', 'Bill'], ['debit_note', 'Debit note']] } as const;
 
-export function Documents({ org, kind, canPost, accounts }: { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[] }) {
+export function Documents({ org, kind, canPost, accounts, startNew = false }: { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean }) {
   const types = TYPES[kind];
   const [docs, setDocs] = useState<Doc[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -23,7 +23,8 @@ export function Documents({ org, kind, canPost, accounts }: { org: Org; kind: 's
   const [docType, setDocType] = useState<string>(types[0][0]);
   const [f, setF] = useState({ contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '' });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(startNew);
+  useEffect(() => { if (startNew) setShowForm(true); }, [startNew]);
   const [ok, setOk] = useState('');
   const [pay, setPay] = useState<{ id: number; amount: string; accountId: string; currency: string; foreign: string } | null>(null);
   const { error, busy, run, setError } = useAction();

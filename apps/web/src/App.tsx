@@ -60,7 +60,11 @@ export function App() {
   const route = useRoute();
 
   const load = useCallback(async () => {
-    try { setMe(await api<Me>('/auth/me')); setOrgs(await api<Org[]>('/orgs')); } catch { setToken(null); setMe(null); }
+    const token = getToken(); // if the user logs out (or in as someone else) while this runs, drop the stale result
+    try {
+      const nextMe = await api<Me>('/auth/me'), nextOrgs = await api<Org[]>('/orgs');
+      if (getToken() === token) { setMe(nextMe); setOrgs(nextOrgs); }
+    } catch { if (getToken() === token) { setToken(null); setMe(null); } }
     setLoading(false);
   }, []);
   useEffect(() => { if (getToken()) load(); }, [load]);

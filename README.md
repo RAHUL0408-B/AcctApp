@@ -34,14 +34,14 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 | **Ledger** | Double entry in integer paise. Unbalanced entries are rejected by the API and by the database. Posted entries can never be edited or deleted, only reversed. Periods can be locked. |
 | **Chart of accounts** | Indian templates for trading, services and manufacturing, including GST and TDS accounts. |
 | **Contacts** | Customers and suppliers with statements. GSTIN is checked (format and check digit) and sets the state. |
-| **Sales** | Quotes, invoices, credit notes, repeating invoices, payments, PDF invoices, email and overdue reminders. Numbering per financial year, e.g. `INV/25-26/0001`. |
-| **Purchases** | Purchase orders, bills, debit notes, TDS deducted on bills. |
-| **GST** | CGST + SGST within a state, IGST between states, by place of supply. HSN/SAC codes. Rates live in a table. |
+| **Sales** | Quotes, invoices, credit notes, repeating invoices, payments, PDF invoices, email and overdue reminders. Numbering per financial year, e.g. `INV/25-26/0001`. Invoices in foreign currencies, with exchange gains and losses on payment. |
+| **Purchases** | Purchase orders, bills, debit notes, TDS deducted on bills, expense claims, optional approval of invoices and bills. |
+| **GST** | CGST + SGST within a state, IGST between states, by place of supply. Exports and SEZ supplies (under LUT or with IGST), reverse charge on purchases, composition scheme. HSN/SAC codes. Rates live in a table. |
 | **TDS** | Sections, rates and single/annual thresholds live in a table. Higher rate when PAN is missing. |
 | **Bank** | CSV statement import with duplicate detection, suggested matches, bank rules, reconciliation. |
-| **Accounting extras** | Products and services, fixed assets with monthly depreciation, organisation settings. |
-| **Reports** | Dashboard with charts, trial balance, P&L, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
-| **Firm tools** | Tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
+| **Accounting extras** | Products and services, inventory at weighted average cost, fixed assets with monthly depreciation, tracking categories, budgets, year-end close, organisation settings. |
+| **Reports** | Dashboard with charts, trial balance, P&L (also by month and by tracking category), budget vs actual, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
+| **Firm tools** | Practice overview across every client, tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
 | **Platform** | Encrypted daily backups with an automatic restore test. DPDP consent, data export and erasure. Subscription plans with GST invoices. Health and metrics endpoints, JSON logs, error alerts. |
 
 What is still missing compared with Xero-style software is listed in [docs/FEATURE-COMPARISON.md](docs/FEATURE-COMPARISON.md).
@@ -78,12 +78,16 @@ The browser only ever talks to the frontend's address. The frontend host forward
 │   │   ├── accounting/      contacts, invoices and bills, payments, bank, reports
 │   │   ├── tax/             GST and TDS calculations
 │   │   ├── extras/          quotes, POs, repeating invoices, items, bank rules, fixed assets, dashboard
+│   │   ├── inventory/       stock on hand, average cost, stock adjustments
+│   │   ├── workflow/        invoice and bill approvals, expense claims
+│   │   ├── planning/        tracking categories, budgets, management reports, year-end close
+│   │   ├── practice/        overview across all clients
 │   │   ├── firm/            tasks and deadlines, files, import, export, email, scheduler
 │   │   ├── ops/             backups, billing, privacy, health and metrics, CLI
 │   │   ├── common/          shared helpers (guards, CSV, rate limits)
 │   │   ├── db/              connection pool and migration runner
 │   │   └── main.ts          entry point
-│   ├── test/                140 Jest tests (unit + end-to-end against real PostgreSQL)
+│   ├── test/                170 Jest tests (unit + end-to-end against real PostgreSQL)
 │   └── scripts/devdb.mjs    starts a local PostgreSQL for development and tests
 │
 ├── frontend/                React web app (Vite + Tailwind) → see frontend/README.md
@@ -96,7 +100,7 @@ The browser only ever talks to the frontend's address. The frontend host forward
 │   ├── e2e/                 browser tests (Playwright driving Chrome)
 │   └── vercel.json          forwards /api to the backend on Render
 │
-├── db/migrations/           SQL schema, 001 to 006 (tax rates and rules are seeded as data)
+├── db/migrations/           SQL schema, 001 to 007 (tax rates and rules are seeded as data)
 ├── docker/                  Dockerfiles, nginx config, docker-compose.yml
 ├── docs/                    deploy, operations, security, ER diagram, feature comparison
 └── render.yaml              Render blueprint for the backend
@@ -141,9 +145,10 @@ The backend reads environment variables (there is no `.env` loader).
 ## Tests
 
 ```bash
-npm test                         # 140 backend tests, with worked accounting examples
+npm test                         # 170 backend tests, with worked accounting examples
 node frontend/e2e/smoke.mjs      # browser: register, journal, reversal, trial balance, 2FA
 node frontend/e2e/full.mjs       # browser: quote to invoice, GST, TDS, bank rules, assets, reports, exports, billing, privacy
+node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, tracking, budgets, year-end, practice overview
 ```
 The browser tests need the app running. Point them at any address with `WEB_URL=https://...`; on slow hosts add `STEP_TIMEOUT=60000`.
 
@@ -151,6 +156,8 @@ Worked examples the tests check include:
 - Rs 1,000 at 18% within a state = CGST 90 + SGST 90
 - 194J TDS crossing the Rs 50,000 annual limit is charged on the full year-to-date amount
 - Rs 100 split three ways = 33.34 + 33.33 + 33.33
+- USD 1,000 export at Rs 83.25 received as Rs 84,000 = Rs 750 exchange gain
+- 10 bought at Rs 100 and 10 at Rs 130, then 5 sold = Rs 575 cost of goods sold
 
 ## Deploy
 

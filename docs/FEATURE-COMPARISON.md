@@ -24,7 +24,7 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | Overdue reminders | Done | One click, once per week per invoice |
 | Customer statements | Done | Running balance with opening balance |
 | Online payment links on invoices | Not built | Needs a payment gateway |
-| Multi-currency | Not built | INR only |
+| Multi-currency | Done | Invoices and bills in any currency at a rate you enter; the ledger stays in rupees; exchange gains and losses are booked on payment. No automatic rate feed or period-end revaluation |
 
 ## Purchases
 | Capability | Status | Notes |
@@ -33,8 +33,8 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | TDS deduction on bills | Done | Section rates and thresholds come from a table |
 | Debit notes | Done | |
 | Purchase orders, convert to bill | Done | |
-| Expense claims | Not built | |
-| Bill approval workflow | Not built | |
+| Expense claims | Done | Submit, approve (books the expense), reject, repay from the bank |
+| Invoice and bill approval workflow | Done | Optional per organisation: staff submit, owners and accountants approve or reject |
 
 ## Accounting
 | Capability | Status | Notes |
@@ -46,11 +46,11 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | Live bank feeds | Not built | Needs a bank-feed provider |
 | Fixed assets and depreciation | Done | Straight line and written-down value, monthly postings. Not modelled: Income Tax Act block depreciation |
 | Products and services catalogue | Done | Prefills lines on every document |
-| Inventory stock tracking | Not built | Items are a price list only |
+| Inventory stock tracking | Done | Weighted average cost, cost of goods sold on each sale, stock adjustments, movement history, check against the Inventory account. Single location; credit/debit notes do not move stock |
 | Period locking | Done | Enforced in the database |
-| Year-end closing entries | Not built | Profit to date is shown inside equity |
-| Tracking categories / departments | Not built | |
-| Budgets | Not built | |
+| Year-end closing entries | Done | Moves the year's profit to Reserves and Surplus and locks the year; that year's P&L is unchanged |
+| Tracking categories / departments | Done | Tag invoice, bill and journal lines; P&L by category |
+| Budgets | Done | Monthly amounts per account; budget vs actual report |
 
 ## Reporting
 | Capability | Status | Notes |
@@ -60,6 +60,7 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | Aged receivables and payables | Done | |
 | GSTR-1 and GSTR-3B working papers | Done | Not filing-ready JSON; CA review needed |
 | Scheduled report emails | Done | |
+| P&L by month and by tracking category | Done | |
 | Custom report builder | Not built | |
 
 ## Practice (firm) features
@@ -71,7 +72,7 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | Tasks and GST/TDS due-date reminders | Done | Due dates come from a table |
 | Document storage | Done | Local disk; use object storage in production |
 | Import from other software (CSV) | Done | Contacts, accounts, vouchers and opening balances, with dry run |
-| Practice-wide dashboard across all clients | Not built | Each client has its own dashboard |
+| Practice-wide dashboard across all clients | Done | Cash, receivables, payables, overdue, unreconciled lines, tasks and approvals per client |
 
 ## India-specific
 | Capability | Status | Notes |
@@ -80,7 +81,9 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 | Place of supply, state codes | Done | |
 | TDS sections and the no-PAN higher rate | Done | |
 | e-Invoicing (IRN, QR code) and e-way bills | Not built | Needs GSTN/NIC integration |
-| Reverse charge, composition, SEZ and exports | Not built | |
+| Reverse charge (RCM) on purchases | Done | Buyer self-assesses GST: input credit plus RCM payable; shown in GSTR-3B 3.1(d) |
+| Composition scheme | Done | No GST on sales; GST on purchases becomes part of the cost |
+| Exports and SEZ supplies | Done | Under LUT (zero-rated, no GST) or with IGST; GSTR-1 export section and GSTR-3B 3.1(b) |
 | GST return filing from the app | Not built | Working papers only |
 | Payroll, PF, ESI, professional tax | Not built | A large separate module |
 

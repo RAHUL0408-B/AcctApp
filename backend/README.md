@@ -23,6 +23,10 @@ Check it with `curl http://localhost:3000/api/health`.
 | `src/accounting` | Contacts, invoices, bills, notes, payments, bank, reports |
 | `src/tax` | GST (CGST/SGST/IGST) and TDS calculations |
 | `src/extras` | Quotes, purchase orders, repeating invoices, items, bank rules, fixed assets, dashboard |
+| `src/inventory` | Stock on hand at weighted average cost, movement history, stock adjustments |
+| `src/workflow` | Invoices and bills awaiting approval, expense claims |
+| `src/planning` | Tracking categories, budgets, P&L by month / category, budget vs actual, year-end close |
+| `src/practice` | Overview across every client the user can see |
 | `src/firm` | Tasks and due dates, files, CSV import, PDF/Excel export, email outbox, scheduler |
 | `src/ops` | Backups and restore test, billing, privacy (DPDP), health and metrics, command line |
 | `src/common` | Guards, CSV parsing, rate limiting |
@@ -33,7 +37,7 @@ Every client-scoped query runs inside `withOrg()`: a transaction that switches t
 
 ## Tests
 ```bash
-npm test                      # from the root: 140 tests
+npm test                      # from the root: 170 tests
 ```
 The end-to-end tests start their own throwaway PostgreSQL, so nothing else needs to be running.
 

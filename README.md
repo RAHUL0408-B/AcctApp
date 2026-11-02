@@ -29,18 +29,20 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 
 | Area | What it does |
 |---|---|
+| **Navigation** | Top bar with Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts and Projects menus, an organisation menu, a "+" create menu with Alt shortcuts, search, notifications, and a setup guide on Home. |
 | **Firms and clients** | One firm, many client organisations. Each client's data is isolated by PostgreSQL row-level security. |
 | **Users and security** | Owner, Accountant, Staff and Client (view-only) roles. Optional authenticator-app 2FA with recovery codes, lockout after 5 failed logins, rate limits, password rules. |
 | **Ledger** | Double entry in integer paise. Unbalanced entries are rejected by the API and by the database. Posted entries can never be edited or deleted, only reversed. Periods can be locked. |
 | **Chart of accounts** | Indian templates for trading, services and manufacturing, including GST and TDS accounts. |
 | **Contacts** | Customers and suppliers with statements. GSTIN is checked (format and check digit) and sets the state. |
-| **Sales** | Quotes, invoices, credit notes, repeating invoices, payments, PDF invoices, email and overdue reminders. Numbering per financial year, e.g. `INV/25-26/0001`. Invoices in foreign currencies, with exchange gains and losses on payment. |
+| **Sales** | Quotes, invoices, credit notes, repeating invoices, payments, PDF invoices, email and overdue reminders, sales overview, default payment terms. Numbering per financial year, e.g. `INV/25-26/0001`. Invoices in foreign currencies, with exchange gains and losses on payment. |
 | **Purchases** | Purchase orders, bills, debit notes, TDS deducted on bills, expense claims, optional approval of invoices and bills. |
 | **GST** | CGST + SGST within a state, IGST between states, by place of supply. Exports and SEZ supplies (under LUT or with IGST), reverse charge on purchases, composition scheme. HSN/SAC codes. Rates live in a table. |
 | **TDS** | Sections, rates and single/annual thresholds live in a table. Higher rate when PAN is missing. |
-| **Bank** | CSV statement import with duplicate detection, suggested matches, bank rules, reconciliation. |
+| **Bank** | CSV statement import with duplicate detection, suggested matches, bank rules, reconciliation, spend / receive / transfer money. |
 | **Accounting extras** | Products and services, inventory at weighted average cost, fixed assets with monthly depreciation, tracking categories, budgets, year-end close, organisation settings. |
-| **Reports** | Dashboard with charts, trial balance, P&L (also by month and by tracking category), budget vs actual, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
+| **Reports** | Dashboard with charts, trial balance, P&L (also by month and by tracking category), budget vs actual, short-term cash flow, business snapshot with health scorecard, TDS deducted, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
+| **Projects** | Time and costs per customer job, estimate vs actual, invoice unbilled work in one click. |
 | **Firm tools** | Practice overview across every client, tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
 | **Platform** | Encrypted daily backups with an automatic restore test. DPDP consent, data export and erasure. Subscription plans with GST invoices. Health and metrics endpoints, JSON logs, error alerts. |
 
@@ -82,12 +84,15 @@ The browser only ever talks to the frontend's address. The frontend host forward
 │   │   ├── workflow/        invoice and bill approvals, expense claims
 │   │   ├── planning/        tracking categories, budgets, management reports, year-end close
 │   │   ├── practice/        overview across all clients
+│   │   ├── insights/        overviews, search, notifications, setup guide, cash forecast, snapshot, TDS report
+│   │   ├── banking/         spend, receive and transfer money
+│   │   ├── projects/        time, costs and project invoicing
 │   │   ├── firm/            tasks and deadlines, files, import, export, email, scheduler
 │   │   ├── ops/             backups, billing, privacy, health and metrics, CLI
 │   │   ├── common/          shared helpers (guards, CSV, rate limits)
 │   │   ├── db/              connection pool and migration runner
 │   │   └── main.ts          entry point
-│   ├── test/                170 Jest tests (unit + end-to-end against real PostgreSQL)
+│   ├── test/                192 Jest tests (unit + end-to-end against real PostgreSQL)
 │   └── scripts/devdb.mjs    starts a local PostgreSQL for development and tests
 │
 ├── frontend/                React web app (Vite + Tailwind) → see frontend/README.md
@@ -100,7 +105,7 @@ The browser only ever talks to the frontend's address. The frontend host forward
 │   ├── e2e/                 browser tests (Playwright driving Chrome)
 │   └── vercel.json          forwards /api to the backend on Render
 │
-├── db/migrations/           SQL schema, 001 to 007 (tax rates and rules are seeded as data)
+├── db/migrations/           SQL schema, 001 to 008 (tax rates and rules are seeded as data)
 ├── docker/                  Dockerfiles, nginx config, docker-compose.yml
 ├── docs/                    deploy, operations, security, ER diagram, feature comparison
 └── render.yaml              Render blueprint for the backend
@@ -145,10 +150,11 @@ The backend reads environment variables (there is no `.env` loader).
 ## Tests
 
 ```bash
-npm test                         # 170 backend tests, with worked accounting examples
+npm test                         # 192 backend tests, with worked accounting examples
 node frontend/e2e/smoke.mjs      # browser: register, journal, reversal, trial balance, 2FA
 node frontend/e2e/full.mjs       # browser: quote to invoice, GST, TDS, bank rules, assets, reports, exports, billing, privacy
 node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, tracking, budgets, year-end, practice overview
+node frontend/e2e/workspace.mjs  # browser: login page, menus, + menu and shortcuts, search, spend/transfer money, cash forecast, TDS, projects
 ```
 The browser tests need the app running. Point them at any address with `WEB_URL=https://...`; on slow hosts add `STEP_TIMEOUT=60000`.
 

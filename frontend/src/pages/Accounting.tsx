@@ -10,13 +10,13 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
   const [items, setItems] = useState<Item[]>([]);
   const [rates, setRates] = useState<{ rateBp: number; label: string }[]>([]);
   const [show, setShow] = useState(false);
-  const [f, setF] = useState({ code: '', name: '', kind: 'service', hsnSac: '', saleRate: '', purchaseRate: '', gstRateBp: '1800', salesAccountId: '' });
+  const [f, setF] = useState({ code: '', name: '', kind: 'service', hsnSac: '', saleRate: '', purchaseRate: '', gstRateBp: '1800', salesAccountId: '', trackStock: false });
   const { error, busy, run } = useAction();
   const load = useCallback(() => api<Item[]>(`/orgs/${org.id}/items`).then(setItems), [org.id]);
   useEffect(() => { load(); api('/config/gst-rates').then(setRates); }, [load]);
   const save = () => run(async () => {
     await api(`/orgs/${org.id}/items`, { body: { code: f.code, name: f.name, kind: f.kind, gstRateBp: Number(f.gstRateBp), saleRate: f.saleRate ? toPaise(f.saleRate) : 0, purchaseRate: f.purchaseRate ? toPaise(f.purchaseRate) : 0,
-      ...(f.hsnSac ? { hsnSac: f.hsnSac } : {}), ...(f.salesAccountId ? { salesAccountId: Number(f.salesAccountId) } : {}) } });
+      ...(f.hsnSac ? { hsnSac: f.hsnSac } : {}), ...(f.salesAccountId ? { salesAccountId: Number(f.salesAccountId) } : {}), trackStock: f.kind === 'goods' && f.trackStock } });
     setF({ ...f, code: '', name: '', hsnSac: '', saleRate: '', purchaseRate: '' }); setShow(false); load();
   });
   return (
@@ -33,6 +33,7 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
             <Field label="Sale price (₹)" value={f.saleRate} onChange={(e) => setF({ ...f, saleRate: e.target.value })} />
             <Field label="Purchase price (₹)" value={f.purchaseRate} onChange={(e) => setF({ ...f, purchaseRate: e.target.value })} />
             <Select label="GST rate" aria-label="Item GST rate" value={f.gstRateBp} onChange={(e) => setF({ ...f, gstRateBp: e.target.value })}>{rates.map((r) => <option key={r.rateBp} value={r.rateBp}>{r.label}</option>)}</Select>
+            {f.kind === 'goods' && <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" aria-label="Track stock" checked={f.trackStock} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />Track stock quantity and cost</label>}
             <Select label="Sales account" aria-label="Item sales account" value={f.salesAccountId} onChange={(e) => setF({ ...f, salesAccountId: e.target.value })}><option value="">Default (4000)</option>{accounts.filter((a) => a.type === 'income').map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>
           </div>
           <div className="mt-3"><Button disabled={busy} onClick={save}>Save item</Button></div>
@@ -42,7 +43,7 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
         {items.length === 0 ? <Empty text="No products or services yet." /> : (
           <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Code</th><th>Name</th><th>Kind</th><th>HSN/SAC</th><th className="text-right">Sale</th><th className="text-right">Purchase</th><th className="text-right">GST</th><th /></tr></thead>
             <tbody>{items.map((i) => (
-              <tr key={i.id} className="border-t border-slate-100"><td className="py-2 font-medium">{i.code}</td><td>{i.name}</td><td>{i.kind}</td><td>{i.hsnSac ?? ''}</td><td className="text-right">{fmt(i.saleRate)}</td><td className="text-right">{fmt(i.purchaseRate)}</td><td className="text-right">{i.gstRateBp / 100}%</td>
+              <tr key={i.id} className="border-t border-slate-100"><td className="py-2 font-medium">{i.code}</td><td>{i.name}</td><td>{i.kind}{i.trackStock && <span className="ml-1 rounded bg-brand-50 px-1.5 text-xs text-brand-700">stock</span>}</td><td>{i.hsnSac ?? ''}</td><td className="text-right">{fmt(i.saleRate)}</td><td className="text-right">{fmt(i.purchaseRate)}</td><td className="text-right">{i.gstRateBp / 100}%</td>
                 <td className="text-right">{canPost && <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/items/${i.id}/archive`, { method: 'POST', body: {} }); load(); })}>Archive</Button>}</td></tr>))}</tbody></table>
         )}
       </Card>
@@ -106,11 +107,11 @@ export function FixedAssets({ org, canManage }: { org: Org; canManage: boolean }
 }
 
 export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: boolean; onSaved: () => void }) {
-  const [f, setF] = useState({ name: org.name, gstin: org.gstin ?? '', pan: '' });
+  const [f, setF] = useState({ name: org.name, gstin: org.gstin ?? '', pan: '', gstScheme: 'regular', lutNumber: '', requireApproval: false });
   const [through, setThrough] = useState('');
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
-  useEffect(() => { api(`/orgs/${org.id}/settings`).then((s) => setF({ name: s.name, gstin: s.gstin ?? '', pan: s.pan ?? '' })); }, [org.id]);
+  useEffect(() => { api(`/orgs/${org.id}/settings`).then((s) => setF({ name: s.name, gstin: s.gstin ?? '', pan: s.pan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', requireApproval: s.requireApproval })); }, [org.id]);
   return (
     <>
       <PageHeader title="Organisation settings" subtitle="Business details used on invoices and to decide CGST/SGST vs IGST." />
@@ -120,9 +121,13 @@ export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: 
           <Field label="Business name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} disabled={!canManage} />
           <Field label="GSTIN" value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} disabled={!canManage} />
           <Field label="PAN" value={f.pan} onChange={(e) => setF({ ...f, pan: e.target.value.toUpperCase() })} disabled={!canManage} />
+          <Select label="GST scheme" aria-label="GST scheme" value={f.gstScheme} disabled={!canManage} onChange={(e) => setF({ ...f, gstScheme: e.target.value })}>
+            <option value="regular">Regular</option><option value="composition">Composition (no GST on sales, no input credit)</option></Select>
+          <Field label="LUT number (for exports without GST)" value={f.lutNumber} onChange={(e) => setF({ ...f, lutNumber: e.target.value.toUpperCase() })} disabled={!canManage} />
+          <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" aria-label="Require approval" disabled={!canManage} checked={f.requireApproval} onChange={(e) => setF({ ...f, requireApproval: e.target.checked })} />Staff need approval for invoices and bills</label>
         </div>
         {canManage && <div className="mt-3"><Button disabled={busy} onClick={() => run(async () => {
-          const r = await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { name: f.name, gstin: f.gstin || null, pan: f.pan || null } });
+          const r = await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { name: f.name, gstin: f.gstin || null, pan: f.pan || null, gstScheme: f.gstScheme, lutNumber: f.lutNumber || null, requireApproval: f.requireApproval } });
           setOk(`Saved. State code is now ${r.stateCode ?? 'not set'}.`); onSaved();
         })}>Save</Button></div>}
       </Card>

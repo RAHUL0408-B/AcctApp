@@ -11,22 +11,26 @@ import { PreDocs, Recurring } from './Sales';
 import { FixedAssets, Items, OrgSettings } from './Accounting';
 import { Dashboard } from './Dashboard';
 import { PageHeader } from '../kit';
+import { Inventory } from './Inventory';
+import { Approvals, ExpenseClaims } from './Approvals';
+import { Budgets, Tracking, YearEnd } from './Planning';
 
 interface Account { id: number; code: string; name: string; type: string; group: string }
 interface Entry { id: number; date: string; narration: string; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface TB { accounts: { code: string; name: string; debit: number; credit: number }[]; totalDebit: number; totalCredit: number; balanced: boolean }
 
-export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings';
+export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
+  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking';
 
 /** Sidebar structure. Entries marked manage are only shown to owners and accountants. */
 export const NAV: { group: string; items: { key: PageKey; label: string; manage?: boolean }[] }[] = [
   { group: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard' }] },
   { group: 'Sales', items: [{ key: 'invoices', label: 'Invoices' }, { key: 'quotes', label: 'Quotes' }, { key: 'recurring', label: 'Repeating invoices' }, { key: 'customers', label: 'Customers' }] },
-  { group: 'Purchases', items: [{ key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' }, { key: 'suppliers', label: 'Suppliers' }] },
-  { group: 'Accounting', items: [{ key: 'bank', label: 'Bank accounts' }, { key: 'journal', label: 'Manual journals' }, { key: 'coa', label: 'Chart of accounts' }, { key: 'assets', label: 'Fixed assets' }, { key: 'items', label: 'Products and services' }] },
+  { group: 'Purchases', items: [{ key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' }, { key: 'expenses', label: 'Expense claims' }, { key: 'suppliers', label: 'Suppliers' }, { key: 'approvals', label: 'Awaiting approval' }] },
+  { group: 'Accounting', items: [{ key: 'bank', label: 'Bank accounts' }, { key: 'journal', label: 'Manual journals' }, { key: 'coa', label: 'Chart of accounts' }, { key: 'assets', label: 'Fixed assets' }, { key: 'items', label: 'Products and services' }, { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'year-end', label: 'Year-end close' }] },
   { group: 'Reporting', items: [{ key: 'reports', label: 'Reports' }] },
   { group: 'Compliance', items: [{ key: 'tasks', label: 'Tasks and deadlines' }, { key: 'files', label: 'Documents' }] },
-  { group: 'Setup', items: [{ key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true }, { key: 'settings', label: 'Organisation settings' }] },
+  { group: 'Setup', items: [{ key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true }, { key: 'tracking', label: 'Tracking categories' }, { key: 'settings', label: 'Organisation settings' }] },
 ];
 
 export function OrgPage({ org, role, page, go, onOrgChanged }: { org: Org; role: string; page: PageKey; go: (p: PageKey) => void; onOrgChanged: () => void }) {
@@ -55,6 +59,12 @@ export function OrgPage({ org, role, page, go, onOrgChanged }: { org: Org; role:
     case 'import': return canManage ? <><PageHeader title="Import data" subtitle="Bring in contacts, accounts and opening balances from other software." /><Import org={org} /></> : null;
     case 'schedules': return canManage ? <><PageHeader title="Scheduled emails" subtitle="Reports sent to you or your client automatically." /><Schedules org={org} /></> : null;
     case 'settings': return <OrgSettings org={org} canManage={canManage} onSaved={onOrgChanged} />;
+    case 'approvals': return <Approvals org={org} canManage={canManage} />;
+    case 'expenses': return <ExpenseClaims org={org} canPost={canPost} canManage={canManage} accounts={accounts} />;
+    case 'inventory': return <Inventory org={org} canManage={canManage} />;
+    case 'budgets': return <Budgets org={org} canManage={canManage} accounts={accounts} />;
+    case 'year-end': return <YearEnd org={org} canManage={canManage} />;
+    case 'tracking': return <Tracking org={org} canManage={canManage} />;
   }
 }
 

@@ -6,6 +6,7 @@ import { Clients } from './pages/Clients';
 import { NAV, OrgPage, PageKey } from './pages/OrgWorkspace';
 import { Security } from './pages/Security';
 import { Billing, Help, Privacy } from './pages/Account';
+import { PracticeOverview } from './pages/PracticeOverview';
 
 export interface Me {
   id: number; email: string; fullName: string; twoFactorEnabled: boolean;
@@ -13,7 +14,7 @@ export interface Me {
 }
 export interface Org { id: number; name: string; gstin: string | null; firmId: number }
 
-/** Hash routes: #/clients, #/security, #/billing, #/privacy, #/help, #/o/<orgId>/<page>. Refresh and the back button keep working. */
+/** Hash routes: #/clients, #/practice, #/security, #/billing, #/privacy, #/help, #/o/<orgId>/<page>. Refresh and the back button keep working. */
 function useRoute() {
   const read = () => location.hash.replace(/^#/, '') || '/clients';
   const [route, setRoute] = useState(read());
@@ -116,6 +117,7 @@ export function App() {
             </select>
             <nav aria-label="Account" className="flex items-center gap-1">
               <button className={`rounded px-3 py-1.5 text-sm font-medium ${route === '/clients' ? 'bg-white/15' : 'text-indigo-100 hover:bg-white/10'}`} onClick={() => navigate('/clients')}>Clients</button>
+              <button className={`rounded px-3 py-1.5 text-sm font-medium ${route === '/practice' ? 'bg-white/15' : 'text-indigo-100 hover:bg-white/10'}`} onClick={() => navigate('/practice')}>Practice</button>
               <Menu label="Account menu" align="right" trigger={<span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-xs font-bold ring-2 ring-white/30">{initials}</span>}>
                 {(close) => (
                   <>
@@ -147,6 +149,7 @@ export function App() {
             {route === '/clients' && <Clients me={me} orgs={orgs} firmRole={firmRole?.role} onOpen={(id) => navigate(`/o/${id}/dashboard`)} onChanged={load} />}
             {m && org && <OrgPage key={org.id} org={org} role={role} page={page} go={(p) => navigate(`/o/${org.id}/${p}`)} onOrgChanged={load} />}
             {m && !org && <p className="text-sm text-slate-600">That client was not found, or you do not have access.</p>}
+            {route === '/practice' && <PracticeOverview onOpen={(id) => navigate(`/o/${id}/dashboard`)} />}
             {route === '/security' && <Security me={me} onChanged={load} />}
             {route === '/billing' && <Billing me={me} />}
             {route === '/privacy' && <Privacy onDeleted={() => { setMe(null); setOrgs([]); navigate('/clients'); }} />}

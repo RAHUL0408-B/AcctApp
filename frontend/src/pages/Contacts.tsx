@@ -13,7 +13,7 @@ export function Contacts({ org, canPost, only }: { org: Org; canPost: boolean; o
   const [states, setStates] = useState<{ code: string; name: string }[]>([]);
   const [show, setShow] = useState(false);
   const [stmt, setStmt] = useState<Statement | null>(null);
-  const [f, setF] = useState({ kind: only ?? 'customer', name: '', gstin: '', pan: '', stateCode: '', email: '', isIndividual: false });
+  const [f, setF] = useState({ kind: only ?? 'customer', name: '', gstin: '', pan: '', stateCode: '', email: '', isIndividual: false, country: 'IN' });
   const { error, busy, run } = useAction();
   const load = useCallback(() => api<Contact[]>(`/orgs/${org.id}/contacts`).then(setList), [org.id]);
   useEffect(() => { load(); api('/config/states').then(setStates); }, [load]);
@@ -21,7 +21,7 @@ export function Contacts({ org, canPost, only }: { org: Org; canPost: boolean; o
   const shown = list.filter((c) => !only || c.kind === only || c.kind === 'both');
   const add = () => run(async () => {
     await api(`/orgs/${org.id}/contacts`, { body: { kind: f.kind, name: f.name, isIndividual: f.isIndividual,
-      ...(f.gstin ? { gstin: f.gstin.toUpperCase() } : {}), ...(f.pan ? { pan: f.pan.toUpperCase() } : {}), ...(f.stateCode ? { stateCode: f.stateCode } : {}), ...(f.email ? { email: f.email } : {}) } });
+      ...(f.gstin ? { gstin: f.gstin.toUpperCase() } : {}), ...(f.pan ? { pan: f.pan.toUpperCase() } : {}), ...(f.stateCode ? { stateCode: f.stateCode } : {}), ...(f.email ? { email: f.email } : {}), country: f.country || 'IN' } });
     setF({ ...f, name: '', gstin: '', pan: '', email: '' }); setShow(false); load();
   });
   const openStatement = (c: Contact) => run(async () => setStmt(await api(`/orgs/${org.id}/contacts/${c.id}/statement`)));
@@ -38,6 +38,7 @@ export function Contacts({ org, canPost, only }: { org: Org; canPost: boolean; o
             <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
             <Field label="GSTIN" value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value })} />
             <Field label="PAN" value={f.pan} onChange={(e) => setF({ ...f, pan: e.target.value })} />
+            <Field label="Country (2 letters)" aria-label="Country" maxLength={2} value={f.country} onChange={(e) => setF({ ...f, country: e.target.value.toUpperCase() })} />
             <Select label="State (if no GSTIN)" aria-label="State" value={f.stateCode} onChange={(e) => setF({ ...f, stateCode: e.target.value })}><option value="">—</option>{states.map((s) => <option key={s.code} value={s.code}>{s.code} {s.name}</option>)}</Select>
             <Field label="Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.isIndividual} onChange={(e) => setF({ ...f, isIndividual: e.target.checked })} /> Individual / HUF (lower TDS rate)</label>

@@ -1,0 +1,12 @@
+{
+  "name": "acctapp",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:api": "npm run start:dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "migrate": "npm run migrate -w apps/api",
+    "test": "npm run test -w apps/api"
+  }
+}

@@ -1,7 +1,8 @@
-# Render Blueprint: the API only. The web front end is deployed on Vercel (apps/web/vercel.json forwards /api to this service).
-# Use: Render dashboard -> New -> Blueprint -> connect the GitHub repo. See docs/DEPLOY.md.
-# The database is Supabase (Mumbai). DATABASE_URL and DATABASE_SSL are asked for in the Render dashboard. See docs/DEPLOY.md.
-
+# Render Blueprint (free plan): the API only. The web front end is deployed on Vercel (apps/web/vercel.json forwards /api here).
+# The database is Supabase. You are asked for one value: DATABASE_URL (the Supabase session pooler string).
+# Free-plan limits: the service sleeps after ~15 minutes without traffic (first request then takes ~50 seconds), the background worker only
+# runs while it is awake, and there is no disk, so uploaded files and backups are wiped on every restart. Fine for a demo; use a paid plan
+# with a disk (see docs/DEPLOY.md) before real client data goes in.
 services:
   - type: web
     name: acctapp-api
@@ -9,12 +10,8 @@ services:
     dockerfilePath: ./docker/api.Dockerfile
     dockerContext: .
     region: singapore
-    plan: starter            # needs a paid plan: the background worker, backups and a disk need an always-on instance
+    plan: free
     healthCheckPath: /api/health
-    disk:
-      name: acctapp-data     # uploaded documents and encrypted backups
-      mountPath: /var/acctapp
-      sizeGB: 5
     envVars:
       - key: NODE_ENV
         value: production
@@ -25,9 +22,9 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: BACKUP_KEY
-        generateValue: true  # COPY THIS VALUE somewhere safe after the first deploy. Backups cannot be read without it.
+        generateValue: true
       - key: WEB_ORIGIN
-        sync: false          # your Vercel address, e.g. https://acctapp.vercel.app
+        value: https://acctapp.vercel.app   # change to your real Vercel address if it differs
       - key: TRUST_PROXY
         value: "1"
       - key: DATA_DIR

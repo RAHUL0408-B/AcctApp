@@ -2,13 +2,25 @@
 export const getToken = () => sessionStorage.getItem('token');
 export const setToken = (t: string | null) => (t ? sessionStorage.setItem('token', t) : sessionStorage.removeItem('token'));
 
+// 502/503/504 come from the host, not the API: on free hosting the server sleeps when idle and takes up to a minute to wake.
+const WAKING = new Set([502, 503, 504]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
-  const res = await fetch('/api' + path, {
-    method: opts.method ?? (opts.body ? 'POST' : 'GET'),
-    headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const method = opts.method ?? (opts.body ? 'POST' : 'GET');
+  let res: Response;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch('/api' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    // Only reads are retried: a save may already have reached the server, and repeating it could post it twice.
+    if (!WAKING.has(res.status) || method !== 'GET' || attempt >= 4) break;
+    await sleep(5000 * (attempt + 1));
+  }
   const data = await res.json().catch(() => ({}));
+  if (WAKING.has(res.status)) throw new Error('The server is starting up. Wait a few seconds, then try again.');
   if (!res.ok) throw new Error(Array.isArray(data.message) ? data.message.join('; ') : data.message ?? `Error ${res.status}`);
   return data;
 }

@@ -31,7 +31,8 @@ export class ExtrasController {
   @Get('settings')
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
-    const o = (await getPool().query('SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth" FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const o = (await getPool().query(`SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth",gst_scheme AS "gstScheme",
+      lut_number AS "lutNumber",require_approval AS "requireApproval" FROM organizations WHERE id=$1`, [orgId])).rows[0];
     return num(o, 'id');
   }
 
@@ -42,12 +43,17 @@ export class ExtrasController {
       name: z.string().min(1).max(200).optional(),
       gstin: z.string().refine(isValidGstin, 'Invalid GSTIN (format or check digit is wrong)').nullable().optional(),
       pan: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/, 'Invalid PAN').nullable().optional(),
+      gstScheme: z.enum(['regular', 'composition']).optional(),
+      lutNumber: z.string().min(5).max(40).nullable().optional(),
+      requireApproval: z.boolean().optional(),
     }), body);
-    const before = (await getPool().query('SELECT name,gstin,pan,state_code FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const next = { name: b.name ?? before.name, gstin: b.gstin === undefined ? before.gstin : b.gstin, pan: b.pan === undefined ? before.pan : b.pan };
+    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,require_approval FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const next = { name: b.name ?? before.name, gstin: b.gstin === undefined ? before.gstin : b.gstin, pan: b.pan === undefined ? before.pan : b.pan,
+      gstScheme: b.gstScheme ?? before.gst_scheme, lutNumber: b.lutNumber === undefined ? before.lut_number : b.lutNumber, requireApproval: b.requireApproval ?? before.require_approval };
     const state = next.gstin ? next.gstin.slice(0, 2) : before.state_code;
     return withOrg(orgId, async (c) => {
-      await c.query('UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5 WHERE id=$1', [orgId, next.name, next.gstin, next.pan, state]);
+      await c.query('UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5, gst_scheme=$6, lut_number=$7, require_approval=$8 WHERE id=$1',
+        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'organization', entityId: orgId, before, after: next, ip });
       return { ok: true, stateCode: state };
     });
@@ -59,7 +65,7 @@ export class ExtrasController {
     await requireOrg(uid, orgId, 'read');
     return withOrg(orgId, async (c) => (await c.query(
       `SELECT id,code,name,kind,hsn_sac AS "hsnSac",sale_rate AS "saleRate",purchase_rate AS "purchaseRate",gst_rate_bp AS "gstRateBp",
-              sales_account_id AS "salesAccountId",purchase_account_id AS "purchaseAccountId" FROM items WHERE active ORDER BY name`)).rows
+              sales_account_id AS "salesAccountId",purchase_account_id AS "purchaseAccountId",track_stock AS "trackStock" FROM items WHERE active ORDER BY name`)).rows
       .map((r) => num(r, 'id', 'saleRate', 'purchaseRate', 'salesAccountId', 'purchaseAccountId')));
   }
 
@@ -70,12 +76,14 @@ export class ExtrasController {
       code: z.string().min(1).max(40), name: z.string().min(1).max(200), kind: z.enum(['goods', 'service']),
       hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(), saleRate: z.number().int().min(0).default(0), purchaseRate: z.number().int().min(0).default(0),
       gstRateBp: z.number().int().min(0).max(5000).default(1800), salesAccountId: z.number().int().positive().optional(), purchaseAccountId: z.number().int().positive().optional(),
+      trackStock: z.boolean().default(false),
     }), body);
+    if (b.trackStock && b.kind !== 'goods') throw new BadRequestException('Only goods can have stock tracked');
     return withOrg(orgId, async (c) => {
       if ((await c.query('SELECT 1 FROM items WHERE code=$1', [b.code])).rowCount) throw new ConflictException(`Item code ${b.code} already exists`);
       if (!(await c.query('SELECT 1 FROM gst_rates WHERE rate_bp=$1 AND valid_to IS NULL', [b.gstRateBp])).rowCount) throw new BadRequestException('Not a configured GST rate');
-      const r = (await c.query('INSERT INTO items(org_id,code,name,kind,hsn_sac,sale_rate,purchase_rate,gst_rate_bp,sales_account_id,purchase_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
-        [orgId, b.code, b.name, b.kind, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null])).rows[0];
+      const r = (await c.query('INSERT INTO items(org_id,code,name,kind,hsn_sac,sale_rate,purchase_rate,gst_rate_bp,sales_account_id,purchase_account_id,track_stock) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
+        [orgId, b.code, b.name, b.kind, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null, b.trackStock])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'item', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
@@ -374,12 +382,12 @@ export class ExtrasController {
                 COALESCE(SUM(CASE WHEN a.type='expense' THEN l.debit-l.credit END),0) AS expense,
                 COALESCE(SUM(CASE WHEN a.id IN (SELECT account_id FROM bank_accounts) OR a.code='1000' THEN l.debit END),0) AS cash_in,
                 COALESCE(SUM(CASE WHEN a.id IN (SELECT account_id FROM bank_accounts) OR a.code='1000' THEN l.credit END),0) AS cash_out
-           FROM m LEFT JOIN journal_entries e ON to_char(e.entry_date,'YYYY-MM') = m.ym
+           FROM m LEFT JOIN journal_entries e ON to_char(e.entry_date,'YYYY-MM') = m.ym AND e.kind = 'normal'
                   LEFT JOIN journal_lines l ON l.entry_id=e.id LEFT JOIN accounts a ON a.id=l.account_id
           GROUP BY m.ym ORDER BY m.ym`)).rows.map((r) => ({ month: r.ym, income: Number(r.income), expense: Number(r.expense), cashIn: Number(r.cash_in), cashOut: Number(r.cash_out) }));
       const ytd = (await c.query(
         `SELECT COALESCE(SUM(CASE WHEN a.type='income' THEN l.credit-l.debit END),0) AS inc, COALESCE(SUM(CASE WHEN a.type='expense' THEN l.debit-l.credit END),0) AS exp
-           FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.id=l.account_id WHERE e.entry_date BETWEEN $1 AND $2`, [fy.start, fy.end])).rows[0];
+           FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.id=l.account_id WHERE e.entry_date BETWEEN $1 AND $2 AND e.kind = 'normal'`, [fy.start, fy.end])).rows[0];
       const tasks = (await c.query("SELECT count(*) FILTER (WHERE status='open')::int AS open, count(*) FILTER (WHERE status='open' AND due_date < CURRENT_DATE)::int AS overdue FROM tasks")).rows[0];
       return {
         banks, cashInHand: cash, totalCash: banks.reduce((s, b) => s + b.balance, 0) + cash,

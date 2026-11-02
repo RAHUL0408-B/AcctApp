@@ -12,7 +12,7 @@ const postSchema = z.object({
   date, narration: z.string().min(1).max(500), reference: z.string().max(100).optional(),
   lines: z.array(z.object({
     accountId: z.number().int().positive(), debit: z.number().int().optional(),
-    credit: z.number().int().optional(), memo: z.string().max(300).optional(),
+    credit: z.number().int().optional(), memo: z.string().max(300).optional(), trackingOptionId: z.number().int().positive().optional(),
   })).min(2),
 });
 
@@ -28,6 +28,8 @@ export class LedgerController {
       const ids = [...new Set(lines.map((l) => l.accountId))];
       const found = await c.query('SELECT id FROM accounts WHERE id = ANY($1) AND is_active', [ids]);
       if (found.rowCount !== ids.length) throw new BadRequestException('One or more accounts do not exist or are inactive');
+      const opts = [...new Set(lines.map((l) => l.trackingOptionId).filter((x): x is number => !!x))];
+      if (opts.length && (await c.query('SELECT id FROM tracking_options WHERE id = ANY($1) AND active', [opts])).rowCount !== opts.length) throw new BadRequestException('Unknown or archived tracking option');
       const id = await insertEntry(c, orgId, uid, b.date, b.narration, b.reference ?? null, null, lines);
       await writeAudit(c, { orgId, userId: uid, action: 'post', entity: 'journal_entry', entityId: id, after: b, ip });
       return { id };
@@ -45,9 +47,9 @@ export class LedgerController {
       if (!orig) throw new NotFoundException('Entry not found');
       if (orig.reverses_id) throw new BadRequestException('A reversal entry cannot itself be reversed; post a new entry instead');
       if ((await c.query('SELECT 1 FROM journal_entries WHERE reverses_id=$1', [id])).rowCount) throw new ConflictException('Entry is already reversed');
-      const ls = (await c.query('SELECT account_id,debit,credit,memo FROM journal_lines WHERE entry_id=$1', [id])).rows
-        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), memo: r.memo ?? undefined }));
-      const rid = await insertEntry(c, orgId, uid, b.date, `Reversal of #${id}: ${b.reason}`, orig.reference, id, reverseLines(ls));
+      const ls = (await c.query('SELECT account_id,debit,credit,memo,tracking_option_id FROM journal_lines WHERE entry_id=$1', [id])).rows
+        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), memo: r.memo ?? undefined, trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
+      const rid = await insertEntry(c, orgId, uid, b.date, `Reversal of #${id}: ${b.reason}`, orig.reference, id, reverseLines(ls), orig.kind);
       await writeAudit(c, { orgId, userId: uid, action: 'reverse', entity: 'journal_entry', entityId: id, after: { reversalId: rid, ...b }, ip });
       return { id: rid };
     });

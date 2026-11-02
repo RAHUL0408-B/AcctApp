@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
@@ -6,8 +6,9 @@ import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireOrg } from '../tenancy/acl';
 import { financialYearOf, validateLines, reverseLines, Line } from '../ledger/ledger';
-import { accountIdByCode, insertEntry } from '../ledger/post';
-import { computeGst, isValidGstin, stateOfGstin, totals } from '../tax/gst';
+import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
+import { computeGst, isValidGstin, stateOfGstin, supplyRules, SupplyType, TaxLine, toRupees, totals } from '../tax/gst';
+import { issueCost, onHand, recordMove } from '../inventory/stock';
 import { computeTds } from '../tax/tds';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
@@ -19,16 +20,19 @@ const contactSchema = z.object({
   kind: z.enum(['customer', 'supplier', 'both']), name: z.string().min(1).max(200),
   gstin: z.string().optional(), pan: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/, 'Invalid PAN').optional(),
   stateCode: z.string().length(2).optional(), email: z.string().email().optional(), phone: z.string().max(20).optional(),
-  isIndividual: z.boolean().default(false),
+  isIndividual: z.boolean().default(false), country: z.string().regex(/^[A-Z]{2}$/, 'Use a 2-letter country code').default('IN'),
 });
 export const docSchema = z.object({
   docType: z.enum(['invoice', 'bill', 'credit_note', 'debit_note']), contactId: z.number().int().positive(),
   issueDate: date, dueDate: date.optional(), placeOfSupply: z.string().length(2).optional(), supplierRef: z.string().max(60).optional(),
   originalDocId: z.number().int().positive().optional(), tdsSection: z.string().optional(), notes: z.string().max(500).optional(),
+  supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).default('regular'),
+  currency: z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code').default('INR'),
+  fxRate: z.number().positive().max(100000).optional(), // rupees per 1 unit of the currency
   lines: z.array(z.object({
     description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
     quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0),
-    accountId: z.number().int().positive().optional(),
+    accountId: z.number().int().positive().optional(), itemId: z.number().int().positive().optional(), trackingOptionId: z.number().int().positive().optional(),
   })).min(1).max(200),
 });
 
@@ -44,7 +48,9 @@ const shapeDoc = (r: any) => ({
   issueDate: r.issue_date, dueDate: r.due_date, placeOfSupply: r.place_of_supply, subtotal: Number(r.subtotal),
   cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount),
   total: Number(r.total), netPayable: Number(r.net_payable), status: r.status, supplierRef: r.supplier_ref,
-  originalDocId: r.original_doc_id ? Number(r.original_doc_id) : null,
+  originalDocId: r.original_doc_id ? Number(r.original_doc_id) : null, supplyType: r.supply_type,
+  rcm: { cgst: Number(r.rcm_cgst ?? 0), sgst: Number(r.rcm_sgst ?? 0), igst: Number(r.rcm_igst ?? 0) },
+  currency: r.currency ?? 'INR', fxRate: Number(r.fx_rate ?? 1), foreignTotal: r.foreign_total == null ? null : Number(r.foreign_total),
   paid: r.paid !== undefined ? Number(r.paid) : undefined, outstanding: r.outstanding !== undefined ? Number(r.outstanding) : undefined,
 });
 
@@ -65,7 +71,7 @@ export class DocumentsController {
   @Get('orgs/:orgId/contacts')
   async contacts(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query('SELECT id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual" FROM contacts ORDER BY name')).rows
+    return withOrg(orgId, async (c) => (await c.query('SELECT id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual",country FROM contacts ORDER BY name')).rows
       .map((r) => ({ ...r, id: Number(r.id) })));
   }
 
@@ -77,8 +83,8 @@ export class DocumentsController {
     const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
     return withOrg(orgId, async (c) => {
       if (state && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [state])).rowCount) throw new BadRequestException('Unknown state code');
-      const r = (await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,is_individual) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
-        [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual])).rows[0];
+      const r = (await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,is_individual,country) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
+        [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'contact', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
@@ -110,8 +116,10 @@ export class DocumentsController {
 
   @Post('orgs/:orgId/documents')
   async create(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireOrg(uid, orgId, 'post');
     const b = parse(docSchema, body);
+    if (role === 'staff' && (await getPool().query('SELECT require_approval FROM organizations WHERE id=$1', [orgId])).rows[0]?.require_approval)
+      throw new ForbiddenException('This organisation needs approval for new invoices and bills: submit it for approval instead');
     return withOrg(orgId, (c) => createDocument(c, orgId, uid, b, ip));
   }
 
@@ -126,9 +134,16 @@ export class DocumentsController {
       if (d.status === 'void') throw new ConflictException('Already void');
       if ((await c.query('SELECT 1 FROM payments WHERE doc_id=$1', [id])).rowCount) throw new ConflictException('Remove payments first: this document has payments');
       if ((await c.query("SELECT 1 FROM documents WHERE original_doc_id=$1 AND status='posted'", [id])).rowCount) throw new ConflictException('This document has credit/debit notes against it');
-      const ls = (await c.query('SELECT account_id,debit,credit FROM journal_lines WHERE entry_id=$1', [d.journal_entry_id])).rows
-        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit) }));
+      const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [d.journal_entry_id])).rows
+        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
+      const moves = (await c.query('SELECT item_id, MIN(id) AS first_id, SUM(qty_milli) AS q, SUM(value) AS v FROM stock_moves WHERE doc_id=$1 GROUP BY item_id', [id])).rows;
+      for (const m of moves) {
+        await c.query('SELECT id FROM items WHERE id=$1 FOR UPDATE', [m.item_id]);
+        if (Number(m.q) > 0 && (await c.query("SELECT 1 FROM stock_moves WHERE item_id=$1 AND id > $2 AND kind='sale'", [m.item_id, m.first_id])).rowCount)
+          throw new ConflictException('Goods on this bill have been sold since it was posted: record a debit note or a stock adjustment instead');
+      }
       const vid = await insertEntry(c, orgId, uid, b.date, `Void ${d.number}: ${b.reason}`, d.number, Number(d.journal_entry_id), reverseLines(ls));
+      for (const m of moves) await recordMove(c, orgId, { itemId: Number(m.item_id), date: b.date, kind: 'void', qtyMilli: -Number(m.q), value: -Number(m.v), docId: id, entryId: vid, note: `Void ${d.number}` });
       await c.query("UPDATE documents SET status='void', void_entry_id=$2 WHERE id=$1", [id, vid]);
       await writeAudit(c, { orgId, userId: uid, action: 'void', entity: 'document', entityId: id, after: b, ip });
       return { voided: true, reversalEntryId: vid };
@@ -138,82 +153,136 @@ export class DocumentsController {
   @Post('orgs/:orgId/documents/:id/payments')
   async pay(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    const b = parse(z.object({ date, amount: z.number().int().positive(), accountId: z.number().int().positive(), reference: z.string().max(100).optional() }), body);
+    // amount = rupees actually received or paid. For a foreign-currency document also give foreignAmount (in its currency's cents).
+    const b = parse(z.object({ date, amount: z.number().int().positive(), accountId: z.number().int().positive(), reference: z.string().max(100).optional(),
+      foreignAmount: z.number().int().positive().optional() }), body);
     return withOrg(orgId, async (c) => {
       const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1 FOR UPDATE OF d`, [id])).rows[0];
       if (!d) throw new NotFoundException('Document not found');
       if (d.status !== 'posted') throw new ConflictException('Document is void');
       if (d.doc_type !== 'invoice' && d.doc_type !== 'bill') throw new BadRequestException('Only invoices and bills can be paid');
-      if (b.amount > Number(d.outstanding)) throw new BadRequestException(`Payment exceeds the outstanding amount (${d.outstanding} paise)`);
+      const outstanding = Number(d.outstanding);
+      let settled = b.amount, fxGain = 0;
+      if (d.currency !== 'INR') {
+        if (!b.foreignAmount) throw new BadRequestException(`Give the amount in ${d.currency} (foreignAmount) as well as the rupees`);
+        const fo = Number((await c.query(`SELECT d.foreign_total - COALESCE((SELECT SUM(foreign_amount) FROM payments WHERE doc_id=d.id),0)
+            - COALESCE((SELECT SUM(foreign_total) FROM documents n WHERE n.original_doc_id=d.id AND n.status='posted'),0) AS fo FROM documents d WHERE d.id=$1`, [id])).rows[0].fo);
+        if (b.foreignAmount > fo) throw new BadRequestException(`Payment exceeds the amount still owed (${fo} ${d.currency} cents)`);
+        // Settle at the rate the document was booked at; the difference from the rupees actually moved is an exchange gain or loss.
+        settled = b.foreignAmount === fo ? outstanding : Math.min(outstanding, toRupees(b.foreignAmount, Number(d.fx_rate)));
+        fxGain = d.doc_type === 'invoice' ? b.amount - settled : settled - b.amount;
+      } else if (b.amount > outstanding) throw new BadRequestException(`Payment exceeds the outstanding amount (${outstanding} paise)`);
       const bank = (await c.query('SELECT type FROM accounts WHERE id=$1 AND is_active', [b.accountId])).rows[0];
       if (!bank || bank.type !== 'asset') throw new BadRequestException('Pay from/into a cash or bank (asset) account');
       const control = await accountIdByCode(c, d.doc_type === 'invoice' ? '1100' : '2000');
       const lines: Line[] = d.doc_type === 'invoice'
-        ? [{ accountId: b.accountId, debit: b.amount, credit: 0 }, { accountId: control, debit: 0, credit: b.amount }]
-        : [{ accountId: control, debit: b.amount, credit: 0 }, { accountId: b.accountId, debit: 0, credit: b.amount }];
+        ? [{ accountId: b.accountId, debit: b.amount, credit: 0 }, { accountId: control, debit: 0, credit: settled }]
+        : [{ accountId: control, debit: settled, credit: 0 }, { accountId: b.accountId, debit: 0, credit: b.amount }];
+      if (fxGain) {
+        const fx = await ensureAccount(c, orgId, '4300');
+        lines.push(fxGain > 0 ? { accountId: fx, debit: 0, credit: fxGain } : { accountId: fx, debit: -fxGain, credit: 0 });
+      }
       const eid = await insertEntry(c, orgId, uid, b.date, `Payment ${d.doc_type === 'invoice' ? 'received for' : 'made for'} ${d.number}`, d.number, null, lines);
-      const p = (await c.query('INSERT INTO payments(org_id,doc_id,pay_date,amount,account_id,journal_entry_id,reference,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-        [orgId, id, b.date, b.amount, b.accountId, eid, b.reference ?? null, uid])).rows[0];
+      const p = (await c.query('INSERT INTO payments(org_id,doc_id,pay_date,amount,account_id,journal_entry_id,reference,created_by,foreign_amount,bank_amount,fx_gain) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
+        [orgId, id, b.date, settled, b.accountId, eid, b.reference ?? null, uid, b.foreignAmount ?? null, b.amount, fxGain])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'payment', entity: 'document', entityId: id, after: b, ip });
-      return { id: Number(p.id), journalEntryId: eid, outstandingAfter: Number(d.outstanding) - b.amount };
+      return { id: Number(p.id), journalEntryId: eid, settled, fxGain, outstandingAfter: outstanding - settled };
     });
   }
 }
 
-export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number };
+export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number };
 
 /**
  * Validate lines and work out GST for a sales or purchase document. Shared by invoices/bills, quotes and purchase orders
- * so they always agree on tax.
+ * so they always agree on tax. Amounts are in the document's own currency (paise for rupees).
  */
-export async function priceLines(c: PoolClient, orgId: number, isSales: boolean, contactId: number, issueDate: string, lines: DocLineInput[], placeOfSupply?: string) {
-  const org = (await c.query('SELECT gstin,state_code FROM organizations WHERE id=$1', [orgId])).rows[0];
+export async function priceLines(c: PoolClient, orgId: number, isSales: boolean, contactId: number, issueDate: string, lines: DocLineInput[], placeOfSupply?: string, supplyType: SupplyType = 'regular') {
+  const org = (await c.query('SELECT gstin,state_code,gst_scheme,lut_number FROM organizations WHERE id=$1', [orgId])).rows[0];
   const contact = (await c.query('SELECT * FROM contacts WHERE id=$1', [contactId])).rows[0];
   if (!contact) throw new BadRequestException('Contact not found');
   if (contact.kind !== 'both' && contact.kind !== (isSales ? 'customer' : 'supplier')) throw new BadRequestException(`This contact is a ${contact.kind}; ${isSales ? 'sales' : 'purchase'} documents need a ${isSales ? 'customer' : 'supplier'}`);
+  let rules: ReturnType<typeof supplyRules>;
+  try { rules = supplyRules(supplyType, isSales, org.gst_scheme === 'composition'); } catch (e) { throw new BadRequestException((e as Error).message); }
+  if (rules.needsLut && !org.lut_number) throw new BadRequestException('Add your Letter of Undertaking (LUT) number in organisation settings before making zero-rated supplies');
+  const isExport = supplyType.startsWith('export');
+  if (isExport && contact.country === 'IN') throw new BadRequestException('Exports need a customer outside India: set the country on the contact');
 
   // Who supplies, and where is the supply made? (drives CGST+SGST vs IGST)
   const supplierState: string | null = isSales ? org.state_code : contact.state_code;
-  const pos: string | null = placeOfSupply ?? (isSales ? contact.state_code ?? org.state_code : org.state_code);
+  const pos: string | null = placeOfSupply ?? (isExport ? '96' : isSales ? contact.state_code ?? org.state_code : org.state_code);
   if (pos && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [pos])).rowCount) throw new BadRequestException('Unknown place of supply');
-  const registered = isSales ? !!org.gstin : !!contact.gstin;
+  const registered = rules.chargeTax && (isSales ? !!org.gstin : !!contact.gstin);
 
   // Validate GST slabs against the config table.
   const slabs = new Set((await c.query('SELECT rate_bp FROM gst_rates WHERE valid_from <= $1 AND (valid_to IS NULL OR valid_to >= $1)', [issueDate])).rows.map((r) => r.rate_bp));
   const defaultAcc = await accountIdByCode(c, isSales ? '4000' : '5000').catch(() => null);
+
+  // Stock-tracked goods on a purchase go to the Inventory account instead of an expense.
+  const itemIds = [...new Set(lines.map((l) => l.itemId).filter((x): x is number => !!x))];
+  const items = itemIds.length ? (await c.query('SELECT id,name,track_stock FROM items WHERE id = ANY($1) AND active', [itemIds])).rows : [];
+  const inventory = !isSales && items.some((i) => i.track_stock) ? await ensureAccount(c, orgId, '1200') : null;
+  const optIds = [...new Set(lines.map((l) => l.trackingOptionId).filter((x): x is number => !!x))];
+  if (optIds.length && (await c.query('SELECT id FROM tracking_options WHERE id = ANY($1) AND active', [optIds])).rowCount !== optIds.length) throw new BadRequestException('Unknown or archived tracking option');
+
+  const resolved = lines.map((l, i) => {
+    if (!l.itemId) return { ...l, accountId: l.accountId ?? defaultAcc };
+    const it = items.find((x) => Number(x.id) === l.itemId);
+    if (!it) throw new BadRequestException(`Line ${i + 1}: unknown or archived item`);
+    return { ...l, accountId: it.track_stock && !isSales ? inventory : l.accountId ?? defaultAcc };
+  });
   const wanted = isSales ? ['income'] : ['expense', 'asset'];
-  const accIds = [...new Set(lines.map((l) => l.accountId ?? defaultAcc).filter((x): x is number => !!x))];
+  const accIds = [...new Set(resolved.map((l) => l.accountId).filter((x): x is number => !!x))];
   const accRows = (await c.query('SELECT id,type FROM accounts WHERE id = ANY($1) AND is_active', [accIds])).rows;
-  lines.forEach((l, i) => {
+  resolved.forEach((l, i) => {
     if (!slabs.has(l.gstRateBp)) throw new BadRequestException(`Line ${i + 1}: ${l.gstRateBp / 100}% is not a configured GST rate`);
-    const acc = l.accountId ?? defaultAcc;
-    const row = accRows.find((r) => Number(r.id) === acc);
-    if (!acc || !row) throw new BadRequestException(`Line ${i + 1}: choose a valid account`);
+    const row = accRows.find((r) => Number(r.id) === l.accountId);
+    if (!l.accountId || !row) throw new BadRequestException(`Line ${i + 1}: choose a valid account`);
     if (!wanted.includes(row.type)) throw new BadRequestException(`Line ${i + 1}: account must be ${wanted.join(' or ')} type`);
   });
 
-  const taxLines = computeGst(lines.map((l) => ({
-    description: l.description, hsnSac: l.hsnSac, qtyMilli: Math.round(l.quantity * 1000), rate: l.rate, gstRateBp: l.gstRateBp, accountId: (l.accountId ?? defaultAcc)!,
-  })), supplierState, pos, registered);
+  const input = resolved.map((l) => ({
+    description: l.description, hsnSac: l.hsnSac, qtyMilli: Math.round(l.quantity * 1000), rate: l.rate, gstRateBp: l.gstRateBp, accountId: l.accountId!,
+    itemId: l.itemId ?? null, trackingOptionId: l.trackingOptionId ?? null,
+  }));
+  const taxLines = computeGst(input, supplierState, pos, registered, rules.forceIgst);
+  // Reverse charge: the GST the buyer must pay itself, worked out as if the supplier had charged it (buyer's state is the place of supply).
+  const rcmLines = rules.reverseCharge ? computeGst(input, contact.state_code ?? org.state_code, org.state_code, !!org.gstin) : null;
   const t = totals(taxLines);
   if (t.subtotal <= 0) throw new BadRequestException('Document total must be more than zero');
-  return { org, contact, pos, taxLines, t };
+  return { org, contact, pos, taxLines, t, rules, rcmLines };
 }
 
-/** Build, validate and post a sales/purchase document with its GST, TDS and journal entry. */
+/** Build, validate and post a sales/purchase document with its GST, TDS, stock and journal entry. */
 export async function createDocument(c: PoolClient, orgId: number, uid: number, b: z.infer<typeof docSchema>, ip?: string, extra: { recurringId?: number } = {}) {
   const type = b.docType as DocType, isSales = SALES.includes(type);
+  const supplyType = (b.supplyType ?? 'regular') as SupplyType, currency = b.currency ?? 'INR', foreign = currency !== 'INR';
   if (b.dueDate && b.dueDate < b.issueDate) throw new BadRequestException('Due date is before issue date');
-  const { contact, pos, taxLines, t } = await priceLines(c, orgId, isSales, b.contactId, b.issueDate, b.lines, b.placeOfSupply);
 
-  // Original document checks for credit/debit notes.
+  // Original document checks for credit/debit notes. A note uses its original's currency and exchange rate.
+  let original: any = null, fxRate = 1;
   if (b.originalDocId) {
     if (type !== 'credit_note' && type !== 'debit_note') throw new BadRequestException('Only credit/debit notes can refer to an original document');
-    const o = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [b.originalDocId])).rows[0];
+    original = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [b.originalDocId])).rows[0];
     const expect = type === 'credit_note' ? 'invoice' : 'bill';
-    if (!o || o.doc_type !== expect || o.status !== 'posted' || Number(o.contact_id) !== b.contactId) throw new BadRequestException(`Original must be a posted ${expect} for the same contact`);
-    if (t.total > Number(o.outstanding)) throw new BadRequestException('Note is larger than the amount still outstanding on the original');
+    if (!original || original.doc_type !== expect || original.status !== 'posted' || Number(original.contact_id) !== b.contactId) throw new BadRequestException(`Original must be a posted ${expect} for the same contact`);
+    if (original.currency !== currency) throw new BadRequestException(`A note must be in the same currency as its original (${original.currency})`);
+    fxRate = Number(original.fx_rate);
+  } else if (foreign) {
+    if (!b.fxRate) throw new BadRequestException(`Give the exchange rate: rupees per 1 ${currency}`);
+    fxRate = b.fxRate;
   }
+  if (foreign && b.tdsSection) throw new BadRequestException('TDS on foreign-currency bills is not supported: record the bill in rupees');
+
+  const priced = await priceLines(c, orgId, isSales, b.contactId, b.issueDate, b.lines, b.placeOfSupply, supplyType);
+  const { contact, pos, rules } = priced;
+  const conv = (l: TaxLine): TaxLine => (foreign
+    ? { ...l, rate: toRupees(l.rate, fxRate), taxable: toRupees(l.taxable, fxRate), cgst: toRupees(l.cgst, fxRate), sgst: toRupees(l.sgst, fxRate), igst: toRupees(l.igst, fxRate) }
+    : l);
+  const taxLines = priced.taxLines.map(conv), t = totals(taxLines);
+  const rcm = priced.rcmLines ? totals(priced.rcmLines.map(conv)) : { cgst: 0, sgst: 0, igst: 0, total: 0, subtotal: 0 };
+  const foreignTotal = foreign ? priced.t.total : null;
+  if (original && t.total > Number(original.outstanding)) throw new BadRequestException('Note is larger than the amount still outstanding on the original');
 
   // TDS on bills only.
   let tdsSection: string | null = null, tdsAmount = 0;
@@ -235,6 +304,25 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   }
   const netPayable = t.total - tdsAmount;
 
+  // Stock: purchases add quantity at cost; sales take it out at weighted average cost. Notes do not move stock.
+  const moves: { itemId: number; qtyMilli: number; value: number }[] = [];
+  let costOfSales = 0;
+  const lineItemIds = [...new Set(taxLines.map((l) => l.itemId).filter((x): x is number => !!x))];
+  if ((type === 'invoice' || type === 'bill') && lineItemIds.length) {
+    const tracked = new Set((await c.query('SELECT id FROM items WHERE id = ANY($1) AND track_stock ORDER BY id FOR UPDATE', [lineItemIds])).rows.map((r) => Number(r.id)));
+    const state = new Map<number, { qtyMilli: number; value: number }>();
+    for (const l of taxLines) {
+      if (!l.itemId || !tracked.has(l.itemId)) continue;
+      if (type === 'bill') { moves.push({ itemId: l.itemId, qtyMilli: l.qtyMilli, value: l.taxable + (rules.claimInputCredit ? 0 : l.cgst + l.sgst + l.igst) }); continue; }
+      const s = state.get(l.itemId) ?? await onHand(c, l.itemId);
+      if (l.qtyMilli > s.qtyMilli) throw new BadRequestException(`Not enough stock for "${l.description}": ${s.qtyMilli / 1000} on hand`);
+      const cost = issueCost(s, l.qtyMilli);
+      state.set(l.itemId, { qtyMilli: s.qtyMilli - l.qtyMilli, value: s.value - cost });
+      moves.push({ itemId: l.itemId, qtyMilli: -l.qtyMilli, value: -cost });
+      costOfSales += cost;
+    }
+  }
+
   // Number: PREFIX/FY/0001, one running sequence per type per financial year.
   const fy = financialYearOf(b.issueDate);
   const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,$3,2)
@@ -242,22 +330,42 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const number = `${PREFIX[type]}/${fy.label.replace('FY ', '').slice(2)}/${String(seq.n).padStart(4, '0')}`;
 
   // Journal. Sales: Dr Debtors / Cr revenue + output GST. Purchases: Dr expense + input GST / Cr Creditors + TDS payable. Notes reverse.
-  const sums = new Map<number, number>();
-  for (const l of taxLines) sums.set(l.accountId, (sums.get(l.accountId) ?? 0) + l.taxable);
-  const gstAcc = isSales ? ['2100', '2110', '2120'] : ['1300', '1310', '1320'];
+  // Lines are grouped by account and tracking option so reports by tracking category still work.
+  const sums = new Map<string, { accountId: number; trackingOptionId: number | null; amount: number }>();
+  for (const l of taxLines) {
+    const key = `${l.accountId}:${l.trackingOptionId ?? ''}`;
+    const tax = !isSales && !rules.claimInputCredit ? l.cgst + l.sgst + l.igst : 0; // composition dealers: GST paid is part of the cost
+    const cur = sums.get(key) ?? { accountId: l.accountId, trackingOptionId: l.trackingOptionId ?? null, amount: 0 };
+    cur.amount += l.taxable + tax; sums.set(key, cur);
+  }
   const gstIds: number[] = [];
-  for (const code of gstAcc) gstIds.push(await accountIdByCode(c, code)); // sequential: one client runs one query at a time
+  for (const code of isSales ? ['2100', '2110', '2120'] : ['1300', '1310', '1320']) gstIds.push(await accountIdByCode(c, code)); // sequential: one client runs one query at a time
   const taxAmts = [t.cgst, t.sgst, t.igst];
   const primary: Line[] = []; // the "normal" direction for an invoice (sales) or bill (purchase)
   if (isSales) {
     primary.push({ accountId: await accountIdByCode(c, '1100'), debit: t.total, credit: 0 });
-    for (const [a, v] of sums) primary.push({ accountId: a, debit: 0, credit: v });
+    for (const v of sums.values()) primary.push({ accountId: v.accountId, debit: 0, credit: v.amount, trackingOptionId: v.trackingOptionId });
     taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: 0, credit: v }));
+    if (costOfSales) {
+      primary.push({ accountId: await ensureAccount(c, orgId, '5050'), debit: costOfSales, credit: 0 });
+      primary.push({ accountId: await ensureAccount(c, orgId, '1200'), debit: 0, credit: costOfSales });
+    }
   } else {
-    for (const [a, v] of sums) primary.push({ accountId: a, debit: v, credit: 0 });
-    taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: v, credit: 0 }));
+    for (const v of sums.values()) primary.push({ accountId: v.accountId, debit: v.amount, credit: 0, trackingOptionId: v.trackingOptionId });
+    if (rules.claimInputCredit) taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: v, credit: 0 }));
     primary.push({ accountId: await accountIdByCode(c, '2000'), debit: 0, credit: netPayable });
     if (tdsAmount) primary.push({ accountId: await accountIdByCode(c, '2200'), debit: 0, credit: tdsAmount });
+    // Reverse charge: Dr input GST (or the cost, for composition dealers) / Cr RCM GST payable.
+    const rcmAmts = [rcm.cgst, rcm.sgst, rcm.igst];
+    if (rcm.cgst + rcm.sgst + rcm.igst > 0) {
+      const payIds = [await ensureAccount(c, orgId, '2130'), await ensureAccount(c, orgId, '2140'), await ensureAccount(c, orgId, '2150')];
+      const costAcc = [...sums.values()][0].accountId;
+      rcmAmts.forEach((v, i) => {
+        if (!v) return;
+        primary.push({ accountId: rules.claimInputCredit ? gstIds[i] : costAcc, debit: v, credit: 0 });
+        primary.push({ accountId: payIds[i], debit: 0, credit: v });
+      });
+    }
   }
   const isNote = type === 'credit_note' || type === 'debit_note';
   const journal = validateLines(isNote ? reverseLines(primary) : primary);
@@ -265,13 +373,15 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
 
   const doc = (await c.query(
     `INSERT INTO documents(org_id,doc_type,number,contact_id,issue_date,due_date,place_of_supply,supplier_ref,original_doc_id,subtotal,cgst,sgst,igst,
-       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING id`,
     [orgId, type, number, b.contactId, b.issueDate, b.dueDate ?? null, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
-     tdsSection, tdsAmount, t.total, netPayable, eid, b.notes ?? null, uid, extra.recurringId ?? null])).rows[0];
+     tdsSection, tdsAmount, t.total, netPayable, eid, b.notes ?? null, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal])).rows[0];
   for (const l of taxLines) {
-    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId]);
+    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null]);
   }
-  await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'document', entityId: doc.id, after: { number, total: t.total, tdsAmount }, ip });
-  return { id: Number(doc.id), number, ...t, tdsSection, tdsAmount, netPayable, journalEntryId: eid };
+  for (const m of moves) await recordMove(c, orgId, { ...m, date: b.issueDate, kind: type === 'bill' ? 'purchase' : 'sale', docId: Number(doc.id), entryId: eid, note: number });
+  await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'document', entityId: doc.id, after: { number, total: t.total, tdsAmount, supplyType, currency }, ip });
+  return { id: Number(doc.id), number, ...t, tdsSection, tdsAmount, netPayable, journalEntryId: eid, supplyType, rcm: { cgst: rcm.cgst, sgst: rcm.sgst, igst: rcm.igst }, currency, foreignTotal, costOfSales };
 }

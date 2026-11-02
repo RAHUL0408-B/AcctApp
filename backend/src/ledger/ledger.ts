@@ -1,6 +1,6 @@
 // Pure double-entry rules. The database re-checks the same rules with triggers as a safety net.
-export interface LineInput { accountId: number; debit?: number; credit?: number; memo?: string; }
-export interface Line { accountId: number; debit: number; credit: number; memo?: string; }
+export interface LineInput { accountId: number; debit?: number; credit?: number; memo?: string; trackingOptionId?: number | null; }
+export interface Line { accountId: number; debit: number; credit: number; memo?: string; trackingOptionId?: number | null; }
 
 export class LedgerError extends Error {}
 
@@ -14,7 +14,7 @@ export function validateLines(input: LineInput[]): Line[] {
     if (debit < 0 || credit < 0) throw new LedgerError(`Line ${i + 1}: amounts cannot be negative`);
     if ((debit === 0) === (credit === 0)) throw new LedgerError(`Line ${i + 1}: use exactly one of debit or credit`);
     debits += debit; credits += credit;
-    return { accountId: l.accountId, debit, credit, memo: l.memo };
+    return { accountId: l.accountId, debit, credit, memo: l.memo, trackingOptionId: l.trackingOptionId ?? null };
   });
   if (debits !== credits) throw new LedgerError(`Entry is unbalanced: debits ${debits} paise, credits ${credits} paise`);
   return lines;
@@ -22,7 +22,7 @@ export function validateLines(input: LineInput[]): Line[] {
 
 /** A reversal swaps debit and credit on every line. */
 export function reverseLines(lines: Line[]): Line[] {
-  return lines.map((l) => ({ accountId: l.accountId, debit: l.credit, credit: l.debit, memo: l.memo }));
+  return lines.map((l) => ({ accountId: l.accountId, debit: l.credit, credit: l.debit, memo: l.memo, trackingOptionId: l.trackingOptionId ?? null }));
 }
 
 /** Net balance in the account's natural direction: assets/expenses are debit-positive, others credit-positive. */

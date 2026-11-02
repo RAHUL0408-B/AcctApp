@@ -46,7 +46,7 @@ describe('ledger rules', () => {
   });
   it('reverse swaps sides and stays balanced', () => {
     const rev = reverseLines(validateLines([{ accountId: 1, debit: 500 }, { accountId: 2, credit: 500 }]));
-    expect(rev).toEqual([{ accountId: 1, debit: 0, credit: 500, memo: undefined }, { accountId: 2, debit: 500, credit: 0, memo: undefined }]);
+    expect(rev).toEqual([{ accountId: 1, debit: 0, credit: 500, memo: undefined, trackingOptionId: null }, { accountId: 2, debit: 500, credit: 0, memo: undefined, trackingOptionId: null }]);
     expect(() => validateLines(rev)).not.toThrow();
   });
   it('natural balance by account type', () => {

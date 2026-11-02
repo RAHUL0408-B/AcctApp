@@ -4,20 +4,20 @@ import { naturalBalance } from '../ledger/ledger';
 
 const n = (v: unknown) => Number(v);
 
-export async function accountBalances(c: PoolClient, opts: { from?: string; to?: string; types?: string[] }) {
+export async function accountBalances(c: PoolClient, opts: { from?: string; to?: string; types?: string[]; excludeClosing?: boolean }) {
   const rows = (await c.query(
     `SELECT a.id, a.code, a.name, a.type, a.group_name AS "group", COALESCE(SUM(l.debit),0) AS debit, COALESCE(SUM(l.credit),0) AS credit
        FROM accounts a
        LEFT JOIN (SELECT jl.account_id, jl.debit, jl.credit FROM journal_lines jl JOIN journal_entries e ON e.id=jl.entry_id
-                   WHERE ($1::date IS NULL OR e.entry_date >= $1::date) AND ($2::date IS NULL OR e.entry_date <= $2::date)) l ON l.account_id=a.id
+                   WHERE ($1::date IS NULL OR e.entry_date >= $1::date) AND ($2::date IS NULL OR e.entry_date <= $2::date) AND (NOT $4 OR e.kind <> 'closing')) l ON l.account_id=a.id
       WHERE ($3::text[] IS NULL OR a.type = ANY($3))
-      GROUP BY a.id ORDER BY a.code`, [opts.from ?? null, opts.to ?? null, opts.types ?? null])).rows;
+      GROUP BY a.id ORDER BY a.code`, [opts.from ?? null, opts.to ?? null, opts.types ?? null, !!opts.excludeClosing])).rows;
   return rows.map((r) => ({ id: n(r.id), code: r.code, name: r.name, type: r.type as string, group: r.group as string,
     debit: n(r.debit), credit: n(r.credit), balance: naturalBalance(r.type, n(r.debit), n(r.credit)) }));
 }
 
 export async function profitAndLoss(c: PoolClient, from: string, to: string) {
-  const rows = await accountBalances(c, { from, to, types: ['income', 'expense'] });
+  const rows = await accountBalances(c, { from, to, types: ['income', 'expense'], excludeClosing: true });
   const section = (type: string) => {
     const items = rows.filter((r) => r.type === type && (r.debit || r.credit));
     return { items: items.map(({ code, name, group, balance }) => ({ code, name, group, amount: balance })), total: items.reduce((s, r) => s + r.balance, 0) };
@@ -35,7 +35,7 @@ export async function balanceSheet(c: PoolClient, asOf: string) {
   const assets = section('asset'), liabilities = section('liability'), equity = section('equity');
   const income = rows.filter((r) => r.type === 'income').reduce((s, r) => s + r.balance, 0);
   const expense = rows.filter((r) => r.type === 'expense').reduce((s, r) => s + r.balance, 0);
-  const profit = income - expense; // all-time profit to date, shown inside equity (no year-end closing entries)
+  const profit = income - expense; // profit not yet moved to reserves by a year-end closing entry
   const equityTotal = equity.total + profit;
   return { asOf, assets, liabilities, equity: { ...equity, profitToDate: profit, total: equityTotal },
     balanced: assets.total === liabilities.total + equityTotal };
@@ -100,8 +100,10 @@ export async function gstr1(c: PoolClient, from: string, to: string) {
       WHERE d.status='posted' AND d.doc_type IN ('invoice','credit_note') AND d.issue_date BETWEEN $1 AND $2 ORDER BY d.issue_date, d.id`, [from, to])).rows;
   const shape = (d: any) => ({ number: d.number, date: new Date(d.issue_date).toISOString().slice(0, 10), party: d.party, gstin: d.party_gstin, placeOfSupply: d.place_of_supply,
     value: n(d.total), taxable: n(d.subtotal), igst: n(d.igst), cgst: n(d.cgst), sgst: n(d.sgst) });
-  const inv = docs.filter((d) => d.doc_type === 'invoice'), cn = docs.filter((d) => d.doc_type === 'credit_note');
-  const b2b = inv.filter((d) => d.party_gstin).map(shape);
+  const isExport = (d: any) => String(d.supply_type).startsWith('export');
+  const inv = docs.filter((d) => d.doc_type === 'invoice' && !isExport(d)), cn = docs.filter((d) => d.doc_type === 'credit_note');
+  const exp = docs.filter((d) => d.doc_type === 'invoice' && isExport(d)).map((d) => ({ ...shape(d), withPayment: d.supply_type === 'export_igst', currency: d.currency, foreignTotal: d.foreign_total == null ? null : n(d.foreign_total) }));
+  const b2b = inv.filter((d) => d.party_gstin).map((d) => ({ ...shape(d), sez: String(d.supply_type).startsWith('sez') ? (d.supply_type === 'sez_igst' ? 'SEZWP' : 'SEZWOP') : null }));
   const unreg = inv.filter((d) => !d.party_gstin);
   const b2cl = unreg.filter((d) => d.place_of_supply !== d.org_state && n(d.total) > B2CL_LIMIT).map(shape);
   const b2csRows = unreg.filter((d) => !(d.place_of_supply !== d.org_state && n(d.total) > B2CL_LIMIT));
@@ -120,17 +122,18 @@ export async function gstr1(c: PoolClient, from: string, to: string) {
        FROM document_lines l JOIN documents d ON d.id=l.doc_id
       WHERE d.status='posted' AND d.doc_type IN ('invoice','credit_note') AND d.issue_date BETWEEN $1 AND $2 GROUP BY 1,2 ORDER BY 1,2`, [from, to])).rows
     .map((r) => ({ hsn: r.hsn, rateBp: n(r.rateBp), quantity: n(r.qty_milli) / 1000, taxable: n(r.taxable), igst: n(r.igst), cgst: n(r.cgst), sgst: n(r.sgst) }));
-  return { from, to, b2b, b2cl, b2cs, cdnr: cn.filter((d) => d.party_gstin).map(shape), cdnur: cn.filter((d) => !d.party_gstin).map(shape), hsn,
-    totals: { invoices: inv.length, taxable: inv.reduce((s, d) => s + n(d.subtotal), 0) - cn.reduce((s, d) => s + n(d.subtotal), 0) } };
+  return { from, to, b2b, b2cl, b2cs, exp, cdnr: cn.filter((d) => d.party_gstin).map(shape), cdnur: cn.filter((d) => !d.party_gstin).map(shape), hsn,
+    totals: { invoices: inv.length + exp.length, taxable: inv.reduce((s, d) => s + n(d.subtotal), 0) + exp.reduce((s, d) => s + d.taxable, 0) - cn.reduce((s, d) => s + n(d.subtotal), 0) } };
 }
 
 export async function gstr3b(c: PoolClient, from: string, to: string) {
-  const sumBy = async (types: string[], zeroRate: boolean | null) => {
+  const sumBy = async (types: string[], zeroRate: boolean | null, zeroRated = false) => {
     const r = (await c.query(
       `SELECT d.doc_type, COALESCE(SUM(l.taxable),0) AS taxable, COALESCE(SUM(l.igst),0) AS igst, COALESCE(SUM(l.cgst),0) AS cgst, COALESCE(SUM(l.sgst),0) AS sgst
          FROM document_lines l JOIN documents d ON d.id=l.doc_id
         WHERE d.status='posted' AND d.doc_type = ANY($1) AND d.issue_date BETWEEN $2 AND $3 AND ($4::boolean IS NULL OR (l.gst_rate_bp = 0) = $4)
-        GROUP BY d.doc_type`, [types, from, to, zeroRate])).rows;
+          AND (d.supply_type IN ('export_lut','export_igst','sez_lut','sez_igst')) = $5
+        GROUP BY d.doc_type`, [types, from, to, zeroRated ? null : zeroRate, zeroRated])).rows;
     const acc = { taxable: 0, igst: 0, cgst: 0, sgst: 0 };
     for (const row of r) {
       const sign = row.doc_type === 'credit_note' || row.doc_type === 'debit_note' ? -1 : 1;
@@ -140,13 +143,23 @@ export async function gstr3b(c: PoolClient, from: string, to: string) {
   };
   const outwardTaxable = await sumBy(['invoice', 'credit_note'], false);
   const outwardNil = await sumBy(['invoice', 'credit_note'], true);
-  const itc = await sumBy(['bill', 'debit_note'], false);
-  const payable = { igst: outwardTaxable.igst - itc.igst, cgst: outwardTaxable.cgst - itc.cgst, sgst: outwardTaxable.sgst - itc.sgst };
+  const zeroRated = await sumBy(['invoice', 'credit_note'], null, true);
+  const regularItc = await sumBy(['bill', 'debit_note'], false);
+  const rcmRows = (await c.query(
+    `SELECT COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -subtotal ELSE subtotal END),0) AS taxable, COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_igst ELSE rcm_igst END),0) AS igst,
+            COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_cgst ELSE rcm_cgst END),0) AS cgst, COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_sgst ELSE rcm_sgst END),0) AS sgst
+       FROM documents WHERE status='posted' AND supply_type='reverse_charge' AND doc_type IN ('bill','debit_note') AND issue_date BETWEEN $1 AND $2`, [from, to])).rows[0];
+  const rcm = { taxable: n(rcmRows.taxable), igst: n(rcmRows.igst), cgst: n(rcmRows.cgst), sgst: n(rcmRows.sgst) };
+  const composition = (await c.query('SELECT gst_scheme FROM organizations WHERE id = current_org()')).rows[0]?.gst_scheme === 'composition';
+  const itc = composition ? { igst: 0, cgst: 0, sgst: 0 } : { igst: regularItc.igst + rcm.igst, cgst: regularItc.cgst + rcm.cgst, sgst: regularItc.sgst + rcm.sgst };
+  const outward = { igst: outwardTaxable.igst + zeroRated.igst + rcm.igst, cgst: outwardTaxable.cgst + rcm.cgst, sgst: outwardTaxable.sgst + rcm.sgst };
+  const payable = { igst: outward.igst - itc.igst, cgst: outward.cgst - itc.cgst, sgst: outward.sgst - itc.sgst };
   return {
     from, to,
-    section31a_outwardTaxable: outwardTaxable, section31c_nilRatedExempt: { taxable: outwardNil.taxable },
-    section4_itcAvailable: { igst: itc.igst, cgst: itc.cgst, sgst: itc.sgst },
+    section31a_outwardTaxable: outwardTaxable, section31b_zeroRated: zeroRated, section31c_nilRatedExempt: { taxable: outwardNil.taxable },
+    section31d_inwardReverseCharge: rcm,
+    section4_itcAvailable: itc,
     netTaxPayable: payable,
-    note: 'Per-head difference only. Cross-head ITC set-off (IGST against CGST/SGST), reverse charge, blocked credits and ITC reversals are not computed; have a CA review before filing.',
+    note: 'Per-head difference only. Reverse-charge tax must be paid in cash before it can be claimed as credit. Cross-head ITC set-off, blocked credits and ITC reversals are not computed; have a CA review before filing.',
   };
 }

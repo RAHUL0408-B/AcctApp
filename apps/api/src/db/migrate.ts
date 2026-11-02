@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Pool } from 'pg';
+import { poolConfig } from './db';
 
 /** Apply any SQL files in db/migrations that have not run yet. */
 export async function migrate(pool: Pool, dir = join(__dirname, '../../../../db/migrations')) {
@@ -25,6 +26,6 @@ export async function migrate(pool: Pool, dir = join(__dirname, '../../../../db/
 }
 
 if (require.main === module) {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/acctapp' });
+  const pool = new Pool(poolConfig());
   migrate(pool).then(() => pool.end()).catch((e) => { console.error(e); process.exit(1); });
 }

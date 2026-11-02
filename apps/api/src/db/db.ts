@@ -1,16 +1,20 @@
-import { Pool, PoolClient, types } from 'pg';
+import { Pool, PoolClient, PoolConfig, types } from 'pg';
 
 // Return DATE columns as plain 'YYYY-MM-DD' strings. A JS Date would shift by the server's timezone (e.g. IST is UTC+5:30).
 types.setTypeParser(1082, (v: string) => v);
 
 let pool: Pool | undefined;
 
+/** Connection settings from the environment. Set DATABASE_SSL=true for hosted databases such as Supabase that require TLS. */
+export function poolConfig(): PoolConfig {
+  return {
+    connectionString: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/acctapp',
+    ...(process.env.DATABASE_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
+  };
+}
+
 export function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/acctapp',
-    });
-  }
+  if (!pool) pool = new Pool(poolConfig());
   return pool;
 }
 

@@ -7,6 +7,7 @@ const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
 const email = `full${Date.now()}@example.com`, password = 'Passphrase-1234';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 1400, height: 1000 } });
+page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000)); // raise on slow hosts, e.g. STEP_TIMEOUT=90000 for a free-tier server
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 page.on('dialog', (d) => { errors.push('unexpected dialog: ' + d.message()); d.dismiss(); });
@@ -153,7 +154,7 @@ await page.getByRole('button', { name: /^Match #/ }).first().click();
 await page.getByText('Matched.').waitFor();
 await page.getByRole('button', { name: /Accept 1 rule suggestion/ }).click();
 await page.getByText('1 line(s) booked by rules and reconciled.').waitFor();
-assert.equal(await page.getByTestId('unreconciled').innerText(), '0');
+await page.waitForFunction(() => document.querySelector('[data-testid=unreconciled]')?.textContent === '0');
 step('statement imported; payment matched; bank rule booked the charge; nothing left to reconcile');
 
 // ---- fixed assets

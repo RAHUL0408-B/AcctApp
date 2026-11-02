@@ -17,6 +17,7 @@ const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
 const email = `e2e${Date.now()}@example.com`, password = 'Passphrase-1234';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage();
+page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000)); // raise on slow hosts, e.g. STEP_TIMEOUT=90000 for a free-tier server
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 const step = (s) => console.log('✓', s);

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, useAction } from '../ui';
@@ -15,6 +15,7 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
   const [from, setFrom] = useState(fyStart()), [to, setTo] = useState(today()), [accountId, setAccountId] = useState('');
   const [data, setData] = useState<{ rep: string; d: any } | null>(null); // tagged so a stale report never renders in another layout
   const { error, run } = useAction();
+  const latest = useRef(0); // only the newest request may set the result; slower, older responses are dropped
 
   const query = () => {
     const p = new URLSearchParams();
@@ -23,13 +24,15 @@ export function Reports({ org, accounts }: { org: Org; accounts: { id: number; c
     return p;
   };
   const load = () => run(async () => {
+    const mine = ++latest.current;
     setData(null);
     const q = query();
     const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/reports/ledger/${accountId}?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}` }[rep]!;
     if (rep === 'ledger' && !accountId) return;
     const current = rep;
-    setData({ rep: current, d: await api(`/orgs/${org.id}${url}`) });
+    const d = await api(`/orgs/${org.id}${url}`);
+    if (mine === latest.current) setData({ rep: current, d });
   });
   useEffect(() => { load(); }, [rep, org.id]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -145,6 +145,9 @@ export class DocumentsController {
       const vid = await insertEntry(c, orgId, uid, b.date, `Void ${d.number}: ${b.reason}`, d.number, Number(d.journal_entry_id), reverseLines(ls));
       for (const m of moves) await recordMove(c, orgId, { itemId: Number(m.item_id), date: b.date, kind: 'void', qtyMilli: -Number(m.q), value: -Number(m.v), docId: id, entryId: vid, note: `Void ${d.number}` });
       await c.query("UPDATE documents SET status='void', void_entry_id=$2 WHERE id=$1", [id, vid]);
+      // Project time and costs billed on a voided invoice can be invoiced again.
+      await c.query('UPDATE project_time SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
+      await c.query('UPDATE project_costs SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
       await writeAudit(c, { orgId, userId: uid, action: 'void', entity: 'document', entityId: id, after: b, ip });
       return { voided: true, reversalEntryId: vid };
     });
@@ -371,17 +374,23 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const journal = validateLines(isNote ? reverseLines(primary) : primary);
   const eid = await insertEntry(c, orgId, uid, b.issueDate, `${type.replace('_', ' ')} ${number} - ${contact.name}`, number, null, journal);
 
+  // Sales and purchase settings: default payment terms, and the terms printed on invoices.
+  const defaults = (await c.query('SELECT invoice_due_days, bill_due_days, invoice_terms FROM organizations WHERE id = current_org()')).rows[0];
+  const dueDays = type === 'invoice' ? defaults.invoice_due_days : type === 'bill' ? defaults.bill_due_days : null;
+  const dueDate = b.dueDate ?? (dueDays == null ? null : new Date(Date.parse(b.issueDate) + dueDays * 86400000).toISOString().slice(0, 10));
+  const notes = b.notes ?? (type === 'invoice' ? defaults.invoice_terms : null) ?? null;
+
   const doc = (await c.query(
     `INSERT INTO documents(org_id,doc_type,number,contact_id,issue_date,due_date,place_of_supply,supplier_ref,original_doc_id,subtotal,cgst,sgst,igst,
        tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING id`,
-    [orgId, type, number, b.contactId, b.issueDate, b.dueDate ?? null, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
-     tdsSection, tdsAmount, t.total, netPayable, eid, b.notes ?? null, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal])).rows[0];
+    [orgId, type, number, b.contactId, b.issueDate, dueDate, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
+     tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal])).rows[0];
   for (const l of taxLines) {
     await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
       [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null]);
   }
   for (const m of moves) await recordMove(c, orgId, { ...m, date: b.issueDate, kind: type === 'bill' ? 'purchase' : 'sale', docId: Number(doc.id), entryId: eid, note: number });
   await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'document', entityId: doc.id, after: { number, total: t.total, tdsAmount, supplyType, currency }, ip });
-  return { id: Number(doc.id), number, ...t, tdsSection, tdsAmount, netPayable, journalEntryId: eid, supplyType, rcm: { cgst: rcm.cgst, sgst: rcm.sgst, igst: rcm.igst }, currency, foreignTotal, costOfSales };
+  return { id: Number(doc.id), number, dueDate, ...t, tdsSection, tdsAmount, netPayable, journalEntryId: eid, supplyType, rcm: { cgst: rcm.cgst, sgst: rcm.sgst, igst: rcm.igst }, currency, foreignTotal, costOfSales };
 }

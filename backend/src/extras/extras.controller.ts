@@ -32,7 +32,8 @@ export class ExtrasController {
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
     const o = (await getPool().query(`SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth",gst_scheme AS "gstScheme",
-      lut_number AS "lutNumber",require_approval AS "requireApproval" FROM organizations WHERE id=$1`, [orgId])).rows[0];
+      lut_number AS "lutNumber",require_approval AS "requireApproval",invoice_due_days AS "invoiceDueDays",bill_due_days AS "billDueDays",invoice_terms AS "invoiceTerms"
+      FROM organizations WHERE id=$1`, [orgId])).rows[0];
     return num(o, 'id');
   }
 
@@ -46,14 +47,20 @@ export class ExtrasController {
       gstScheme: z.enum(['regular', 'composition']).optional(),
       lutNumber: z.string().min(5).max(40).nullable().optional(),
       requireApproval: z.boolean().optional(),
+      invoiceDueDays: z.number().int().min(0).max(365).nullable().optional(),
+      billDueDays: z.number().int().min(0).max(365).nullable().optional(),
+      invoiceTerms: z.string().max(500).nullable().optional(),
     }), body);
-    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,require_approval FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const next = { name: b.name ?? before.name, gstin: b.gstin === undefined ? before.gstin : b.gstin, pan: b.pan === undefined ? before.pan : b.pan,
-      gstScheme: b.gstScheme ?? before.gst_scheme, lutNumber: b.lutNumber === undefined ? before.lut_number : b.lutNumber, requireApproval: b.requireApproval ?? before.require_approval };
+    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,require_approval,invoice_due_days,bill_due_days,invoice_terms FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const keep = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
+    const next = { name: b.name ?? before.name, gstin: keep(b.gstin, before.gstin), pan: keep(b.pan, before.pan),
+      gstScheme: b.gstScheme ?? before.gst_scheme, lutNumber: keep(b.lutNumber, before.lut_number), requireApproval: b.requireApproval ?? before.require_approval,
+      invoiceDueDays: keep(b.invoiceDueDays, before.invoice_due_days), billDueDays: keep(b.billDueDays, before.bill_due_days), invoiceTerms: keep(b.invoiceTerms, before.invoice_terms) || null };
     const state = next.gstin ? next.gstin.slice(0, 2) : before.state_code;
     return withOrg(orgId, async (c) => {
-      await c.query('UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5, gst_scheme=$6, lut_number=$7, require_approval=$8 WHERE id=$1',
-        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval]);
+      await c.query(`UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5, gst_scheme=$6, lut_number=$7, require_approval=$8,
+                       invoice_due_days=$9, bill_due_days=$10, invoice_terms=$11 WHERE id=$1`,
+        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval, next.invoiceDueDays, next.billDueDays, next.invoiceTerms]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'organization', entityId: orgId, before, after: next, ip });
       return { ok: true, stateCode: state };
     });

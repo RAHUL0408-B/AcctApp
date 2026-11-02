@@ -6,8 +6,29 @@ export const setToken = (t: string | null) => (t ? sessionStorage.setItem('token
 const WAKING = new Set([502, 503, 504]);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The host puts the server to sleep after about 15 idle minutes. lastOk is when it last answered.
+let lastOk = 0;
+let waking: Promise<void> | null = null;
+/** Resolve once /health answers, polling for up to about 3 minutes (a cold start has been seen to take 2.5). Shared, so many callers make one wake-up. */
+export function wakeServer(): Promise<void> {
+  if (Date.now() - lastOk < 60_000) return Promise.resolve();
+  return (waking ??= (async () => {
+    for (let i = 0; i < 60; i++) {
+      try { if ((await fetch('/api/health')).ok) { lastOk = Date.now(); return; } } catch { /* network blip: try again */ }
+      await sleep(3000);
+    }
+  })().finally(() => { waking = null; }));
+}
+// Start waking the server as soon as the page opens, and keep it awake while the tab is open.
+if (typeof window !== 'undefined') {
+  wakeServer();
+  setInterval(() => { if (document.visibilityState === 'visible') fetch('/api/health').then((r) => { if (r.ok) lastOk = Date.now(); }, () => {}); }, 10 * 60_000);
+}
+
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const method = opts.method ?? (opts.body ? 'POST' : 'GET');
+  // A save is never retried, so make sure the server is awake before sending it.
+  if (method !== 'GET' && Date.now() - lastOk > 5 * 60_000) await wakeServer();
   let res: Response;
   for (let attempt = 0; ; attempt++) {
     res = await fetch('/api' + path, {
@@ -19,8 +40,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     if (!WAKING.has(res.status) || method !== 'GET' || attempt >= 4) break;
     await sleep(5000 * (attempt + 1));
   }
+  if (!WAKING.has(res.status)) lastOk = Date.now();
   const data = await res.json().catch(() => ({}));
-  if (WAKING.has(res.status)) throw new Error('The server is starting up. Wait a few seconds, then try again.');
+  if (WAKING.has(res.status)) throw new Error('The server is still starting up. This can take up to 3 minutes after a quiet spell. Check whether your change appears, then try again shortly.');
   if (!res.ok) throw new Error(Array.isArray(data.message) ? data.message.join('; ') : data.message ?? `Error ${res.status}`);
   return data;
 }

@@ -1,4 +1,4 @@
-# Render Blueprint: the API and the web app (nginx serving the React build and proxying /api).
+# Render Blueprint: the API only. The web front end is deployed on Vercel (apps/web/vercel.json forwards /api to this service).
 # Use: Render dashboard -> New -> Blueprint -> connect the GitHub repo. See docs/DEPLOY.md.
 # The database is Supabase (Mumbai). DATABASE_URL and DATABASE_SSL are asked for in the Render dashboard. See docs/DEPLOY.md.
 
@@ -27,7 +27,7 @@ services:
       - key: BACKUP_KEY
         generateValue: true  # COPY THIS VALUE somewhere safe after the first deploy. Backups cannot be read without it.
       - key: WEB_ORIGIN
-        value: https://acctapp-web.onrender.com   # change if Render gives the web service a different URL
+        sync: false          # your Vercel address, e.g. https://acctapp.vercel.app
       - key: TRUST_PROXY
         value: "1"
       - key: DATA_DIR
@@ -38,14 +38,3 @@ services:
         value: test          # replace with a real gateway before charging customers
       - key: METRICS_TOKEN
         generateValue: true
-
-  - type: web
-    name: acctapp-web
-    runtime: docker
-    dockerfilePath: ./docker/web.Dockerfile
-    dockerContext: .
-    region: singapore
-    plan: starter
-    envVars:
-      - key: API_HOSTPORT
-        fromService: { type: web, name: acctapp-api, property: hostport }

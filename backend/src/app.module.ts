@@ -7,7 +7,7 @@ import { BankController } from './accounting/bank.controller';
 import { ReportsController } from './accounting/reports.controller';
 import { FirmController } from './firm/firm.controller';
 import { LaunchController } from './ops/launch.controller';
-import { XeroController } from './xero/xero.controller';
+import { ExtrasController } from './extras/extras.controller';
 import { log } from './ops/metrics';
 import { LedgerError } from './ledger/ledger';
 
@@ -27,5 +27,5 @@ export class AppExceptionFilter implements ExceptionFilter {
   }
 }
 
-@Module({ controllers: [AuthController, OrgController, LedgerController, DocumentsController, BankController, ReportsController, FirmController, LaunchController, XeroController] })
+@Module({ controllers: [AuthController, OrgController, LedgerController, DocumentsController, BankController, ReportsController, FirmController, LaunchController, ExtrasController] })
 export class AppModule {}

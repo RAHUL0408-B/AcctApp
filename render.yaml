@@ -1,4 +1,4 @@
-# Render Blueprint (free plan): the API only. The web front end is deployed on Vercel (apps/web/vercel.json forwards /api here).
+# Render Blueprint (free plan): the API only. The web front end is deployed on Vercel (frontend/vercel.json forwards /api here).
 # The database is Supabase. You are asked for one value: DATABASE_URL (the Supabase session pooler string).
 # Free-plan limits: the service sleeps after ~15 minutes without traffic (first request then takes ~50 seconds), the background worker only
 # runs while it is awake, and there is no disk, so uploaded files and backups are wiped on every restart. Fine for a demo; use a paid plan

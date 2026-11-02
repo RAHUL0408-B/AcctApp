@@ -1,4 +1,4 @@
-import { matchRule, monthEnds, monthlyDepreciation, nextDate } from '../src/xero/calc';
+import { matchRule, monthEnds, monthlyDepreciation, nextDate } from '../src/extras/calc';
 
 describe('depreciation', () => {
   const base = { cost: 12000000, residual: 1200000, rateBp: 1000, purchaseDate: '2025-04-10', accumulated: 0 }; // Rs 1,20,000 cost, Rs 12,000 residual, 10%

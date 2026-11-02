@@ -1,4 +1,4 @@
-// Command line: backup | verify <file> | restore <file>.   Usage: npm run ops -w apps/api -- backup
+// Command line: backup | verify <file> | restore <file>.   Usage: npm run ops -w backend -- backup
 import { readFileSync } from 'fs';
 import { Pool } from 'pg';
 import { createBackup, restoreInto, verifyBackup } from './backup';

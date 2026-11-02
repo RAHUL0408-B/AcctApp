@@ -6,7 +6,7 @@
 - File format: `ACCTBK1` header, then AES-256-GCM (key derived from `BACKUP_KEY` with scrypt) over gzipped JSON of all tables. Losing `BACKUP_KEY` means losing the backups, so store it in a password manager or vault.
 - Uploaded documents (`DATA_DIR`) are **not** inside the database backup. Back up that folder or bucket separately.
 
-Manual commands (from `apps/api`, with `DATABASE_URL` and `BACKUP_KEY` set):
+Manual commands (from `backend`, with `DATABASE_URL` and `BACKUP_KEY` set):
 ```bash
 npm run ops -- backup                         # make a backup now
 npm run ops -- verify backups/<file>.bak.enc  # restore test into a scratch database
@@ -15,8 +15,8 @@ npm run ops -- restore backups/<file>.bak.enc # restore into DATABASE_URL (must 
 
 ### Disaster recovery steps
 1. Create an empty database, then set `DATABASE_URL` to it.
-2. Run `npm run migrate -w apps/api`.
-3. Run `npm run ops -w apps/api -- restore <newest backup>`.
+2. Run `npm run migrate -w backend`.
+3. Run `npm run ops -w backend -- restore <newest backup>`.
 4. Restore `DATA_DIR` from its own backup.
 5. Start the API and check `/api/health`. Then open a trial balance for a few clients.
 

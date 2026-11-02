@@ -6,7 +6,7 @@ import { processOutbox, queueMail } from './mailer';
 import { createBackup, pruneBackups, verifyBackup } from '../ops/backup';
 import { log, metrics } from '../ops/metrics';
 import { join } from 'path';
-import { runRecurring } from '../xero/xero.controller';
+import { runRecurring } from '../extras/extras.controller';
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (s: string, n: number) => iso(new Date(Date.parse(s) + n * 86400000));

@@ -10,14 +10,14 @@ Check it with `curl http://localhost:8080/api/health`. Stop with `docker compose
 This stack was built and tested here: the full browser test passes against it, and the daily encrypted backup and restore test run inside the container.
 
 ## Deploy: API on Render, web on Vercel (recommended)
-The API needs a long-running server (background worker, scheduled emails, backups) and a disk, so it goes on Render. The React front end is static, so it goes on Vercel. `apps/web/vercel.json` forwards every `/api/*` request to the Render API, so the browser only ever talks to one address and no CORS setup is needed.
+The API needs a long-running server (background worker, scheduled emails, backups) and a disk, so it goes on Render. The React front end is static, so it goes on Vercel. `frontend/vercel.json` forwards every `/api/*` request to the Render API, so the browser only ever talks to one address and no CORS setup is needed.
 
 1. Create the database first (see **Database on Supabase** below).
 2. **Render:** New, Blueprint, pick the repository (it must show the service as **Docker**). It creates the API service from `render.yaml`. When asked, enter:
    - `DATABASE_URL`: the Supabase string (the only value it asks for)
 3. After the first deploy, open **acctapp-api**, Environment, and copy `BACKUP_KEY` into a password manager. Backups cannot be read without it.
-4. Check `https://<your-api>.onrender.com/api/health` returns `"status":"ok"`. If the service URL is not `https://acctapp-api.onrender.com`, edit the destination in `apps/web/vercel.json` to match and commit.
-5. **Vercel:** Add New, Project, import the repository, set **Root Directory** to `apps/web`. The Vite settings are detected. Deploy. Then set `WEB_ORIGIN` on the Render API to the real Vercel address and redeploy the API.
+4. Check `https://<your-api>.onrender.com/api/health` returns `"status":"ok"`. If the service URL is not `https://acctapp-api.onrender.com`, edit the destination in `frontend/vercel.json` to match and commit.
+5. **Vercel:** Add New, Project, import the repository, set **Root Directory** to `frontend`. The Vite settings are detected. Deploy. Then set `WEB_ORIGIN` on the Render API to the real Vercel address and redeploy the API.
 6. Open the Vercel address and register.
 
 Things to know:

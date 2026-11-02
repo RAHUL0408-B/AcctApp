@@ -1,4 +1,4 @@
-// Features that round out the product against what accountants expect from Xero-style software.
+// Features that round out the product: settings, items, quotes and POs, repeating invoices, bank rules, fixed assets, dashboard.
 import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
@@ -26,7 +26,7 @@ const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer
 
 @Controller('orgs/:orgId')
 @UseGuards(AuthGuard)
-export class XeroController {
+export class ExtrasController {
   // ---------- organisation settings ----------
   @Get('settings')
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {

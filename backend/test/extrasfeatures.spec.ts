@@ -1,8 +1,8 @@
-// Xero-parity features: settings, items, quotes/POs, email + reminders, repeating invoices, bank rules, fixed assets, dashboard, cash flow, statements.
+// Extra features: settings, items, quotes/POs, email + reminders, repeating invoices, bank rules, fixed assets, dashboard, cash flow, statements.
 import { auth, boot, mkGstin } from './helpers';
 import { getPool } from '../src/db/db';
 import { processOutbox } from '../src/firm/mailer';
-import { runRecurring } from '../src/xero/xero.controller';
+import { runRecurring } from '../src/extras/extras.controller';
 
 process.env.WORKER = 'off';
 process.env.LOG_REQUESTS = 'off';
@@ -18,7 +18,7 @@ const line = (rate = 50000, qty = 2, gst = 1800) => ({ description: 'Consulting'
 
 beforeAll(async () => {
   ctx = await boot(54333);
-  const u = await ctx.register('xero@ca.com', 'Xero CA');
+  const u = await ctx.register('extras@ca.com', 'Extras CA');
   t = u.token; firmId = u.firmId;
   org = await ctx.newOrg(t, firmId, 'Parity Traders', { gstin: '27AAPFU0939F1ZV' });
   acc = await ctx.accounts(t, org);

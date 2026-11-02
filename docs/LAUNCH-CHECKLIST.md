@@ -7,7 +7,7 @@ Everything below needs a person to check or decide before real customers use the
 - [ ] **TDS on threshold crossing**: when the yearly limit is first crossed, TDS is charged on the full year-to-date amount. Confirm this matches your practice for each section.
 - [ ] **GST rules**: place of supply defaults to the customer's state for sales and the organization's state for purchases. Not handled: reverse charge, exports/SEZ, composition dealers, e-invoicing (IRN/QR), e-way bills, cess, blocked credits (17(5)), ITC reversals, and cross-head ITC set-off order. GSTR-1/3B screens are working papers, not filing-ready JSON.
 - [ ] **Compliance due dates** (`compliance_rules`): GSTR-1 on the 11th, GSTR-3B on the 20th, TDS payment on the 7th, quarterly TDS returns on the 31st (Q4 on 31 May). Not covered: QRMP filers, state-wise staggered 3B dates, the March TDS payment due on 30 April, and advance tax.
-- [ ] **Chart of accounts templates** (`apps/api/src/coa/templates.ts`) and the Schedule III grouping.
+- [ ] **Chart of accounts templates** (`backend/src/coa/templates.ts`) and the Schedule III grouping.
 - [ ] **Subscription GST** (18%) and invoice format for your own SaaS billing.
 - [ ] **Balance sheet**: there are no year-end closing entries yet. Profit to date is shown inside equity.
 
@@ -26,7 +26,7 @@ Everything below needs a person to check or decide before real customers use the
 - [ ] Session tokens are stored in sessionStorage. Consider httpOnly cookies with CSRF protection, and add token revocation on password change.
 
 ## Engineering items before launch
-- [ ] Real payment gateway: implement `PaymentProvider` in `apps/api/src/ops/billing.ts` (for example Razorpay) with webhook verification, renewals and failed-payment handling (`past_due`).
+- [ ] Real payment gateway: implement `PaymentProvider` in `backend/src/ops/billing.ts` (for example Razorpay) with webhook verification, renewals and failed-payment handling (`past_due`).
 - [ ] Email: set `SMTP_URL` (SES, Postmark, etc.), configure SPF/DKIM, add email verification on signup, and a password reset flow (not built yet).
 - [ ] Invitations: adding a team member currently requires them to register first. Build email invitations.
 - [ ] Uploaded files are on local disk (`DATA_DIR`). Use encrypted object storage (S3 in ap-south-1) and add virus scanning.

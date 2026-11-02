@@ -2,11 +2,11 @@
   "name": "acctapp",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["backend", "frontend"],
   "scripts": {
-    "dev:api": "npm run start:dev -w apps/api",
-    "dev:web": "npm run dev -w apps/web",
-    "migrate": "npm run migrate -w apps/api",
-    "test": "npm run test -w apps/api"
+    "dev:api": "npm run start:dev -w backend",
+    "dev:web": "npm run dev -w frontend",
+    "migrate": "npm run migrate -w backend",
+    "test": "npm run test -w backend"
   }
 }

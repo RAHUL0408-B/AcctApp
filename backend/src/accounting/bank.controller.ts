@@ -6,7 +6,7 @@ import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { parseStatement } from '../common/csv';
 import { requireOrg } from '../tenancy/acl';
 import { insertEntry } from '../ledger/post';
-import { matchRule } from '../xero/calc';
+import { matchRule } from '../extras/calc';
 
 const num = (r: any, ...keys: string[]) => { for (const k of keys) if (r[k] != null) r[k] = Number(r[k]); return r; }; // null stays null
 

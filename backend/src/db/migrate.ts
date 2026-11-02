@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import { poolConfig } from './db';
 
 /** Apply any SQL files in db/migrations that have not run yet. */
-export async function migrate(pool: Pool, dir = join(__dirname, '../../../../db/migrations')) {
+export async function migrate(pool: Pool, dir = join(__dirname, '../../../db/migrations')) {
   await pool.query('CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now())');
   const done = new Set((await pool.query('SELECT name FROM schema_migrations')).rows.map((r) => r.name));
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) {

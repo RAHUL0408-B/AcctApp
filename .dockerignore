@@ -6,6 +6,6 @@
 .git
 *.log
 *.png
-apps/web/e2e
-apps/api/test
+frontend/e2e
+backend/test
 docs

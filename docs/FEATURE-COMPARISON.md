@@ -10,7 +10,7 @@ Legend: **Done** = built and tested. **Partial** = works with limits. **Not buil
 |---|---|---|
 | Dashboard with cash, receivables, payables, profit | Done | Stat cards plus two 6-month charts |
 | Bank balances and "to reconcile" counts | Done | |
-| Grouped sidebar (Sales, Purchases, Accounting, Reporting, Compliance, Setup) | Done | Role-aware: setup pages hide for staff and clients |
+| Top bar with dropdown menus (Sales, Purchases, Accounting, Reports, Compliance, Setup) | Done | Role-aware: setup pages hide for staff and clients |
 | Multi-client switcher for accountants | Done | Firm sees all clients; clients see only their own |
 | URLs, refresh and back button | Done | Hash routes such as `#/o/12/invoices` |
 

@@ -1,0 +1,96 @@
+# Feature comparison with Xero-style accounting software
+
+This compares what accountants and small businesses expect from a product like Xero with what AcctApp has today.
+AcctApp is an original product. The comparison is about capabilities, not copying anyone's design or text.
+
+Legend: **Done** = built and tested. **Partial** = works with limits. **Not built** = a known gap.
+
+## Dashboard and navigation
+| Capability | Status | Notes |
+|---|---|---|
+| Dashboard with cash, receivables, payables, profit | Done | Stat cards plus two 6-month charts |
+| Bank balances and "to reconcile" counts | Done | |
+| Grouped sidebar (Sales, Purchases, Accounting, Reporting, Compliance, Setup) | Done | Role-aware: setup pages hide for staff and clients |
+| Multi-client switcher for accountants | Done | Firm sees all clients; clients see only their own |
+| URLs, refresh and back button | Done | Hash routes such as `#/o/12/invoices` |
+
+## Sales
+| Capability | Status | Notes |
+|---|---|---|
+| Invoices with GST (CGST+SGST / IGST), HSN/SAC | Done | PDF output, emailing, payments, voiding |
+| Credit notes | Done | Against an invoice, capped at what is outstanding |
+| Quotes, convert to invoice | Done | A quote never touches the ledger until converted |
+| Repeating invoices | Done | Weekly, monthly, quarterly, yearly. Month-end day is kept (31 Jan, 28 Feb, 31 Mar). Optional auto-email |
+| Overdue reminders | Done | One click, once per week per invoice |
+| Customer statements | Done | Running balance with opening balance |
+| Online payment links on invoices | Not built | Needs a payment gateway |
+| Multi-currency | Not built | INR only |
+
+## Purchases
+| Capability | Status | Notes |
+|---|---|---|
+| Bills with input GST | Done | |
+| TDS deduction on bills | Done | Section rates and thresholds come from a table |
+| Debit notes | Done | |
+| Purchase orders, convert to bill | Done | |
+| Expense claims | Not built | |
+| Bill approval workflow | Not built | |
+
+## Accounting
+| Capability | Status | Notes |
+|---|---|---|
+| Chart of accounts (Indian templates) | Done | Trading, services, manufacturing |
+| Manual journals and reversals | Done | Posted entries are immutable |
+| Bank statement import, matching, reconciliation | Done | CSV only |
+| Bank rules | Done | Auto-suggest an account by narration and direction; accept in one click |
+| Live bank feeds | Not built | Needs a bank-feed provider |
+| Fixed assets and depreciation | Done | Straight line and written-down value, monthly postings. Not modelled: Income Tax Act block depreciation |
+| Products and services catalogue | Done | Prefills lines on every document |
+| Inventory stock tracking | Not built | Items are a price list only |
+| Period locking | Done | Enforced in the database |
+| Year-end closing entries | Not built | Profit to date is shown inside equity |
+| Tracking categories / departments | Not built | |
+| Budgets | Not built | |
+
+## Reporting
+| Capability | Status | Notes |
+|---|---|---|
+| Trial balance, P&L, balance sheet, ledger | Done | PDF and Excel export |
+| Cash flow (cash and bank movement by month) | Done | Opening, in, out, closing |
+| Aged receivables and payables | Done | |
+| GSTR-1 and GSTR-3B working papers | Done | Not filing-ready JSON; CA review needed |
+| Scheduled report emails | Done | |
+| Custom report builder | Not built | |
+
+## Practice (firm) features
+| Capability | Status | Notes |
+|---|---|---|
+| Multiple clients per firm with isolated data | Done | Database row-level security |
+| Roles: owner, accountant, staff, client (view only) | Done | |
+| Client portal: books, reports, upload documents | Done | |
+| Tasks and GST/TDS due-date reminders | Done | Due dates come from a table |
+| Document storage | Done | Local disk; use object storage in production |
+| Import from other software (CSV) | Done | Contacts, accounts, vouchers and opening balances, with dry run |
+| Practice-wide dashboard across all clients | Not built | Each client has its own dashboard |
+
+## India-specific
+| Capability | Status | Notes |
+|---|---|---|
+| GSTIN validation with check digit | Done | |
+| Place of supply, state codes | Done | |
+| TDS sections and the no-PAN higher rate | Done | |
+| e-Invoicing (IRN, QR code) and e-way bills | Not built | Needs GSTN/NIC integration |
+| Reverse charge, composition, SEZ and exports | Not built | |
+| GST return filing from the app | Not built | Working papers only |
+| Payroll, PF, ESI, professional tax | Not built | A large separate module |
+
+## Platform
+| Capability | Status | Notes |
+|---|---|---|
+| Two-factor login, lockout, rate limits | Done | |
+| Audit log | Done | Append-only, with before/after values |
+| Encrypted daily backups with restore test | Done | |
+| DPDP consent, export and erasure | Done | Needs legal review |
+| Subscription plans with GST invoices | Done | Test payment mode only |
+| Mobile app | Not built | The web app is usable on a tablet; no native app |
+| Public API and app marketplace | Not built | |

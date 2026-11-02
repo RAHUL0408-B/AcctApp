@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.pgdata
+**/backups
+**/data
+.git
+*.log
+*.png
+apps/web/e2e
+apps/api/test
+docs

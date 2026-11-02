@@ -1,0 +1,14 @@
+# API_HOSTPORT is filled in at start-up (for example "api:3000" in Docker Compose, or Render's private address).
+server {
+  listen 80;
+  root /usr/share/nginx/html;
+  client_max_body_size 15m;
+  location /api/ {
+    proxy_pass http://${API_HOSTPORT};
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Request-Id $request_id;
+  }
+  location / { try_files $uri /index.html; }
+  add_header X-Content-Type-Options nosniff;
+  add_header X-Frame-Options DENY;
+}

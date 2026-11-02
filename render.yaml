@@ -1,0 +1,51 @@
+# Render Blueprint: the API and the web app (nginx serving the React build and proxying /api).
+# Use: Render dashboard -> New -> Blueprint -> connect the GitHub repo. See docs/DEPLOY.md.
+# The database is Supabase (Mumbai). DATABASE_URL and DATABASE_SSL are asked for in the Render dashboard. See docs/DEPLOY.md.
+
+services:
+  - type: web
+    name: acctapp-api
+    runtime: docker
+    dockerfilePath: ./docker/api.Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: starter            # needs a paid plan: the background worker, backups and a disk need an always-on instance
+    healthCheckPath: /api/health
+    disk:
+      name: acctapp-data     # uploaded documents and encrypted backups
+      mountPath: /var/acctapp
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false          # paste the Supabase session pooler connection string
+      - key: DATABASE_SSL
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: BACKUP_KEY
+        generateValue: true  # COPY THIS VALUE somewhere safe after the first deploy. Backups cannot be read without it.
+      - key: WEB_ORIGIN
+        value: https://acctapp-web.onrender.com   # change if Render gives the web service a different URL
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATA_DIR
+        value: /var/acctapp/data
+      - key: BACKUP_DIR
+        value: /var/acctapp/backups
+      - key: PAYMENT_PROVIDER
+        value: test          # replace with a real gateway before charging customers
+      - key: METRICS_TOKEN
+        generateValue: true
+
+  - type: web
+    name: acctapp-web
+    runtime: docker
+    dockerfilePath: ./docker/web.Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: starter
+    envVars:
+      - key: API_HOSTPORT
+        fromService: { type: web, name: acctapp-api, property: hostport }

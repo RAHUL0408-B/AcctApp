@@ -1,18 +1,46 @@
 // Pure rules for depreciation, repeating schedules and bank rules.
 import { percentOf } from '../money';
 
-export interface Asset { cost: number; residual: number; method: 'slm' | 'wdv'; rateBp: number; purchaseDate: string; accumulated: number; }
+export interface Asset {
+  cost: number; residual: number; method: 'slm' | 'wdv' | 'slm_life'; rateBp: number; purchaseDate: string; accumulated: number;
+  /** Used by the 'slm_life' method: the asset is written down evenly over this many months. */
+  usefulLifeMonths?: number | null;
+  /** 'months' (default): every month is 1/12 of a year. 'actual_days': each period gets its real number of days / days in the year. */
+  dayBasis?: 'months' | 'actual_days';
+  /** End of the period being charged. Only needed with 'actual_days'. */
+  periodEnd?: string;
+}
+
+const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+
+/** Share of a year that a period covers. The purchase month only counts from the purchase date when days are used. */
+export function yearFraction(a: Pick<Asset, 'purchaseDate' | 'dayBasis' | 'periodEnd'>): number {
+  if (a.dayBasis !== 'actual_days' || !a.periodEnd) return 1 / 12;
+  const [y, m] = a.periodEnd.split('-').map(Number);
+  const monthStart = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+  const from = a.purchaseDate > monthStart ? a.purchaseDate : monthStart;
+  const days = daysBetween(from, a.periodEnd) + 1;
+  return Math.max(days, 0) / (isLeap(y) ? 366 : 365);
+}
 
 /**
- * Depreciation for one month. Straight line: (cost - residual) x annual rate / 12.
- * Written-down value: opening book value x annual rate / 12. Never goes below the residual value.
- * Note: Income Tax Act block-wise depreciation and half-year rules for assets used under 180 days are NOT modelled.
+ * Depreciation for one period (a month). Straight line: (cost - residual) x annual rate. Written-down value: opening book value x annual rate.
+ * Useful life: (cost - residual) spread evenly over the life in months. The annual figure is then scaled to the period
+ * (1/12, or actual days / days in the year). Never goes below the residual value.
+ * Note: the Income Tax Act half-rate rule for assets used under 180 days is NOT modelled.
  */
 export function monthlyDepreciation(a: Asset): number {
   const bookValue = a.cost - a.accumulated;
   const room = bookValue - a.residual;
   if (room <= 0) return 0;
-  const raw = a.method === 'slm' ? Math.round(percentOf(a.cost - a.residual, a.rateBp) / 12) : Math.round(percentOf(bookValue, a.rateBp) / 12);
+  const f = yearFraction(a);
+  let annual: number;
+  if (a.method === 'slm_life') {
+    if (!a.usefulLifeMonths) return 0;
+    annual = ((a.cost - a.residual) * 12) / a.usefulLifeMonths;
+  } else annual = a.method === 'slm' ? percentOf(a.cost - a.residual, a.rateBp) : percentOf(bookValue, a.rateBp);
+  const raw = a.dayBasis === 'actual_days' && a.periodEnd ? Math.round(annual * f) : Math.round(annual / 12);
   return Math.min(Math.max(raw, 0), room);
 }
 

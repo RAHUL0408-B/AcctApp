@@ -75,6 +75,10 @@ export function Import({ org }: { org: Org }) {
         <select aria-label="Import type" className="rounded border border-slate-300 px-2 py-1" value={kind} onChange={(e) => { setKind(e.target.value); setCsv(SAMPLES[e.target.value]); setResult(null); }}>
           <option value="vouchers">Journal vouchers / opening balances</option><option value="contacts">Customers and suppliers</option><option value="accounts">Chart of accounts</option></select>
         <input aria-label="CSV file" type="file" accept=".csv" onChange={async (e) => e.target.files?.[0] && setCsv(await e.target.files[0].text())} />
+        <Button variant="ghost" onClick={() => {
+          const url = URL.createObjectURL(new Blob([SAMPLES[kind].split('\n')[0] + '\n'], { type: 'text/csv;charset=utf-8' }));
+          const a = document.createElement('a'); a.href = url; a.download = `${kind}-import-template.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}>Download blank template</Button>
       </div>
       <textarea aria-label="CSV data" className="mt-3 h-40 w-full rounded border border-slate-300 p-2 font-mono text-xs" value={csv} onChange={(e) => setCsv(e.target.value)} />
       <div className="mt-3 flex gap-3"><Button variant="ghost" disabled={busy} onClick={() => go(true)}>Check (dry run)</Button><Button disabled={busy} onClick={() => go(false)}>Import</Button></div>

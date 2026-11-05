@@ -6,9 +6,11 @@ import { formatPaise } from '../money';
 import { accountBalances, aged, balanceSheet, gstr1, gstr3b, ledgerStatement, profitAndLoss } from '../accounting/reports';
 
 export interface Col { header: string; type: 'text' | 'money' }
-export interface Table { title: string; subtitle: string; columns: Col[]; rows: (string | number)[][]; boldRows?: number[]; }
+export interface Table { title: string; subtitle: string; columns: Col[]; rows: (string | number)[][]; boldRows?: number[];
+  /** For document reports: the document behind each row (null for total rows), so the screen can archive or delete them. */
+  rowIds?: (number | null)[]; }
 
-export const REPORTS = ['trial-balance', 'pnl', 'balance-sheet', 'aged-receivables', 'aged-payables', 'ledger', 'gstr3b', 'gstr1-b2b'] as const;
+export const REPORTS = ['trial-balance', 'pnl', 'balance-sheet', 'aged-receivables', 'aged-payables', 'ledger', 'all-ledgers', 'gstr3b', 'gstr1-b2b', 'fixed-assets', 'invoice-wise', 'bill-wise', 'purchase-register'] as const;
 export type ReportName = (typeof REPORTS)[number];
 export interface ReportParams { from: string; to: string; asOf: string; accountId?: number; }
 
@@ -54,6 +56,58 @@ export async function buildTable(c: PoolClient, name: ReportName, p: ReportParam
       if (!l) throw new Error('Account not found');
       return { title: `Ledger: ${l.account.code} ${l.account.name}`, subtitle: `${p.from} to ${p.to}`, columns: [T('Date'), T('Narration'), M('Debit'), M('Credit'), M('Balance')],
         rows: [['', 'Opening balance', 0, 0, l.openingBalance], ...l.lines.map((x) => [x.date, x.narration, x.debit, x.credit, x.balance])] };
+    }
+    case 'all-ledgers': {
+      // Every account that has a balance or movement, one after another: header row, opening balance, lines, closing balance.
+      const accs = await accountBalances(c, { to: p.to });
+      const rows: (string | number)[][] = [], bold: number[] = [];
+      for (const a of accs) {
+        const l = await ledgerStatement(c, a.id, p.from, p.to);
+        if (!l || (!l.lines.length && !l.openingBalance)) continue;
+        bold.push(rows.length); rows.push(['', `${l.account.code} ${l.account.name}`, '', 0, 0, '']);
+        rows.push(['', 'Opening balance', '', 0, 0, l.openingBalance]);
+        for (const x of l.lines) rows.push([x.date, x.narration, x.reference ?? '', x.debit, x.credit, x.balance]);
+        bold.push(rows.length); rows.push(['', 'Closing balance', '', l.lines.reduce((s, x) => s + x.debit, 0), l.lines.reduce((s, x) => s + x.credit, 0), l.closingBalance]);
+      }
+      return { title: 'All ledgers', subtitle: `${p.from} to ${p.to}`, columns: [T('Date'), T('Narration'), T('Reference'), M('Debit'), M('Credit'), M('Balance')], rows, boldRows: bold };
+    }
+    case 'fixed-assets': {
+      const r = (await c.query(
+        `SELECT a.code, a.name, COALESCE(a.asset_group,'') AS grp, a.purchase_date::text AS pd, a.cost, a.status, a.method, a.rate_bp,
+                COALESCE((SELECT SUM(amount) FROM asset_depreciation d WHERE d.asset_id=a.id AND d.period_end <= $1::date),0) AS accum
+           FROM fixed_assets a ORDER BY a.code`, [p.asOf])).rows;
+      const rows = r.map((x) => [x.code, x.name, x.grp, x.pd, `${x.method === 'wdv' ? 'WDV' : 'SLM'} ${x.rate_bp / 100}%`, Number(x.cost), Number(x.accum), Number(x.cost) - Number(x.accum), x.status]);
+      const tot = (i: number) => rows.reduce((s, x) => s + (x[i] as number), 0);
+      return { title: 'Fixed asset register', subtitle: `As at ${p.asOf}`, columns: [T('Code'), T('Asset'), T('Group'), T('Bought'), T('Depreciation'), M('Cost'), M('Accumulated'), M('Book value'), T('Status')],
+        rows: [...rows, ['', 'Total', '', '', '', tot(5), tot(6), tot(7), '']], boldRows: [rows.length] };
+    }
+    case 'invoice-wise':
+    case 'bill-wise': {
+      const sales = name === 'invoice-wise', types = sales ? ['invoice', 'credit_note'] : ['bill', 'debit_note'];
+      const r = (await c.query(
+        `SELECT d.id, d.number, d.doc_type, d.issue_date::text AS d, d.due_date::text AS due, ct.name, d.total, d.net_payable, d.status,
+                COALESCE((SELECT SUM(amount) FROM payments x WHERE x.doc_id=d.id),0) AS paid
+           FROM documents d JOIN contacts ct ON ct.id=d.contact_id
+          WHERE d.doc_type = ANY($1) AND NOT d.is_archived AND d.issue_date BETWEEN $2 AND $3 ORDER BY d.issue_date, d.id`, [types, p.from, p.to])).rows;
+      const rows = r.map((x) => {
+        const live = x.status === 'posted', paid = Number(x.paid), pay = Number(x.net_payable);
+        return [x.number, x.name, x.d, x.due ?? '', Number(x.total), live && (x.doc_type === 'invoice' || x.doc_type === 'bill') ? paid : 0, live && (x.doc_type === 'invoice' || x.doc_type === 'bill') ? pay - paid : 0, x.status];
+      });
+      const tot = (i: number) => rows.filter((x) => x[7] === 'posted').reduce((s, x) => s + (x[i] as number), 0);
+      return { title: sales ? 'Invoice-wise report' : 'Bill-wise report', subtitle: `${p.from} to ${p.to}. Totals count posted documents only.`,
+        columns: [T('Number'), T('Contact'), T('Date'), T('Due'), M('Total'), M(sales ? 'Received' : 'Paid'), M('Outstanding'), T('Status')], rows: [...rows, ['', 'Total', '', '', tot(4), tot(5), tot(6), '']], boldRows: [rows.length], rowIds: [...r.map((x) => Number(x.id)), null] };
+    }
+    case 'purchase-register': {
+      const r = (await c.query(
+        `SELECT d.id, d.number, d.supplier_ref, d.issue_date::text AS d, ct.name, ct.gstin, d.subtotal, d.cgst, d.sgst, d.igst, d.tds_amount, d.total, d.status, d.doc_type
+           FROM documents d JOIN contacts ct ON ct.id=d.contact_id
+          WHERE d.doc_type IN ('bill','debit_note') AND d.status='posted' AND NOT d.is_archived AND d.issue_date BETWEEN $1 AND $2 ORDER BY d.issue_date, d.id`, [p.from, p.to])).rows;
+      const sign = (x: any) => (x.doc_type === 'debit_note' ? -1 : 1);
+      const rows = r.map((x) => [x.number, x.supplier_ref ?? '', x.d, x.name, x.gstin ?? 'Unregistered', sign(x) * Number(x.subtotal), sign(x) * Number(x.cgst), sign(x) * Number(x.sgst), sign(x) * Number(x.igst), sign(x) * Number(x.total)]);
+      const tot = (i: number) => rows.reduce((s, x) => s + (x[i] as number), 0);
+      return { title: 'Purchase register', subtitle: `${p.from} to ${p.to}. Posted bills less debit notes, fetched from your documents.`,
+        columns: [T('Bill'), T('Supplier bill no.'), T('Date'), T('Supplier'), T('GSTIN'), M('Taxable'), M('CGST'), M('SGST'), M('IGST'), M('Total')],
+        rows: [...rows, ['', '', '', 'Total', '', tot(5), tot(6), tot(7), tot(8), tot(9)]], boldRows: [rows.length], rowIds: [...r.map((x) => Number(x.id)), null] };
     }
     case 'gstr3b': {
       const g = await gstr3b(c, p.from, p.to);

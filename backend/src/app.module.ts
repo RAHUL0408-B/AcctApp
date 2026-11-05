@@ -15,6 +15,7 @@ import { PracticeController } from './practice/practice.controller';
 import { InsightsController } from './insights/insights.controller';
 import { MoneyController } from './banking/money.controller';
 import { ProjectsController } from './projects/projects.controller';
+import { AutomationController } from './accounting/automation.controller';
 import { log } from './ops/metrics';
 import { LedgerError } from './ledger/ledger';
 
@@ -35,5 +36,5 @@ export class AppExceptionFilter implements ExceptionFilter {
 }
 
 @Module({ controllers: [AuthController, OrgController, LedgerController, DocumentsController, BankController, ReportsController, FirmController, LaunchController, ExtrasController,
-  InventoryController, WorkflowController, PlanningController, PracticeController, InsightsController, MoneyController, ProjectsController] })
+  InventoryController, WorkflowController, PlanningController, PracticeController, InsightsController, MoneyController, ProjectsController, AutomationController] })
 export class AppModule {}

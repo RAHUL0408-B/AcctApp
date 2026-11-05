@@ -85,7 +85,7 @@ step('customer, supplier and product added');
 // ---- quote -> invoice
 await nav('Quotes');
 await btn('New quote').click();
-await page.getByLabel('Contact').selectOption({ label: 'Acme Retail' });
+await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Add from catalogue').selectOption({ label: 'CONS-01 · Consulting' });
 await btn('Create').click();
 await page.getByText('Created QU-0001: total ₹590.00').waitFor();
@@ -99,7 +99,7 @@ step('quote QU-0001 (Rs 500 + 18% = Rs 590) accepted and converted to an invoice
 await nav('Invoices');
 await heading('Invoices');
 await btn('New invoice').click();
-await page.getByLabel('Contact').selectOption({ label: 'Acme Retail' });
+await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Consulting hours');
 await page.getByLabel('HSN 1').fill('9983');
 await page.getByLabel('Qty 1').fill('2');
@@ -109,7 +109,7 @@ await page.getByText(/Created INV\/\d\d-\d\d\/0002: total ₹1,180.00/).waitFor(
 const row2 = page.getByRole('row', { name: /INV\/\d\d-\d\d\/0002/ });
 await row2.getByRole('button', { name: 'Email' }).click();
 await page.getByText(/queued to accounts@acme.example/).waitFor();
-await row2.getByRole('button', { name: 'Pay' }).click();
+await row2.getByRole('button', { name: 'Receive payment' }).click();
 await page.getByLabel('Payment account').selectOption({ label: '1010 Bank Account' });
 await btn('Record payment').click();
 await page.getByText('Payment recorded.').waitFor();
@@ -125,7 +125,7 @@ step('customer statement: 590 + 1,180 - 1,180 payment = 590 owed');
 if (process.env.SHOT_DIR) { await nav('Invoices'); await page.getByRole('cell', { name: /INV\/\d\d-\d\d\/0002/ }).first().waitFor(); await page.screenshot({ path: process.env.SHOT_DIR + '/invoices.png' }); }
 await nav('Bills');
 await btn('New bill').click();
-await page.getByLabel('Contact').selectOption({ label: 'Pro Advisors' });
+await page.getByLabel('Contact', { exact: true }).fill('Pro Advisors');
 await page.getByLabel('TDS section').selectOption({ label: '194J · Professional / technical fees' });
 await page.getByLabel('Description 1').fill('Audit fee');
 await page.getByLabel('Rate 1').fill('60000');
@@ -178,7 +178,7 @@ step('fixed asset Rs 12,000 at 20% straight line: 3 months = Rs 600 depreciation
 // ---- repeating invoice
 await nav('Repeating invoices');
 await btn('New repeating invoice').click();
-await page.getByLabel('Contact').selectOption({ label: 'Acme Retail' });
+await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Monthly retainer');
 await page.getByLabel('Rate 1').fill('2000');
 await btn('Save schedule').click();

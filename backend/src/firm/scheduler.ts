@@ -7,6 +7,7 @@ import { createBackup, pruneBackups, verifyBackup } from '../ops/backup';
 import { log, metrics } from '../ops/metrics';
 import { join } from 'path';
 import { runRecurring } from '../extras/extras.controller';
+import { runJournalRules } from '../accounting/automation.controller';
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (s: string, n: number) => iso(new Date(Date.parse(s) + n * 86400000));
@@ -56,8 +57,8 @@ export async function runScheduledReports(today = iso(new Date())) {
 }
 
 export async function tick() {
-  const r = await runReminders(), s = await runScheduledReports(), rec = await runRecurring(), m = await processOutbox();
-  return { reminders: r.queued, scheduled: s.sent, recurring: rec.created, ...m };
+  const r = await runReminders(), s = await runScheduledReports(), rec = await runRecurring(), jr = await runJournalRules(), m = await processOutbox();
+  return { reminders: r.queued, scheduled: s.sent, recurring: rec.created, journalRules: jr.created, ...m };
 }
 
 /** Daily encrypted backup; weekly restore test of the newest backup into a scratch database. */

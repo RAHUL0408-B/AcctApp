@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
@@ -21,10 +21,18 @@ const contactSchema = z.object({
   gstin: z.string().optional(), pan: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/, 'Invalid PAN').optional(),
   stateCode: z.string().length(2).optional(), email: z.string().email().optional(), phone: z.string().max(20).optional(),
   isIndividual: z.boolean().default(false), country: z.string().regex(/^[A-Z]{2}$/, 'Use a 2-letter country code').default('IN'),
+  bankAccountName: z.string().max(200).optional(), bankName: z.string().max(200).optional(), bankAccountNo: z.string().regex(/^\d{6,20}$/, 'Account number must be 6-20 digits').optional(),
+  bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code').optional(),
+  defaultSalesAccountId: z.number().int().positive().nullable().optional(), defaultPurchaseAccountId: z.number().int().positive().nullable().optional(),
 });
+const CONTACT_COLS = `id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual",country,
+  bank_account_name AS "bankAccountName",bank_name AS "bankName",bank_account_no AS "bankAccountNo",bank_ifsc AS "bankIfsc",
+  default_sales_account_id AS "defaultSalesAccountId",default_purchase_account_id AS "defaultPurchaseAccountId",is_archived AS "isArchived"`;
+const shapeContact = (r: any) => ({ ...r, id: Number(r.id), defaultSalesAccountId: r.defaultSalesAccountId ? Number(r.defaultSalesAccountId) : null, defaultPurchaseAccountId: r.defaultPurchaseAccountId ? Number(r.defaultPurchaseAccountId) : null });
 export const docSchema = z.object({
   docType: z.enum(['invoice', 'bill', 'credit_note', 'debit_note']), contactId: z.number().int().positive(),
   issueDate: date, dueDate: date.optional(), placeOfSupply: z.string().length(2).optional(), supplierRef: z.string().max(60).optional(),
+  number: z.string().trim().min(1).max(40).optional(),
   originalDocId: z.number().int().positive().optional(), tdsSection: z.string().optional(), notes: z.string().max(500).optional(),
   supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).default('regular'),
   currency: z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code').default('INR'),
@@ -49,8 +57,10 @@ const shapeDoc = (r: any) => ({
   cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount),
   total: Number(r.total), netPayable: Number(r.net_payable), status: r.status, supplierRef: r.supplier_ref,
   originalDocId: r.original_doc_id ? Number(r.original_doc_id) : null, supplyType: r.supply_type,
+  notes: r.notes ?? null, replacedBy: r.replaced_by ? Number(r.replaced_by) : null,
   rcm: { cgst: Number(r.rcm_cgst ?? 0), sgst: Number(r.rcm_sgst ?? 0), igst: Number(r.rcm_igst ?? 0) },
   currency: r.currency ?? 'INR', fxRate: Number(r.fx_rate ?? 1), foreignTotal: r.foreign_total == null ? null : Number(r.foreign_total),
+  isArchived: !!r.is_archived,
   paid: r.paid !== undefined ? Number(r.paid) : undefined, outstanding: r.outstanding !== undefined ? Number(r.outstanding) : undefined,
 });
 
@@ -69,10 +79,15 @@ export class DocumentsController {
 
   // ---- contacts ----
   @Get('orgs/:orgId/contacts')
-  async contacts(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+  async contacts(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('archived') archived?: string) {
     await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query('SELECT id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual",country FROM contacts ORDER BY name')).rows
-      .map((r) => ({ ...r, id: Number(r.id) })));
+    return withOrg(orgId, async (c) => (await c.query(`SELECT ${CONTACT_COLS} FROM contacts WHERE ($1::boolean OR NOT is_archived) ORDER BY name`, [archived === 'true'])).rows.map(shapeContact));
+  }
+
+  /** A default account must be an account of the right kind. */
+  private async checkDefaults(c: PoolClient, b: z.infer<typeof contactSchema>) {
+    if (b.defaultSalesAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type='income'", [b.defaultSalesAccountId])).rowCount) throw new BadRequestException('The default sales account must be an income account');
+    if (b.defaultPurchaseAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type IN ('expense','asset')", [b.defaultPurchaseAccountId])).rowCount) throw new BadRequestException('The default purchase account must be an expense or asset account');
   }
 
   @Post('orgs/:orgId/contacts')
@@ -83,20 +98,74 @@ export class DocumentsController {
     const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
     return withOrg(orgId, async (c) => {
       if (state && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [state])).rowCount) throw new BadRequestException('Unknown state code');
-      const r = (await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,is_individual,country) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
-        [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country])).rows[0];
+      await this.checkDefaults(c, b);
+      const r = (await c.query(`INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,is_individual,country,bank_account_name,bank_name,bank_account_no,bank_ifsc,default_sales_account_id,default_purchase_account_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
+          b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'contact', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
   }
 
+  /** Edit a contact. Send the whole form: fields left out are cleared. Documents already posted keep what they were issued with. */
+  @Put('orgs/:orgId/contacts/:id')
+  async editContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(contactSchema, body);
+    if (b.gstin && !isValidGstin(b.gstin)) throw new BadRequestException('Invalid GSTIN (format or check digit is wrong)');
+    const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
+    return withOrg(orgId, async (c) => {
+      const before = (await c.query(`SELECT ${CONTACT_COLS} FROM contacts WHERE id=$1`, [id])).rows[0];
+      if (!before) throw new NotFoundException('Contact not found');
+      if (state && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [state])).rowCount) throw new BadRequestException('Unknown state code');
+      await this.checkDefaults(c, b);
+      await c.query(`UPDATE contacts SET kind=$2,name=$3,gstin=$4,pan=$5,state_code=$6,email=$7,phone=$8,is_individual=$9,country=$10,
+        bank_account_name=$11,bank_name=$12,bank_account_no=$13,bank_ifsc=$14,default_sales_account_id=$15,default_purchase_account_id=$16 WHERE id=$1`,
+        [id, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
+          b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null]);
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'contact', entityId: id, before: shapeContact(before), after: b, ip });
+      return { ok: true };
+    });
+  }
+
+  @Post('orgs/:orgId/contacts/:id/archive')
+  async archiveContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ archived: z.boolean().default(true) }), body ?? {});
+    return withOrg(orgId, async (c) => {
+      if (!(await c.query('UPDATE contacts SET is_archived=$2 WHERE id=$1 RETURNING id', [id, b.archived])).rowCount) throw new NotFoundException('Contact not found');
+      await writeAudit(c, { orgId, userId: uid, action: b.archived ? 'archive' : 'unarchive', entity: 'contact', entityId: id, ip });
+      return { ok: true };
+    });
+  }
+
+  /** Delete a contact that was never used. One with invoices, bills, quotes or projects must be archived instead. */
+  @Delete('orgs/:orgId/contacts/:id')
+  async deleteContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    return withOrg(orgId, async (c) => {
+      const before = (await c.query('SELECT name FROM contacts WHERE id=$1', [id])).rows[0];
+      if (!before) throw new NotFoundException('Contact not found');
+      await c.query('SAVEPOINT del');
+      try { await c.query('DELETE FROM contacts WHERE id=$1', [id]); }
+      catch (e: any) {
+        if (e.code !== '23503') throw e;
+        await c.query('ROLLBACK TO SAVEPOINT del');
+        throw new ConflictException('This contact has invoices, bills or other records, so it cannot be deleted. Archive it instead.');
+      }
+      await writeAudit(c, { orgId, userId: uid, action: 'delete', entity: 'contact', entityId: id, before, ip });
+      return { ok: true };
+    });
+  }
+
   // ---- documents ----
   @Get('orgs/:orgId/documents')
-  async list(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type?: string, @Query('contactId') contactId?: string) {
+  async list(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type?: string, @Query('contactId') contactId?: string, @Query('archived') archived?: string) {
     await requireOrg(uid, orgId, 'read');
     return withOrg(orgId, async (c) => {
-      const rows = (await c.query(`${OUTSTANDING_SQL} WHERE ($1::text IS NULL OR d.doc_type=$1) AND ($2::bigint IS NULL OR d.contact_id=$2) ORDER BY d.issue_date DESC, d.id DESC LIMIT 500`,
-        [type ?? null, contactId ? Number(contactId) : null])).rows;
+      const rows = (await c.query(`${OUTSTANDING_SQL} WHERE ($1::text IS NULL OR d.doc_type=$1) AND ($2::bigint IS NULL OR d.contact_id=$2) AND ($3::boolean OR NOT d.is_archived) ORDER BY d.issue_date DESC, d.id DESC LIMIT 500`,
+        [type ?? null, contactId ? Number(contactId) : null, archived === 'true'])).rows;
       return rows.map(shapeDoc);
     });
   }
@@ -107,8 +176,8 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => {
       const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [id])).rows[0];
       if (!d) throw new NotFoundException('Document not found');
-      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
-        .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), accountId: Number(l.account_id) }));
+      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
+        .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), accountId: Number(l.account_id), itemId: l.item_id ? Number(l.item_id) : null, trackingOptionId: l.tracking_option_id ? Number(l.tracking_option_id) : null }));
       const payments = (await c.query('SELECT id,pay_date::text AS date,amount,reference FROM payments WHERE doc_id=$1 ORDER BY id', [id])).rows.map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
       return { ...shapeDoc(d), lines, payments };
     });
@@ -128,28 +197,77 @@ export class DocumentsController {
   async voidDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
     const b = parse(z.object({ date, reason: z.string().min(1).max(300) }), body);
+    return withOrg(orgId, (c) => voidDocument(c, orgId, uid, id, b.date, b.reason, ip));
+  }
+
+  /** "Delete" several invoices or bills at once. Posted entries are locked in the books, so each one is cancelled with a reversing entry. A failure on one does not stop the rest. */
+  @Post('orgs/:orgId/documents/bulk-void')
+  async bulkVoid(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ ids: z.array(z.number().int().positive()).min(1).max(200), date, reason: z.string().min(1).max(300).default('Deleted from the app') }), body);
     return withOrg(orgId, async (c) => {
-      const d = (await c.query('SELECT * FROM documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
-      if (!d) throw new NotFoundException('Document not found');
-      if (d.status === 'void') throw new ConflictException('Already void');
-      if ((await c.query('SELECT 1 FROM payments WHERE doc_id=$1', [id])).rowCount) throw new ConflictException('Remove payments first: this document has payments');
-      if ((await c.query("SELECT 1 FROM documents WHERE original_doc_id=$1 AND status='posted'", [id])).rowCount) throw new ConflictException('This document has credit/debit notes against it');
-      const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [d.journal_entry_id])).rows
-        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
-      const moves = (await c.query('SELECT item_id, MIN(id) AS first_id, SUM(qty_milli) AS q, SUM(value) AS v FROM stock_moves WHERE doc_id=$1 GROUP BY item_id', [id])).rows;
-      for (const m of moves) {
-        await c.query('SELECT id FROM items WHERE id=$1 FOR UPDATE', [m.item_id]);
-        if (Number(m.q) > 0 && (await c.query("SELECT 1 FROM stock_moves WHERE item_id=$1 AND id > $2 AND kind='sale'", [m.item_id, m.first_id])).rowCount)
-          throw new ConflictException('Goods on this bill have been sold since it was posted: record a debit note or a stock adjustment instead');
+      const voided: number[] = [], failed: { id: number; number: string | null; reason: string }[] = [];
+      for (const id of b.ids) {
+        await c.query('SAVEPOINT one');
+        try { await voidDocument(c, orgId, uid, id, b.date, b.reason, ip); await c.query('RELEASE SAVEPOINT one'); voided.push(id); }
+        catch (e: any) {
+          await c.query('ROLLBACK TO SAVEPOINT one');
+          const n = (await c.query('SELECT number FROM documents WHERE id=$1', [id])).rows[0]?.number ?? null;
+          failed.push({ id, number: n, reason: e?.message ?? 'Could not be removed' });
+        }
       }
-      const vid = await insertEntry(c, orgId, uid, b.date, `Void ${d.number}: ${b.reason}`, d.number, Number(d.journal_entry_id), reverseLines(ls));
-      for (const m of moves) await recordMove(c, orgId, { itemId: Number(m.item_id), date: b.date, kind: 'void', qtyMilli: -Number(m.q), value: -Number(m.v), docId: id, entryId: vid, note: `Void ${d.number}` });
-      await c.query("UPDATE documents SET status='void', void_entry_id=$2 WHERE id=$1", [id, vid]);
-      // Project time and costs billed on a voided invoice can be invoiced again.
-      await c.query('UPDATE project_time SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
-      await c.query('UPDATE project_costs SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
-      await writeAudit(c, { orgId, userId: uid, action: 'void', entity: 'document', entityId: id, after: b, ip });
-      return { voided: true, reversalEntryId: vid };
+      return { voided, failed };
+    });
+  }
+
+  /**
+   * Edit a posted invoice or bill. The books keep a trail: the old version is cancelled by a reversing entry dated as the original,
+   * and the corrected one is posted fresh under the same number. Not possible once payments or notes exist.
+   */
+  @Put('orgs/:orgId/documents/:id')
+  async editDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    const role = await requireOrg(uid, orgId, 'post');
+    const b = parse(docSchema, body);
+    if (role === 'staff' && (await getPool().query('SELECT require_approval FROM organizations WHERE id=$1', [orgId])).rows[0]?.require_approval)
+      throw new ForbiddenException('This organisation needs approval for changes to invoices and bills');
+    return withOrg(orgId, async (c) => {
+      const old = (await c.query('SELECT number,doc_type,issue_date::text AS issue_date,status FROM documents WHERE id=$1', [id])).rows[0];
+      if (!old) throw new NotFoundException('Document not found');
+      if (old.status === 'void') throw new ConflictException('This document is already cancelled');
+      if (old.doc_type !== b.docType) throw new BadRequestException('The type of a document cannot be changed');
+      await voidDocument(c, orgId, uid, id, old.issue_date, 'Edited', ip);
+      await c.query('UPDATE documents SET number = number || $2 WHERE id=$1', [id, `-v${id}`]); // free the number for the corrected version
+      const fresh = await createDocument(c, orgId, uid, { ...b, number: b.number ?? old.number }, ip);
+      await c.query('UPDATE documents SET replaced_by=$2 WHERE id=$1', [id, fresh.id]);
+      await writeAudit(c, { orgId, userId: uid, action: 'edit', entity: 'document', entityId: fresh.id, before: { replacedId: id, number: old.number }, after: { total: fresh.total }, ip });
+      return fresh;
+    });
+  }
+
+  /** Next number the system would give, so the form can show it and let the user change it. */
+  @Get('orgs/:orgId/documents-next-number')
+  async nextNumber(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type: string, @Query('date') on?: string) {
+    await requireOrg(uid, orgId, 'read');
+    if (!(type in PREFIX)) throw new BadRequestException('Unknown document type');
+    const d = on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : new Date().toISOString().slice(0, 10);
+    return withOrg(orgId, async (c) => ({ number: await peekNumber(c, orgId, type as DocType, d) }));
+  }
+
+  /** Unlink a payment that was recorded against the wrong invoice or bill: its entry is reversed and the invoice becomes outstanding again. */
+  @Delete('orgs/:orgId/payments/:paymentId')
+  async unlinkPayment(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('paymentId', ParseIntPipe) paymentId: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    return withOrg(orgId, async (c) => {
+      const p = (await c.query('SELECT p.*, d.number FROM payments p JOIN documents d ON d.id=p.doc_id WHERE p.id=$1 FOR UPDATE OF p', [paymentId])).rows[0];
+      if (!p) throw new NotFoundException('Payment not found');
+      const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [p.journal_entry_id])).rows
+        .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
+      const on = new Date().toISOString().slice(0, 10);
+      const vid = await insertEntry(c, orgId, uid, on, `Payment unlinked from ${p.number}`, p.number, Number(p.journal_entry_id), reverseLines(ls));
+      await c.query("UPDATE bank_transactions SET status='unreconciled', matched_entry_id=NULL WHERE matched_entry_id=$1", [p.journal_entry_id]);
+      await c.query('DELETE FROM payments WHERE id=$1', [paymentId]);
+      await writeAudit(c, { orgId, userId: uid, action: 'unlink_payment', entity: 'document', entityId: Number(p.doc_id), before: { paymentId, amount: Number(p.amount) }, ip });
+      return { unlinked: true, reversalEntryId: vid };
     });
   }
 
@@ -159,39 +277,43 @@ export class DocumentsController {
     // amount = rupees actually received or paid. For a foreign-currency document also give foreignAmount (in its currency's cents).
     const b = parse(z.object({ date, amount: z.number().int().positive(), accountId: z.number().int().positive(), reference: z.string().max(100).optional(),
       foreignAmount: z.number().int().positive().optional() }), body);
-    return withOrg(orgId, async (c) => {
-      const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1 FOR UPDATE OF d`, [id])).rows[0];
-      if (!d) throw new NotFoundException('Document not found');
-      if (d.status !== 'posted') throw new ConflictException('Document is void');
-      if (d.doc_type !== 'invoice' && d.doc_type !== 'bill') throw new BadRequestException('Only invoices and bills can be paid');
-      const outstanding = Number(d.outstanding);
-      let settled = b.amount, fxGain = 0;
-      if (d.currency !== 'INR') {
-        if (!b.foreignAmount) throw new BadRequestException(`Give the amount in ${d.currency} (foreignAmount) as well as the rupees`);
-        const fo = Number((await c.query(`SELECT d.foreign_total - COALESCE((SELECT SUM(foreign_amount) FROM payments WHERE doc_id=d.id),0)
-            - COALESCE((SELECT SUM(foreign_total) FROM documents n WHERE n.original_doc_id=d.id AND n.status='posted'),0) AS fo FROM documents d WHERE d.id=$1`, [id])).rows[0].fo);
-        if (b.foreignAmount > fo) throw new BadRequestException(`Payment exceeds the amount still owed (${fo} ${d.currency} cents)`);
-        // Settle at the rate the document was booked at; the difference from the rupees actually moved is an exchange gain or loss.
-        settled = b.foreignAmount === fo ? outstanding : Math.min(outstanding, toRupees(b.foreignAmount, Number(d.fx_rate)));
-        fxGain = d.doc_type === 'invoice' ? b.amount - settled : settled - b.amount;
-      } else if (b.amount > outstanding) throw new BadRequestException(`Payment exceeds the outstanding amount (${outstanding} paise)`);
-      const bank = (await c.query('SELECT type FROM accounts WHERE id=$1 AND is_active', [b.accountId])).rows[0];
-      if (!bank || bank.type !== 'asset') throw new BadRequestException('Pay from/into a cash or bank (asset) account');
-      const control = await accountIdByCode(c, d.doc_type === 'invoice' ? '1100' : '2000');
-      const lines: Line[] = d.doc_type === 'invoice'
-        ? [{ accountId: b.accountId, debit: b.amount, credit: 0 }, { accountId: control, debit: 0, credit: settled }]
-        : [{ accountId: control, debit: settled, credit: 0 }, { accountId: b.accountId, debit: 0, credit: b.amount }];
-      if (fxGain) {
-        const fx = await ensureAccount(c, orgId, '4300');
-        lines.push(fxGain > 0 ? { accountId: fx, debit: 0, credit: fxGain } : { accountId: fx, debit: -fxGain, credit: 0 });
-      }
-      const eid = await insertEntry(c, orgId, uid, b.date, `Payment ${d.doc_type === 'invoice' ? 'received for' : 'made for'} ${d.number}`, d.number, null, lines);
-      const p = (await c.query('INSERT INTO payments(org_id,doc_id,pay_date,amount,account_id,journal_entry_id,reference,created_by,foreign_amount,bank_amount,fx_gain) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
-        [orgId, id, b.date, settled, b.accountId, eid, b.reference ?? null, uid, b.foreignAmount ?? null, b.amount, fxGain])).rows[0];
-      await writeAudit(c, { orgId, userId: uid, action: 'payment', entity: 'document', entityId: id, after: b, ip });
-      return { id: Number(p.id), journalEntryId: eid, settled, fxGain, outstandingAfter: outstanding - settled };
-    });
+    return withOrg(orgId, (c) => recordPayment(c, orgId, uid, id, b, ip));
   }
+}
+
+export interface PaymentInput { date: string; amount: number; accountId: number; reference?: string; foreignAmount?: number }
+/** Record a payment received on an invoice or made on a bill, and post its journal entry. Call inside withOrg(). */
+export async function recordPayment(c: PoolClient, orgId: number, uid: number, id: number, b: PaymentInput, ip?: string) {
+  const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1 FOR UPDATE OF d`, [id])).rows[0];
+  if (!d) throw new NotFoundException('Document not found');
+  if (d.status !== 'posted') throw new ConflictException('Document is void');
+  if (d.doc_type !== 'invoice' && d.doc_type !== 'bill') throw new BadRequestException('Only invoices and bills can be paid');
+  const outstanding = Number(d.outstanding);
+  let settled = b.amount, fxGain = 0;
+  if (d.currency !== 'INR') {
+    if (!b.foreignAmount) throw new BadRequestException(`Give the amount in ${d.currency} (foreignAmount) as well as the rupees`);
+    const fo = Number((await c.query(`SELECT d.foreign_total - COALESCE((SELECT SUM(foreign_amount) FROM payments WHERE doc_id=d.id),0)
+        - COALESCE((SELECT SUM(foreign_total) FROM documents n WHERE n.original_doc_id=d.id AND n.status='posted'),0) AS fo FROM documents d WHERE d.id=$1`, [id])).rows[0].fo);
+    if (b.foreignAmount > fo) throw new BadRequestException(`Payment exceeds the amount still owed (${fo} ${d.currency} cents)`);
+    // Settle at the rate the document was booked at; the difference from the rupees actually moved is an exchange gain or loss.
+    settled = b.foreignAmount === fo ? outstanding : Math.min(outstanding, toRupees(b.foreignAmount, Number(d.fx_rate)));
+    fxGain = d.doc_type === 'invoice' ? b.amount - settled : settled - b.amount;
+  } else if (b.amount > outstanding) throw new BadRequestException(`Payment exceeds the outstanding amount (${outstanding} paise)`);
+  const bank = (await c.query('SELECT type FROM accounts WHERE id=$1 AND is_active', [b.accountId])).rows[0];
+  if (!bank || bank.type !== 'asset') throw new BadRequestException('Pay from/into a cash or bank (asset) account');
+  const control = await accountIdByCode(c, d.doc_type === 'invoice' ? '1100' : '2000');
+  const lines: Line[] = d.doc_type === 'invoice'
+    ? [{ accountId: b.accountId, debit: b.amount, credit: 0 }, { accountId: control, debit: 0, credit: settled }]
+    : [{ accountId: control, debit: settled, credit: 0 }, { accountId: b.accountId, debit: 0, credit: b.amount }];
+  if (fxGain) {
+    const fx = await ensureAccount(c, orgId, '4300');
+    lines.push(fxGain > 0 ? { accountId: fx, debit: 0, credit: fxGain } : { accountId: fx, debit: -fxGain, credit: 0 });
+  }
+  const eid = await insertEntry(c, orgId, uid, b.date, `Payment ${d.doc_type === 'invoice' ? 'received for' : 'made for'} ${d.number}`, d.number, null, lines);
+  const p = (await c.query('INSERT INTO payments(org_id,doc_id,pay_date,amount,account_id,journal_entry_id,reference,created_by,foreign_amount,bank_amount,fx_gain) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
+    [orgId, id, b.date, settled, b.accountId, eid, b.reference ?? null, uid, b.foreignAmount ?? null, b.amount, fxGain])).rows[0];
+  await writeAudit(c, { orgId, userId: uid, action: 'payment', entity: 'document', entityId: id, after: b, ip });
+  return { id: Number(p.id), journalEntryId: eid, settled, fxGain, outstandingAfter: outstanding - settled };
 }
 
 export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number };
@@ -219,7 +341,8 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
 
   // Validate GST slabs against the config table.
   const slabs = new Set((await c.query('SELECT rate_bp FROM gst_rates WHERE valid_from <= $1 AND (valid_to IS NULL OR valid_to >= $1)', [issueDate])).rows.map((r) => r.rate_bp));
-  const defaultAcc = await accountIdByCode(c, isSales ? '4000' : '5000').catch(() => null);
+  const contactDefault = isSales ? contact.default_sales_account_id : contact.default_purchase_account_id;
+  const defaultAcc = contactDefault ? Number(contactDefault) : await accountIdByCode(c, isSales ? '4000' : '5000').catch(() => null);
 
   // Stock-tracked goods on a purchase go to the Inventory account instead of an expense.
   const itemIds = [...new Set(lines.map((l) => l.itemId).filter((x): x is number => !!x))];
@@ -254,6 +377,40 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
   const t = totals(taxLines);
   if (t.subtotal <= 0) throw new BadRequestException('Document total must be more than zero');
   return { org, contact, pos, taxLines, t, rules, rcmLines };
+}
+
+/** Cancel a posted document with a reversing entry (and put any stock back). */
+export async function voidDocument(c: PoolClient, orgId: number, uid: number, id: number, on: string, reason: string, ip?: string) {
+  const d = (await c.query('SELECT * FROM documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
+  if (!d) throw new NotFoundException('Document not found');
+  if (d.status === 'void') throw new ConflictException('Already void');
+  if ((await c.query('SELECT 1 FROM payments WHERE doc_id=$1', [id])).rowCount) throw new ConflictException('This document has payments. Unlink them first');
+  if ((await c.query("SELECT 1 FROM documents WHERE original_doc_id=$1 AND status='posted'", [id])).rowCount) throw new ConflictException('This document has credit/debit notes against it');
+  const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [d.journal_entry_id])).rows
+    .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
+  const moves = (await c.query('SELECT item_id, MIN(id) AS first_id, SUM(qty_milli) AS q, SUM(value) AS v FROM stock_moves WHERE doc_id=$1 GROUP BY item_id', [id])).rows;
+  for (const m of moves) {
+    await c.query('SELECT id FROM items WHERE id=$1 FOR UPDATE', [m.item_id]);
+    if (Number(m.q) > 0 && (await c.query("SELECT 1 FROM stock_moves WHERE item_id=$1 AND id > $2 AND kind='sale'", [m.item_id, m.first_id])).rowCount)
+      throw new ConflictException('Goods on this bill have been sold since it was posted: record a debit note or a stock adjustment instead');
+  }
+  const vid = await insertEntry(c, orgId, uid, on, `Void ${d.number}: ${reason}`, d.number, Number(d.journal_entry_id), reverseLines(ls));
+  for (const m of moves) await recordMove(c, orgId, { itemId: Number(m.item_id), date: on, kind: 'void', qtyMilli: -Number(m.q), value: -Number(m.v), docId: id, entryId: vid, note: `Void ${d.number}` });
+  await c.query("UPDATE documents SET status='void', void_entry_id=$2 WHERE id=$1", [id, vid]);
+  // Project time and costs billed on a voided invoice can be invoiced again.
+  await c.query('UPDATE project_time SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
+  await c.query('UPDATE project_costs SET invoiced_doc_id=NULL WHERE invoiced_doc_id=$1', [id]);
+  await writeAudit(c, { orgId, userId: uid, action: 'void', entity: 'document', entityId: id, after: { date: on, reason }, ip });
+  return { voided: true, reversalEntryId: vid };
+}
+
+const numberFor = (type: DocType, fyLabel: string, n: number) => `${PREFIX[type]}/${fyLabel.replace('FY ', '').slice(2)}/${String(n).padStart(4, '0')}`;
+/** The next automatic number for a type and date, skipping any that were typed in by hand. Does not use it up. */
+async function peekNumber(c: PoolClient, orgId: number, type: DocType, on: string) {
+  const fy = financialYearOf(on);
+  let n = Number((await c.query('SELECT next_no FROM doc_sequences WHERE org_id=$1 AND doc_type=$2 AND fy_label=$3', [orgId, type, fy.label])).rows[0]?.next_no ?? 1);
+  while ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, numberFor(type, fy.label, n)])).rowCount) n++;
+  return numberFor(type, fy.label, n);
 }
 
 /** Build, validate and post a sales/purchase document with its GST, TDS, stock and journal entry. */
@@ -326,11 +483,19 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     }
   }
 
-  // Number: PREFIX/FY/0001, one running sequence per type per financial year.
+  // Number: PREFIX/FY/0001, one running sequence per type per financial year. A number typed by the user is used as it is, if it is free.
   const fy = financialYearOf(b.issueDate);
-  const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,$3,2)
-    ON CONFLICT (org_id,doc_type,fy_label) DO UPDATE SET next_no = doc_sequences.next_no + 1 RETURNING next_no - 1 AS n`, [orgId, type, fy.label])).rows[0];
-  const number = `${PREFIX[type]}/${fy.label.replace('FY ', '').slice(2)}/${String(seq.n).padStart(4, '0')}`;
+  let number: string;
+  if (b.number) {
+    number = b.number.trim();
+    if ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, number])).rowCount) throw new ConflictException(`The number ${number} is already used by another ${type.replace('_', ' ')}`);
+  } else {
+    do {
+      const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,$3,2)
+        ON CONFLICT (org_id,doc_type,fy_label) DO UPDATE SET next_no = doc_sequences.next_no + 1 RETURNING next_no - 1 AS n`, [orgId, type, fy.label])).rows[0];
+      number = numberFor(type, fy.label, Number(seq.n));
+    } while ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, number])).rowCount);
+  }
 
   // Journal. Sales: Dr Debtors / Cr revenue + output GST. Purchases: Dr expense + input GST / Cr Creditors + TDS payable. Notes reverse.
   // Lines are grouped by account and tracking option so reports by tracking category still work.

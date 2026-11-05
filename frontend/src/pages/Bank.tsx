@@ -6,6 +6,7 @@ import { Empty, PageHeader, Select } from '../kit';
 
 interface BankAcc { id: number; name: string; accountId: number; bookBalance: number; statementTotal: number; unreconciled: number }
 interface Txn { id: number; date: string; description: string; amount: number; status: string; matchedEntryId: number | null; ruleAccountId: number | null }
+interface DocMatch { id: number; number: string; docType: string; date: string; contactName: string; outstanding: number; exact: boolean }
 interface Rule { id: number; name: string; matchText: string; direction: string; accountName: string }
 interface Account { id: number; code: string; name: string; type: string }
 
@@ -15,6 +16,8 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
   const [txns, setTxns] = useState<Txn[]>([]);
   const [sugg, setSugg] = useState<Record<number, { id: number; date: string; narration: string }[]>>({});
   const [cat, setCat] = useState<Record<number, string>>({});
+  const [docs, setDocs] = useState<Record<number, DocMatch[]>>({});            // open invoices or bills with exactly the bank amount
+  const [finding, setFinding] = useState<Record<number, { q: string; results: DocMatch[] } | undefined>>({}); // manual search
   const [newBank, setNewBank] = useState({ name: '', accountId: '' });
   const [ok, setOk] = useState('');
   const [rules, setRules] = useState<Rule[]>([]);
@@ -28,9 +31,12 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
     if (!sel) return;
     const t = await api<Txn[]>(`/orgs/${org.id}/bank-accounts/${sel}/transactions`);
     setTxns(t);
-    const s: typeof sugg = {};
-    for (const x of t.filter((x) => x.status === 'unreconciled')) s[x.id] = await api(`/orgs/${org.id}/bank-transactions/${x.id}/suggestions`);
-    setSugg(s);
+    const s: typeof sugg = {}, dm: typeof docs = {};
+    for (const x of t.filter((x) => x.status === 'unreconciled')) {
+      s[x.id] = await api(`/orgs/${org.id}/bank-transactions/${x.id}/suggestions`);
+      dm[x.id] = await api(`/orgs/${org.id}/bank-transactions/${x.id}/document-matches`); // details fetched as soon as the statement is in
+    }
+    setSugg(s); setDocs(dm);
   }, [org.id, sel]);
   useEffect(() => { loadBanks(); }, [loadBanks]);
   useEffect(() => { loadTxns(); }, [loadTxns]);
@@ -44,7 +50,25 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
   });
   const match = (txnId: number, entryId: number) => run(async () => { await api(`/orgs/${org.id}/bank-transactions/${txnId}/reconcile`, { body: { entryId } }); setOk('Matched.'); refresh(); });
   const categorize = (txnId: number) => run(async () => { await api(`/orgs/${org.id}/bank-transactions/${txnId}/categorize`, { body: { accountId: Number(cat[txnId]) } }); setOk('Entry created and reconciled.'); refresh(); });
-  const undo = (txnId: number) => run(async () => { await api(`/orgs/${org.id}/bank-transactions/${txnId}/unreconcile`, { method: 'POST', body: {} }); refresh(); });
+  const matchDoc = (txnId: number, d: DocMatch) => run(async () => {
+    const r = await api(`/orgs/${org.id}/bank-transactions/${txnId}/match-document`, { body: { documentId: d.id } });
+    setOk(`Matched to ${d.number}. ${r.outstandingAfter > 0 ? `₹${fmt(r.outstandingAfter)} is still outstanding on it.` : 'It is now fully paid.'}`); setFinding({ ...finding, [txnId]: undefined }); refresh();
+  });
+  const unlink = (t: Txn) => run(async () => {
+    if (!window.confirm('Unlink this line? If it was matched to an invoice or bill, that payment is removed and the invoice or bill becomes outstanding again. The bank line goes back to unreconciled so you can match it to the right one.')) return;
+    const r = await api(`/orgs/${org.id}/bank-transactions/${t.id}/unlink`, { method: 'POST', body: {} });
+    setOk(r.paymentUnlinked ? `Unlinked. ${r.documentNumber} is outstanding again.` : 'Unlinked.'); refresh();
+  });
+  const search = (txnId: number, q: string) => {
+    setFinding((f) => ({ ...f, [txnId]: { q, results: f[txnId]?.results ?? [] } }));
+    if (q.trim().length < 1) return;
+    api<DocMatch[]>(`/orgs/${org.id}/bank-transactions/${txnId}/document-matches?q=${encodeURIComponent(q.trim())}`).then((results) => setFinding((f) => (f[txnId]?.q === q ? { ...f, [txnId]: { q, results } } : f)));
+  };
+  const exactCount = Object.values(docs).filter((d) => d.length === 1).length;
+  const autoMatch = () => run(async () => {
+    const r = await api(`/orgs/${org.id}/bank-accounts/${sel}/auto-match-documents`, { method: 'POST', body: {} });
+    setOk(`${r.matched} line(s) matched to invoices or bills.${r.ambiguous ? ` ${r.ambiguous} have more than one possible match: choose those yourself.` : ''}`); refresh();
+  });
   const bank = banks.find((b) => b.id === sel);
 
   const rulesCard = (
@@ -88,6 +112,7 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
       <div className="space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       {banks.length > 0 && (
         <Card title="Reconcile" actions={<>
+          {canPost && exactCount > 0 && <Button variant="ghost" disabled={busy} onClick={autoMatch}>Match {exactCount} line(s) to invoices or bills</Button>}
           {canPost && ruled > 0 && <Button variant="ghost" disabled={busy} onClick={acceptRules}>Accept {ruled} rule suggestion(s)</Button>}
           <select aria-label="Bank account" className="rounded border border-slate-300 px-2 py-1 text-sm" value={sel ?? ''} onChange={(e) => setSel(Number(e.target.value))}>
             {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></>}>
@@ -107,11 +132,20 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
                 <td className={`text-right ${t.amount < 0 ? 'text-red-700' : 'text-green-700'}`}>{fmt(t.amount)}</td>
                 <td className="pl-3">
                   {t.status === 'reconciled' ? (
-                    <span className="text-green-700">✓ Reconciled (entry #{t.matchedEntryId}) {canPost && <button className="ml-2 text-xs underline" onClick={() => undo(t.id)}>undo</button>}</span>
+                    <span className="text-green-700">✓ Reconciled (entry #{t.matchedEntryId}) {canPost && <button className="ml-2 text-xs text-slate-700 underline" onClick={() => unlink(t)}>unlink</button>}</span>
                   ) : canPost ? (
                     <div className="space-y-1">
                       {t.ruleAccountId && <p className="text-xs text-brand-700">Rule suggests {accounts.find((a) => a.id === t.ruleAccountId)?.name}</p>}
+                      {(docs[t.id] ?? []).map((d) => <div key={`d${d.id}`}><Button variant="ghost" onClick={() => matchDoc(t.id, d)}>Match {t.amount > 0 ? 'invoice' : 'bill'} {d.number} · {d.contactName} · ₹{fmt(d.outstanding)}</Button></div>)}
                       {(sugg[t.id] ?? []).map((s) => <div key={s.id}><Button variant="ghost" onClick={() => match(t.id, s.id)}>Match #{s.id} · {s.date} · {s.narration}</Button></div>)}
+                      {finding[t.id] ? (
+                        <div className="rounded border border-slate-200 p-2">
+                          <div className="flex gap-1"><input autoFocus aria-label={`Find invoice or bill for ${t.description}`} placeholder={t.amount > 0 ? 'Invoice number or customer…' : 'Bill number or supplier…'} className="w-64 rounded border border-slate-300 px-2 py-1" value={finding[t.id]!.q} onChange={(e) => search(t.id, e.target.value)} />
+                            <Button variant="ghost" onClick={() => setFinding({ ...finding, [t.id]: undefined })}>Close</Button></div>
+                          {finding[t.id]!.q && finding[t.id]!.results.length === 0 && <p className="mt-1 text-xs text-slate-500">No open {t.amount > 0 ? 'invoices' : 'bills'} found.</p>}
+                          {finding[t.id]!.results.map((d) => <div key={d.id}><Button variant="ghost" onClick={() => matchDoc(t.id, d)}>{d.number} · {d.contactName} · ₹{fmt(d.outstanding)} due{d.exact ? ' · same amount' : d.outstanding > Math.abs(t.amount) ? ' · part payment' : ' · bank amount is more'}</Button></div>)}
+                        </div>
+                      ) : <button className="text-xs text-brand-700 underline" onClick={() => setFinding({ ...finding, [t.id]: { q: '', results: [] } })}>Find {t.amount > 0 ? 'an invoice' : 'a bill'} to match…</button>}
                       <div className="flex gap-1">
                         <select aria-label={`Category for ${t.description}`} className="rounded border border-slate-300 px-1 py-1" value={cat[t.id] ?? ''} onChange={(e) => setCat({ ...cat, [t.id]: e.target.value })}>
                           <option value="">Create entry to…</option>{accounts.filter((a) => a.id !== bank?.accountId).map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select>

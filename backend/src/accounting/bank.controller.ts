@@ -6,6 +6,8 @@ import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { parseStatement } from '../common/csv';
 import { requireOrg } from '../tenancy/acl';
 import { insertEntry } from '../ledger/post';
+import { reverseLines } from '../ledger/ledger';
+import { recordPayment } from './documents.controller';
 import { matchRule } from '../extras/calc';
 
 const num = (r: any, ...keys: string[]) => { for (const k of keys) if (r[k] != null) r[k] = Number(r[k]); return r; }; // null stays null
@@ -87,6 +89,78 @@ export class BankController {
     });
   }
 
+  /**
+   * Open invoices (money in) or bills (money out) to match a bank line against. With no search text, only documents whose outstanding
+   * amount is exactly the bank amount are returned; with text, any open document of that direction whose number or contact matches.
+   */
+  @Get('bank-transactions/:txnId/document-matches')
+  async documentMatches(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('txnId', ParseIntPipe) txnId: number, @Query('q') q?: string) {
+    await requireOrg(uid, orgId, 'read');
+    return withOrg(orgId, async (c) => {
+      const t = (await c.query('SELECT amount FROM bank_transactions WHERE id=$1', [txnId])).rows[0];
+      if (!t) throw new NotFoundException('Transaction not found');
+      return openDocsFor(c, Number(t.amount), q?.trim() || null);
+    });
+  }
+
+  /** Match a bank line to an invoice or bill: records the payment on it (for the bank amount) and reconciles the line. */
+  @Post('bank-transactions/:txnId/match-document')
+  async matchDocument(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('txnId', ParseIntPipe) txnId: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ documentId: z.number().int().positive() }), body);
+    return withOrg(orgId, async (c) => {
+      const t = await lockTxn(c, txnId);
+      const r = await payFromBankLine(c, orgId, uid, t, b.documentId, ip);
+      await writeAudit(c, { orgId, userId: uid, action: 'match_document', entity: 'bank_transaction', entityId: txnId, after: { documentId: b.documentId, ...r }, ip });
+      return r;
+    });
+  }
+
+  /** Match every unreconciled line that has exactly one open invoice or bill for the same amount. Lines with none or several are left for you to check. */
+  @Post('bank-accounts/:id/auto-match-documents')
+  async autoMatch(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    return withOrg(orgId, async (c) => {
+      const lines = (await c.query("SELECT id FROM bank_transactions WHERE bank_account_id=$1 AND status='unreconciled' ORDER BY txn_date, id", [id])).rows;
+      let matched = 0, ambiguous = 0;
+      for (const l of lines) {
+        const t = await lockTxn(c, Number(l.id));
+        const found = await openDocsFor(c, t.amount, null);
+        if (found.length > 1) { ambiguous++; continue; }
+        if (found.length !== 1) continue;
+        await c.query('SAVEPOINT one');
+        try { await payFromBankLine(c, orgId, uid, t, found[0].id, ip); await c.query('RELEASE SAVEPOINT one'); matched++; }
+        catch { await c.query('ROLLBACK TO SAVEPOINT one'); }
+      }
+      await writeAudit(c, { orgId, userId: uid, action: 'auto_match_documents', entity: 'bank_account', entityId: id, after: { matched, ambiguous }, ip });
+      return { matched, ambiguous, checked: lines.length };
+    });
+  }
+
+  /**
+   * Take a bank line back out of a wrong match. If the line was matched to an invoice or bill, that payment is unlinked too:
+   * its entry is reversed and the invoice or bill becomes outstanding again.
+   */
+  @Post('bank-transactions/:txnId/unlink')
+  async unlink(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('txnId', ParseIntPipe) txnId: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    return withOrg(orgId, async (c) => {
+      const t = (await c.query("SELECT id, matched_entry_id FROM bank_transactions WHERE id=$1 AND status='reconciled' FOR UPDATE", [txnId])).rows[0];
+      if (!t) throw new NotFoundException('No reconciled transaction with that id');
+      const pay = (await c.query('SELECT p.id, p.journal_entry_id, d.number FROM payments p JOIN documents d ON d.id=p.doc_id WHERE p.journal_entry_id=$1 FOR UPDATE OF p', [t.matched_entry_id])).rows[0];
+      let reversalEntryId: number | null = null;
+      if (pay) {
+        const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [pay.journal_entry_id])).rows
+          .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
+        reversalEntryId = await insertEntry(c, orgId, uid, new Date().toISOString().slice(0, 10), `Payment unlinked from ${pay.number}`, pay.number, Number(pay.journal_entry_id), reverseLines(ls));
+        await c.query('DELETE FROM payments WHERE id=$1', [pay.id]);
+      }
+      await c.query("UPDATE bank_transactions SET status='unreconciled', matched_entry_id=NULL WHERE id=$1", [txnId]);
+      await writeAudit(c, { orgId, userId: uid, action: 'unlink', entity: 'bank_transaction', entityId: txnId, after: { paymentUnlinked: !!pay, documentNumber: pay?.number ?? null }, ip });
+      return { ok: true, paymentUnlinked: !!pay, documentNumber: pay?.number ?? null, reversalEntryId };
+    });
+  }
+
   @Post('bank-transactions/:txnId/reconcile')
   async reconcile(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('txnId', ParseIntPipe) txnId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
@@ -141,4 +215,32 @@ async function lockTxn(c: import('pg').PoolClient, id: number) {
   if (t.status === 'reconciled') throw new ConflictException('Already reconciled');
   t.amount = Number(t.amount);
   return t;
+}
+
+/** Open invoices (for money in) or bills (for money out). Exact outstanding match when no search text is given. */
+async function openDocsFor(c: import('pg').PoolClient, amount: number, q: string | null) {
+  const abs = Math.abs(amount), type = amount > 0 ? 'invoice' : 'bill';
+  const rows = (await c.query(
+    `SELECT * FROM (
+       SELECT d.id, d.number, d.doc_type, d.issue_date::text AS date, ct.name AS "contactName", d.net_payable - COALESCE(p.paid,0) - COALESCE(n.noted,0) AS outstanding, d.currency
+         FROM documents d JOIN contacts ct ON ct.id=d.contact_id
+         LEFT JOIN (SELECT doc_id, SUM(amount) paid FROM payments GROUP BY doc_id) p ON p.doc_id=d.id
+         LEFT JOIN (SELECT original_doc_id, SUM(total) noted FROM documents WHERE status='posted' AND original_doc_id IS NOT NULL GROUP BY original_doc_id) n ON n.original_doc_id=d.id
+        WHERE d.doc_type=$1 AND d.status='posted' AND d.currency='INR') x
+      WHERE outstanding > 0 AND (($2::text IS NULL AND outstanding = $3) OR ($2::text IS NOT NULL AND (number ILIKE '%' || $2 || '%' OR "contactName" ILIKE '%' || $2 || '%')))
+      ORDER BY (outstanding = $3) DESC, date DESC LIMIT 20`, [type, q, abs])).rows;
+  return rows.map((r) => ({ id: Number(r.id), number: r.number, docType: r.doc_type as string, date: r.date as string, contactName: r.contactName as string, outstanding: Number(r.outstanding), exact: Number(r.outstanding) === abs }));
+}
+
+/** Pay an invoice or bill from a bank line, for the line's amount, then reconcile the line to that payment. */
+async function payFromBankLine(c: import('pg').PoolClient, orgId: number, uid: number, t: any, documentId: number, ip: string) {
+  const abs = Math.abs(Number(t.amount));
+  const doc = (await c.query('SELECT doc_type, currency FROM documents WHERE id=$1', [documentId])).rows[0];
+  if (!doc) throw new NotFoundException('Document not found');
+  if (Number(t.amount) > 0 && doc.doc_type !== 'invoice') throw new BadRequestException('Money received can only be matched to an invoice');
+  if (Number(t.amount) < 0 && doc.doc_type !== 'bill') throw new BadRequestException('Money paid out can only be matched to a bill');
+  if (doc.currency !== 'INR') throw new BadRequestException('Record payments on foreign-currency documents from the invoice or bill screen');
+  const pay = await recordPayment(c, orgId, uid, documentId, { date: String(t.txn_date_text), amount: abs, accountId: Number(t.account_id), reference: t.reference ?? undefined }, ip);
+  await c.query("UPDATE bank_transactions SET status='reconciled', matched_entry_id=$2 WHERE id=$1", [t.id, pay.journalEntryId]);
+  return { reconciled: true, paymentId: pay.id, outstandingAfter: pay.outstandingAfter };
 }

@@ -67,7 +67,7 @@ await page.getByRole('cell', { name: 'Widget Maker' }).waitFor();
 // ---- export invoice in USD
 await nav('Invoices');
 await btn('New invoice').click();
-await page.getByLabel('Contact').selectOption({ label: 'Acme Inc' });
+await page.getByLabel('Contact', { exact: true }).fill('Acme Inc');
 await page.getByLabel('Supply type').selectOption({ label: 'Export under LUT (no GST)' });
 await page.getByLabel('Currency').fill('USD');
 await page.getByLabel('Exchange rate').fill('83.25');
@@ -90,7 +90,7 @@ await btn('Save item').click();
 await page.getByRole('cell', { name: 'WID', exact: true }).waitFor();
 await nav('Bills');
 await btn('New bill').click();
-await page.getByLabel('Contact').selectOption({ label: 'Widget Maker' });
+await page.getByLabel('Contact', { exact: true }).fill('Widget Maker');
 await page.getByLabel('Add from catalogue').selectOption({ label: 'WID · Widget' });
 await page.getByText('stock', { exact: true }).first().waitFor();
 await page.getByLabel('Qty 1').fill('10');
@@ -107,7 +107,7 @@ step('10 widgets bought at Rs 100: stock Rs 1,000, agrees with the Inventory acc
 // ---- approval
 await nav('Invoices');
 await btn('New invoice').click();
-await page.getByLabel('Contact').selectOption({ label: 'Local Co' });
+await page.getByLabel('Contact', { exact: true }).fill('Local Co');
 await page.getByLabel('Description 1').fill('Consulting');
 await page.getByLabel('Rate 1').fill('200');
 await btn('Submit for approval').click();

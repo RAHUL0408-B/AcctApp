@@ -22,12 +22,15 @@ function table(csv: string, aliases: Alias, required: string[]) {
   return { idx, data: rows.slice(1) };
 }
 
-export interface ContactRow { kind: 'customer' | 'supplier' | 'both'; name: string; gstin?: string; pan?: string; stateCode?: string; email?: string; phone?: string; }
+export interface ContactRow { kind: 'customer' | 'supplier' | 'both'; name: string; gstin?: string; pan?: string; stateCode?: string; email?: string; phone?: string;
+  bankAccountName?: string; bankName?: string; bankAccountNo?: string; bankIfsc?: string; }
 export function parseContacts(csv: string): ImportResult<ContactRow> {
   const { idx, data } = table(csv, {
     name: ['name', 'partyname', 'contactname', 'customername', 'suppliername', 'ledgername', 'displayname'],
     kind: ['type', 'kind', 'partytype', 'contacttype'], gstin: ['gstin', 'gstno', 'gstnumber', 'gstinuin'], pan: ['pan', 'panno'],
     state: ['statecode', 'state', 'placeofsupply'], email: ['email', 'emailid'], phone: ['phone', 'mobile', 'phoneno', 'contactno'],
+    bankAccountName: ['bankaccountname', 'accountholder', 'accountholdername'], bankName: ['bankname', 'bank'], bankAccountNo: ['bankaccountno', 'bankaccountnumber', 'accountno', 'accountnumber'],
+    bankIfsc: ['ifsc', 'ifsccode', 'bankifsc'],
   }, ['name']);
   const rows: ContactRow[] = [], errors: string[] = [];
   data.forEach((r, i) => {
@@ -38,8 +41,12 @@ export function parseContacts(csv: string): ImportResult<ContactRow> {
     const gstin = cell(r, idx.gstin).toUpperCase();
     if (gstin && !isValidGstin(gstin)) return errors.push(`Row ${n}: invalid GSTIN ${gstin}`);
     const st = cell(r, idx.state).slice(0, 2);
+    const ifsc = cell(r, idx.bankIfsc).toUpperCase(), acct = cell(r, idx.bankAccountNo).replace(/\s/g, '');
+    if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return errors.push(`Row ${n}: invalid IFSC ${ifsc}`);
+    if (acct && !/^\d{6,20}$/.test(acct)) return errors.push(`Row ${n}: bank account number must be 6-20 digits`);
     rows.push({ kind, name, gstin: gstin || undefined, pan: cell(r, idx.pan).toUpperCase() || undefined, stateCode: /^\d{2}$/.test(st) ? st : undefined,
-      email: cell(r, idx.email) || undefined, phone: cell(r, idx.phone) || undefined });
+      email: cell(r, idx.email) || undefined, phone: cell(r, idx.phone) || undefined,
+      bankAccountName: cell(r, idx.bankAccountName) || undefined, bankName: cell(r, idx.bankName) || undefined, bankAccountNo: acct || undefined, bankIfsc: ifsc || undefined });
   });
   return { rows, errors };
 }

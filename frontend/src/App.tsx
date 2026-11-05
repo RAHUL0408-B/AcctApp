@@ -239,6 +239,12 @@ export function App() {
 
       <main className="px-6 py-6">
         <div className="mx-auto max-w-7xl space-y-5">
+          {route !== '/clients' && (
+            <button onClick={() => (history.length > 1 ? history.back() : navigate(org ? `/o/${org.id}/dashboard` : '/clients'))} aria-label="Go back"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-slate-600 hover:bg-slate-200/60 hover:text-slate-900">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M15 18l-6-6 6-6" /></svg>Back
+            </button>
+          )}
           <ErrorBoundary key={route}>
             {route === '/clients' && <Clients me={me} orgs={orgs} firmRole={firmRole?.role} onOpen={(id) => navigate(`/o/${id}/dashboard`)} onChanged={load} />}
             {m && org && <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} />}

@@ -5,8 +5,10 @@ import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireOrg } from '../tenancy/acl';
-import { financialYearOf } from '../ledger/ledger';
-import { accountIdByCode, insertEntry } from '../ledger/post';
+import { financialYearOf, Line, validateLines } from '../ledger/ledger';
+import { ASSET_GROUPS } from './assetgroups';
+import { PoolClient } from 'pg';
+import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
 import { aged } from '../accounting/reports';
 import { createDocument, DocLineInput, priceLines } from '../accounting/documents.controller';
 import { isValidGstin } from '../tax/gst';
@@ -22,6 +24,39 @@ const lineSchema = z.object({
   description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
   quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0), accountId: z.number().int().positive().optional(),
 });
+
+const assetSchema = z.object({
+  name: z.string().min(1).max(200), code: z.string().trim().min(1).max(30).optional(), group: z.string().max(100).optional(), purchaseDate: date,
+  cost: z.number().int().positive(), residual: z.number().int().min(0).default(0), method: z.enum(['slm', 'wdv', 'slm_life']),
+  rateBp: z.number().int().min(1).max(10000).optional(), usefulLifeMonths: z.number().int().min(1).max(1200).optional(), dayBasis: z.enum(['months', 'actual_days']).default('months'),
+}).superRefine((b, ctx) => {
+  if (b.residual >= b.cost) ctx.addIssue({ code: 'custom', message: 'Residual value must be less than cost' });
+  if (b.method === 'slm_life' && !b.usefulLifeMonths) ctx.addIssue({ code: 'custom', message: 'Give the useful life in months' });
+  if (b.method !== 'slm_life' && !b.rateBp) ctx.addIssue({ code: 'custom', message: 'Give the depreciation rate' });
+});
+/** For a useful-life asset the yearly rate is stored too (for the register); the life itself drives the maths. */
+const assetFields = (b: z.infer<typeof assetSchema>) => b.method === 'slm_life'
+  ? { usefulLifeMonths: b.usefulLifeMonths!, rateBp: Math.max(1, Math.min(10000, Math.round(120000 / b.usefulLifeMonths!))) }
+  : { usefulLifeMonths: null as number | null, rateBp: b.rateBp! };
+async function nextAssetCode(c: PoolClient) {
+  const max = Number((await c.query("SELECT COALESCE(MAX(substring(code from '^FA-(\\d+)$')::int),0) AS m FROM fixed_assets")).rows[0].m);
+  for (let n = max + 1; ; n++) { const code = `FA-${String(n).padStart(4, '0')}`; if (!(await c.query('SELECT 1 FROM fixed_assets WHERE lower(code)=lower($1)', [code])).rowCount) return code; }
+}
+/** Month-end depreciation not yet posted for an asset, up to and including `through`. */
+async function planDepreciation(c: PoolClient, a: any, through: string) {
+  let acc = Number((await c.query('SELECT COALESCE(SUM(amount),0) AS s FROM asset_depreciation WHERE asset_id=$1', [a.id])).rows[0].s);
+  const done = new Set((await c.query('SELECT period_end::text AS p FROM asset_depreciation WHERE asset_id=$1', [a.id])).rows.map((r) => r.p));
+  const purchase = typeof a.purchase_date === 'string' ? a.purchase_date : new Date(a.purchase_date.getTime() - a.purchase_date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const out: { end: string; amount: number }[] = [];
+  for (const end of monthEnds(purchase, through)) {
+    if (done.has(end)) continue;
+    const amount = monthlyDepreciation({ cost: Number(a.cost), residual: Number(a.residual), method: a.method, rateBp: a.rate_bp, purchaseDate: purchase, accumulated: acc,
+      usefulLifeMonths: a.useful_life_months, dayBasis: a.day_basis, periodEnd: end });
+    if (amount <= 0) break;
+    out.push({ end, amount }); acc += amount;
+  }
+  return out;
+}
 const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer' }, purchase_order: { prefix: 'PO', docType: 'bill', contactKinds: 'supplier' } } as const;
 
 @Controller('orgs/:orgId')
@@ -96,6 +131,25 @@ export class ExtrasController {
     });
   }
 
+  /** Change an item, including its default sales and purchase accounts. Documents already posted are not touched. */
+  @Put('items/:id')
+  async editItem(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({
+      name: z.string().min(1).max(200), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').nullable().optional(), saleRate: z.number().int().min(0).default(0), purchaseRate: z.number().int().min(0).default(0),
+      gstRateBp: z.number().int().min(0).max(5000).default(1800), salesAccountId: z.number().int().positive().nullable().optional(), purchaseAccountId: z.number().int().positive().nullable().optional(),
+    }), body);
+    return withOrg(orgId, async (c) => {
+      if (b.salesAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type='income'", [b.salesAccountId])).rowCount) throw new BadRequestException('The sales account must be an income account');
+      if (b.purchaseAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type IN ('expense','asset')", [b.purchaseAccountId])).rowCount) throw new BadRequestException('The purchase account must be an expense or asset account');
+      const r = await c.query('UPDATE items SET name=$2,hsn_sac=$3,sale_rate=$4,purchase_rate=$5,gst_rate_bp=$6,sales_account_id=$7,purchase_account_id=$8 WHERE id=$1 AND active RETURNING id',
+        [id, b.name, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null]);
+      if (!r.rowCount) throw new NotFoundException('Item not found');
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'item', entityId: id, after: b, ip });
+      return { ok: true };
+    });
+  }
+
   @Post('items/:id/archive')
   async archiveItem(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number) {
     await requireOrg(uid, orgId, 'post');
@@ -128,6 +182,34 @@ export class ExtrasController {
     });
   }
 
+  @Get('pre-documents/:id')
+  async preDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number) {
+    await requireOrg(uid, orgId, 'read');
+    return withOrg(orgId, async (c) => {
+      const p = (await c.query(`SELECT p.id,p.kind,p.number,p.contact_id AS "contactId",ct.name AS "contactName",p.issue_date::text AS "issueDate",p.expiry_date::text AS "expiryDate",p.status,p.lines,p.notes,p.total
+        FROM pre_documents p JOIN contacts ct ON ct.id=p.contact_id WHERE p.id=$1`, [id])).rows[0];
+      if (!p) throw new NotFoundException('Not found');
+      return num(p, 'id', 'contactId', 'total');
+    });
+  }
+
+  /** Edit a quote or purchase order until it has been turned into an invoice or bill. */
+  @Put('pre-documents/:id')
+  async editPreDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200) }), body);
+    return withOrg(orgId, async (c) => {
+      const p = (await c.query('SELECT kind,status FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!p) throw new NotFoundException('Not found');
+      if (p.status === 'converted') throw new ConflictException('This has already been turned into an invoice or bill, so it can no longer be edited');
+      const { t } = await priceLines(c, orgId, p.kind === 'quote', b.contactId, b.issueDate, b.lines);
+      await c.query('UPDATE pre_documents SET contact_id=$2,issue_date=$3,expiry_date=$4,lines=$5,subtotal=$6,tax=$7,total=$8,notes=$9 WHERE id=$1',
+        [id, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null]);
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: p.kind, entityId: id, after: { total: t.total }, ip });
+      return { ok: true, total: t.total };
+    });
+  }
+
   @Post('pre-documents/:id/status')
   async preStatus(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown) {
     await requireOrg(uid, orgId, 'post');
@@ -143,14 +225,18 @@ export class ExtrasController {
   @Post('pre-documents/:id/convert')
   async convert(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    const b = parse(z.object({ issueDate: date.default(today()), dueDate: date.optional() }), body ?? {});
+    // Everything after the dates is optional: the screen lets the user change the lines and details before anything is posted.
+    const b = parse(z.object({ issueDate: date.default(today()), dueDate: date.optional(), contactId: z.number().int().positive().optional(), lines: z.array(lineSchema).min(1).max(200).optional(),
+      notes: z.string().max(500).optional(), supplierRef: z.string().max(60).optional(), placeOfSupply: z.string().length(2).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).optional(),
+      tdsSection: z.string().optional(), number: z.string().trim().min(1).max(40).optional() }), body ?? {});
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT * FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
       if (!p) throw new NotFoundException('Not found');
       if (p.status === 'converted') throw new ConflictException('Already converted');
       if (p.status === 'declined') throw new ConflictException('A declined document cannot be converted');
       const spec = PRE[p.kind as keyof typeof PRE];
-      const doc = await createDocument(c, orgId, uid, { docType: spec.docType, contactId: Number(p.contact_id), issueDate: b.issueDate, dueDate: b.dueDate, lines: p.lines, supplierRef: p.kind === 'purchase_order' ? p.number : undefined, notes: p.notes ?? undefined } as any, ip);
+      const doc = await createDocument(c, orgId, uid, { docType: spec.docType, contactId: b.contactId ?? Number(p.contact_id), issueDate: b.issueDate, dueDate: b.dueDate, lines: b.lines ?? p.lines,
+        supplierRef: b.supplierRef ?? (p.kind === 'purchase_order' ? p.number : undefined), notes: b.notes ?? p.notes ?? undefined, placeOfSupply: b.placeOfSupply, supplyType: b.supplyType ?? 'regular', tdsSection: b.tdsSection, number: b.number } as any, ip);
       await c.query("UPDATE pre_documents SET status='converted', converted_doc_id=$2 WHERE id=$1", [id, doc.id]);
       await writeAudit(c, { orgId, userId: uid, action: 'convert', entity: p.kind, entityId: id, after: { documentId: doc.id, number: doc.number }, ip });
       return { documentId: doc.id, number: doc.number };
@@ -278,26 +364,65 @@ export class ExtrasController {
   }
 
   // ---------- fixed assets ----------
+  @Get('asset-groups')
+  async assetGroups(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    return ASSET_GROUPS;
+  }
+
   @Get('fixed-assets')
   async assets(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
     return withOrg(orgId, async (c) => (await c.query(
-      `SELECT a.id,a.name,a.purchase_date AS "purchaseDate",a.cost,a.residual,a.method,a.rate_bp AS "rateBp",a.status,
+      `SELECT a.id,a.code,a.name,a.asset_group AS "group",a.purchase_date AS "purchaseDate",a.cost,a.residual,a.method,a.rate_bp AS "rateBp",a.status,
+              a.useful_life_months AS "usefulLifeMonths",a.day_basis AS "dayBasis",a.disposed_on::text AS "disposedOn",a.disposal_proceeds AS "disposalProceeds",a.disposal_gain AS "disposalGain",
               COALESCE((SELECT SUM(amount) FROM asset_depreciation d WHERE d.asset_id=a.id),0) AS accumulated
-         FROM fixed_assets a ORDER BY a.purchase_date, a.id`)).rows.map((r) => { num(r, 'id', 'cost', 'residual', 'rateBp', 'accumulated'); return { ...r, bookValue: r.cost - r.accumulated }; }));
+         FROM fixed_assets a ORDER BY a.purchase_date, a.id`)).rows.map((r) => { num(r, 'id', 'cost', 'residual', 'rateBp', 'accumulated', 'usefulLifeMonths', 'disposalProceeds', 'disposalGain'); return { ...r, bookValue: r.cost - r.accumulated }; }));
+  }
+
+  /** The code the next asset would get (FA-0001, FA-0002, ...). The user may type a different one. */
+  @Get('fixed-assets-next-code')
+  async nextAssetCode(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    return withOrg(orgId, async (c) => ({ code: await nextAssetCode(c) }));
   }
 
   @Post('fixed-assets')
   async addAsset(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'manage');
-    const b = parse(z.object({ name: z.string().min(1).max(200), purchaseDate: date, cost: z.number().int().positive(), residual: z.number().int().min(0).default(0),
-      method: z.enum(['slm', 'wdv']), rateBp: z.number().int().min(1).max(10000) }), body);
-    if (b.residual >= b.cost) throw new BadRequestException('Residual value must be less than cost');
+    const b = parse(assetSchema, body);
+    const f = assetFields(b);
     return withOrg(orgId, async (c) => {
-      const r = (await c.query('INSERT INTO fixed_assets(org_id,name,purchase_date,cost,residual,method,rate_bp,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-        [orgId, b.name, b.purchaseDate, b.cost, b.residual, b.method, b.rateBp, uid])).rows[0];
-      await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'fixed_asset', entityId: r.id, after: b, ip });
-      return { id: Number(r.id) };
+      const code = b.code?.trim() || (await nextAssetCode(c));
+      if ((await c.query('SELECT 1 FROM fixed_assets WHERE lower(code)=lower($1)', [code])).rowCount) throw new ConflictException(`Asset code ${code} is already used`);
+      const r = (await c.query(`INSERT INTO fixed_assets(org_id,code,name,asset_group,purchase_date,cost,residual,method,rate_bp,useful_life_months,day_basis,created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [orgId, code, b.name, b.group ?? null, b.purchaseDate, b.cost, b.residual, b.method, f.rateBp, f.usefulLifeMonths, b.dayBasis, uid])).rows[0];
+      await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'fixed_asset', entityId: r.id, after: { ...b, code }, ip });
+      return { id: Number(r.id), code };
+    });
+  }
+
+  /** Edit an asset. Once depreciation has been posted only the name, code and group can change. */
+  @Put('fixed-assets/:id')
+  async editAsset(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    const b = parse(assetSchema, body);
+    const f = assetFields(b);
+    return withOrg(orgId, async (c) => {
+      const a = (await c.query('SELECT * FROM fixed_assets WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!a) throw new NotFoundException('Asset not found');
+      if (a.status === 'disposed') throw new ConflictException('A disposed asset cannot be edited');
+      const code = b.code?.trim() || a.code;
+      if ((await c.query('SELECT 1 FROM fixed_assets WHERE lower(code)=lower($1) AND id<>$2', [code, id])).rowCount) throw new ConflictException(`Asset code ${code} is already used`);
+      const posted = (await c.query('SELECT 1 FROM asset_depreciation WHERE asset_id=$1', [id])).rowCount;
+      const changed = String(a.purchase_date.toISOString?.().slice(0, 10) ?? a.purchase_date) !== b.purchaseDate || Number(a.cost) !== b.cost || Number(a.residual) !== b.residual || a.method !== b.method
+        || a.rate_bp !== f.rateBp || (a.useful_life_months ?? null) !== f.usefulLifeMonths || a.day_basis !== b.dayBasis;
+      if (posted && changed) throw new ConflictException('Depreciation has already been posted for this asset, so its cost, dates and depreciation settings are locked. You can still change the name, code and group.');
+      await c.query(`UPDATE fixed_assets SET code=$2,name=$3,asset_group=$4,purchase_date=$5,cost=$6,residual=$7,method=$8,rate_bp=$9,useful_life_months=$10,day_basis=$11 WHERE id=$1`,
+        [id, code, b.name, b.group ?? null, b.purchaseDate, b.cost, b.residual, b.method, f.rateBp, f.usefulLifeMonths, b.dayBasis]);
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'fixed_asset', entityId: id, after: { ...b, code }, ip });
+      return { ok: true, code };
     });
   }
 
@@ -311,16 +436,11 @@ export class ExtrasController {
       const assets = (await c.query("SELECT * FROM fixed_assets WHERE status='active' ORDER BY id")).rows;
       let posted = 0, total = 0;
       for (const a of assets) {
-        let acc = Number((await c.query('SELECT COALESCE(SUM(amount),0) AS s FROM asset_depreciation WHERE asset_id=$1', [a.id])).rows[0].s);
-        const done = new Set((await c.query('SELECT period_end::text AS p FROM asset_depreciation WHERE asset_id=$1', [a.id])).rows.map((r) => r.p));
-        for (const end of monthEnds(a.purchase_date, b.through)) {
-          if (done.has(end)) continue;
-          const amount = monthlyDepreciation({ cost: Number(a.cost), residual: Number(a.residual), method: a.method, rateBp: a.rate_bp, purchaseDate: a.purchase_date, accumulated: acc });
-          if (amount <= 0) break;
-          const eid = await insertEntry(c, orgId, uid, end, `Depreciation ${a.name} to ${end}`, `DEP-${a.id}`, null,
-            [{ accountId: expense, debit: amount, credit: 0 }, { accountId: accum, debit: 0, credit: amount }]);
-          await c.query('INSERT INTO asset_depreciation(org_id,asset_id,period_end,amount,entry_id) VALUES ($1,$2,$3,$4,$5)', [orgId, a.id, end, amount, eid]);
-          acc += amount; posted++; total += amount;
+        for (const d of await planDepreciation(c, a, b.through)) {
+          const eid = await insertEntry(c, orgId, uid, d.end, `Depreciation ${a.name} to ${d.end}`, `DEP-${a.id}`, null,
+            [{ accountId: expense, debit: d.amount, credit: 0 }, { accountId: accum, debit: 0, credit: d.amount }]);
+          await c.query('INSERT INTO asset_depreciation(org_id,asset_id,period_end,amount,entry_id) VALUES ($1,$2,$3,$4,$5)', [orgId, a.id, d.end, d.amount, eid]);
+          posted++; total += d.amount;
         }
       }
       await writeAudit(c, { orgId, userId: uid, action: 'run_depreciation', entity: 'fixed_asset', after: { through: b.through, posted, total }, ip });
@@ -328,15 +448,50 @@ export class ExtrasController {
     });
   }
 
+  /**
+   * Dispose of an asset. With `preview: true` it only works out the gain or loss. With `proceeds` it posts the sale:
+   * Dr bank (proceeds), Dr Accumulated Depreciation, Cr Fixed Assets (cost), and Cr Profit / Dr Loss on sale. Depreciation up to the
+   * last month end before the date is posted first. Without `proceeds` it only stops depreciation, as before.
+   */
   @Post('fixed-assets/:id/dispose')
   async dispose(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'manage');
-    const b = parse(z.object({ date }), body);
+    const b = parse(z.object({ date, proceeds: z.number().int().min(0).optional(), accountId: z.number().int().positive().optional(), preview: z.boolean().default(false) }), body);
     return withOrg(orgId, async (c) => {
-      const r = await c.query("UPDATE fixed_assets SET status='disposed', disposed_on=$2 WHERE id=$1 AND status='active' RETURNING id", [id, b.date]);
-      if (!r.rowCount) throw new NotFoundException('Active asset not found');
-      await writeAudit(c, { orgId, userId: uid, action: 'dispose', entity: 'fixed_asset', entityId: id, after: b, ip });
-      return { ok: true, note: 'Depreciation stops. Post the sale proceeds and any gain or loss with a journal entry.' };
+      const a = (await c.query("SELECT * FROM fixed_assets WHERE id=$1 AND status='active' FOR UPDATE", [id])).rows[0];
+      if (!a) throw new NotFoundException('Active asset not found');
+      if (b.date < String(a.purchase_date.toISOString?.().slice(0, 10) ?? a.purchase_date)) throw new BadRequestException('The disposal date is before the purchase date');
+      const lastMonthEnd = new Date(Date.UTC(Number(b.date.slice(0, 4)), Number(b.date.slice(5, 7)) - 1, 0)).toISOString().slice(0, 10);
+      const dayEnd = new Date(Date.UTC(Number(b.date.slice(0, 4)), Number(b.date.slice(5, 7)), 0)).toISOString().slice(0, 10);
+      const through = b.date === dayEnd ? b.date : lastMonthEnd; // a sale on a month end includes that month
+      const pending = await planDepreciation(c, a, through);
+      const accumulated = Number((await c.query('SELECT COALESCE(SUM(amount),0) AS s FROM asset_depreciation WHERE asset_id=$1', [id])).rows[0].s) + pending.reduce((s, d) => s + d.amount, 0);
+      const cost = Number(a.cost), bookValue = cost - accumulated, proceeds = b.proceeds ?? 0, gain = proceeds - bookValue;
+      const summary = { cost, accumulatedDepreciation: accumulated, pendingDepreciation: pending.reduce((s, d) => s + d.amount, 0), bookValue, proceeds, gain, isGain: gain >= 0, depreciatedThrough: through };
+      if (b.preview) return { preview: true, ...summary };
+      if (b.proceeds === undefined) {
+        await c.query("UPDATE fixed_assets SET status='disposed', disposed_on=$2 WHERE id=$1", [id, b.date]);
+        await writeAudit(c, { orgId, userId: uid, action: 'dispose', entity: 'fixed_asset', entityId: id, after: b, ip });
+        return { ok: true, note: 'Depreciation stops. Give the sale proceeds to post the sale and the gain or loss.' };
+      }
+      if (proceeds > 0 && !b.accountId) throw new BadRequestException('Choose the account the sale proceeds go to');
+      if (b.accountId && !(await c.query('SELECT 1 FROM accounts WHERE id=$1 AND is_active', [b.accountId])).rowCount) throw new BadRequestException('Proceeds account not found');
+      const expense = await accountIdByCode(c, '5580'), accum = await accountIdByCode(c, '1690'), fixed = await accountIdByCode(c, '1600');
+      for (const d of pending) {
+        const eid = await insertEntry(c, orgId, uid, d.end, `Depreciation ${a.name} to ${d.end}`, `DEP-${a.id}`, null,
+          [{ accountId: expense, debit: d.amount, credit: 0 }, { accountId: accum, debit: 0, credit: d.amount }]);
+        await c.query('INSERT INTO asset_depreciation(org_id,asset_id,period_end,amount,entry_id) VALUES ($1,$2,$3,$4,$5)', [orgId, id, d.end, d.amount, eid]);
+      }
+      const lines: Line[] = [];
+      if (proceeds > 0) lines.push({ accountId: b.accountId!, debit: proceeds, credit: 0 });
+      if (accumulated > 0) lines.push({ accountId: accum, debit: accumulated, credit: 0 });
+      lines.push({ accountId: fixed, debit: 0, credit: cost });
+      if (gain > 0) lines.push({ accountId: await ensureAccount(c, orgId, '4400'), debit: 0, credit: gain });
+      if (gain < 0) lines.push({ accountId: await ensureAccount(c, orgId, '5590'), debit: -gain, credit: 0 });
+      const eid = await insertEntry(c, orgId, uid, b.date, `Disposal of ${a.code} ${a.name}`, `DISP-${a.id}`, null, validateLines(lines));
+      await c.query("UPDATE fixed_assets SET status='disposed', disposed_on=$2, disposal_proceeds=$3, disposal_account_id=$4, disposal_gain=$5, disposal_entry_id=$6 WHERE id=$1", [id, b.date, proceeds, b.accountId ?? null, gain, eid]);
+      await writeAudit(c, { orgId, userId: uid, action: 'dispose', entity: 'fixed_asset', entityId: id, after: { ...b, ...summary, entryId: eid }, ip });
+      return { ok: true, entryId: eid, ...summary };
     });
   }
 

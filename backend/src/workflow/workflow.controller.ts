@@ -1,5 +1,5 @@
 // Approval workflows: invoices and bills submitted for approval, and employee expense claims.
-import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
@@ -92,8 +92,33 @@ export class WorkflowController {
   async claims(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
     return withOrg(orgId, async (c) => (await c.query(
-      `SELECT e.id, e.claim_date::text AS date, e.title, e.lines, e.total, e.status, e.reason, u.full_name AS claimant
-         FROM expense_claims e JOIN users u ON u.id=e.claimant_id ORDER BY e.id DESC`)).rows.map((r) => ({ ...r, id: Number(r.id), total: Number(r.total) })));
+      `SELECT e.id, e.claim_date::text AS date, e.title, e.lines, e.total, e.status, e.reason, e.claimant_id AS "claimantId", u.full_name AS claimant
+         FROM expense_claims e JOIN users u ON u.id=e.claimant_id ORDER BY e.id DESC`)).rows.map((r) => ({ ...r, id: Number(r.id), claimantId: Number(r.claimantId), total: Number(r.total) })));
+  }
+
+  /**
+   * A rejected claim goes back to the person who made it. They correct it here and it is sent again for approval.
+   * Only the claimant can do this, and only while the claim is rejected.
+   */
+  @Put('expense-claims/:id')
+  async resubmitClaim(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({
+      date, title: z.string().min(1).max(200),
+      lines: z.array(z.object({ description: z.string().min(1).max(300), accountId: z.number().int().positive(), amount: z.number().int().positive() })).min(1).max(100),
+    }), body);
+    return withOrg(orgId, async (c) => {
+      const e = (await c.query('SELECT claimant_id, status FROM expense_claims WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!e) throw new NotFoundException('Not found');
+      if (Number(e.claimant_id) !== Number(uid)) throw new ForbiddenException('Only the person who made the claim can correct and resubmit it');
+      if (e.status !== 'rejected') throw new ConflictException('Only a rejected claim can be corrected and resubmitted');
+      const ids = [...new Set(b.lines.map((l) => l.accountId))];
+      if ((await c.query("SELECT id FROM accounts WHERE id = ANY($1) AND type='expense' AND is_active", [ids])).rowCount !== ids.length) throw new BadRequestException('Every line needs an active expense account');
+      const total = b.lines.reduce((s, l) => s + l.amount, 0);
+      await c.query("UPDATE expense_claims SET claim_date=$2, title=$3, lines=$4, total=$5, status='submitted', decided_by=NULL, reason=NULL WHERE id=$1", [id, b.date, b.title, JSON.stringify(b.lines), total]);
+      await writeAudit(c, { orgId, userId: uid, action: 'resubmit', entity: 'expense_claim', entityId: id, after: { title: b.title, total }, ip });
+      return { id, total, status: 'submitted' };
+    });
   }
 
   /** Approving books the expenses: Dr each expense / Cr Employee Reimbursements Payable. */

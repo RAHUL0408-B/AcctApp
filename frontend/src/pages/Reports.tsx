@@ -9,6 +9,7 @@ const REPORTS = [
   ['cf', 'Cash flow'], ['ar', 'Aged receivables'], ['ap', 'Aged payables'], ['gstr1', 'GSTR-1'], ['gstr3b', 'GSTR-3B'],
   ['pnlm', 'P&L by month'], ['pnlt', 'P&L by category'], ['bva', 'Budget vs actual'],
   ['stcf', 'Short-term cash flow'], ['snap', 'Business snapshot'], ['tds', 'TDS deducted'],
+  ['alll', 'All ledgers'], ['invw', 'Invoice-wise'], ['billw', 'Bill-wise'], ['preg', 'Purchase register'], ['far', 'Fixed asset register'],
 ] as const;
 
 /** Starred reports, kept in this browser and shown in the Reporting menu. */
@@ -22,8 +23,10 @@ const toggleFavourite = (k: string) => {
   const keys = favouriteReports().map((f) => f.key);
   localStorage.setItem(FAV_KEY, JSON.stringify(keys.includes(k) ? keys.filter((x) => x !== k) : [...keys, k]));
 };
-const RANGED = ['pnl', 'ledger', 'gstr1', 'gstr3b', 'cf', 'pnlm', 'pnlt', 'bva', 'snap', 'tds'];
-const EXPORT: Record<string, string> = { tb: 'trial-balance', pnl: 'pnl', bs: 'balance-sheet', ledger: 'ledger', cf: '', ar: 'aged-receivables', ap: 'aged-payables', gstr1: 'gstr1-b2b', gstr3b: 'gstr3b', pnlm: '', pnlt: '', bva: '', stcf: '', snap: '', tds: '' };
+const RANGED = ['pnl', 'ledger', 'gstr1', 'gstr3b', 'cf', 'pnlm', 'pnlt', 'bva', 'snap', 'tds', 'alll', 'invw', 'billw', 'preg'];
+/** Reports that come from the shared table builder, so they can be shown as a table and exported. */
+const TABLE: Record<string, string> = { alll: 'all-ledgers', invw: 'invoice-wise', billw: 'bill-wise', preg: 'purchase-register', far: 'fixed-assets' };
+const EXPORT: Record<string, string> = { tb: 'trial-balance', pnl: 'pnl', bs: 'balance-sheet', ledger: 'ledger', cf: '', ar: 'aged-receivables', ap: 'aged-payables', gstr1: 'gstr1-b2b', gstr3b: 'gstr3b', pnlm: '', pnlt: '', bva: '', stcf: '', snap: '', tds: '', alll: 'all-ledgers', invw: 'invoice-wise', billw: 'bill-wise', preg: 'purchase-register', far: 'fixed-assets' };
 
 export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string }) {
   const known = (k?: string) => (k && REPORTS.some(([x]) => x === k) ? k : undefined);
@@ -59,7 +62,8 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
     const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/reports/ledger/${accountId}?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}`,
       pnlm: `/reports/pnl-by-month?${q}`, pnlt: `/reports/pnl-by-tracking?${q}`, bva: `/reports/budget-vs-actual?${q}`,
-      stcf: `/reports/short-term-cash-flow?${q}`, snap: `/reports/business-snapshot?${q}`, tds: `/reports/tds?${q}` }[rep]!;
+      stcf: `/reports/short-term-cash-flow?${q}`, snap: `/reports/business-snapshot?${q}`, tds: `/reports/tds?${q}`,
+      alll: `/report-table/all-ledgers?${q}`, invw: `/report-table/invoice-wise?${q}`, billw: `/report-table/bill-wise?${q}`, preg: `/report-table/purchase-register?${q}`, far: `/report-table/fixed-assets?${q}` }[rep]!;
     if ((rep === 'ledger' && !accountId) || (rep === 'pnlt' && !categoryId) || (rep === 'bva' && !budgetId)) return;
     const current = rep;
     const d = await api(`/orgs/${org.id}${url}`);
@@ -68,6 +72,8 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
   useEffect(() => { load(); }, [rep, org.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}`, `${EXPORT[rep]}.${format}`));
+  // Every account's ledger in one file, for the same dates.
+  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}`, `all-ledgers.${format}`); });
 
   return (
     <>
@@ -87,10 +93,11 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
           <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
           {EXPORT[rep] && <><Button variant="ghost" onClick={() => exp('pdf')}>Export PDF</Button>
           <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button></>}
+          {rep === 'ledger' && <><Button variant="ghost" onClick={() => expAll('xlsx')}>Export all accounts (Excel)</Button><Button variant="ghost" onClick={() => expAll('pdf')}>Export all accounts (PDF)</Button></>}
         </div>
         <div className="mt-3"><ErrorMsg msg={error} /></div>
       </Card>
-      {data && data.rep === rep && <Card title={REPORTS.find((r) => r[0] === rep)![1]}><ReportView rep={rep} d={data.d} /></Card>}
+      {data && data.rep === rep && <Card title={REPORTS.find((r) => r[0] === rep)![1]}><ReportView rep={rep} d={data.d} org={org} reload={load} /></Card>}
     </>
   );
 }
@@ -99,7 +106,8 @@ const Row = ({ label, v, bold }: { label: string; v: number; bold?: boolean }) =
   <tr className={`border-t border-slate-100 ${bold ? 'font-semibold' : ''}`}><td className="py-1">{label}</td><td className="text-right">{fmt(v)}</td></tr>
 );
 
-function ReportView({ rep, d }: { rep: string; d: any }) {
+function ReportView({ rep, d, org, reload }: { rep: string; d: any; org: Org; reload: () => void }) {
+  if (TABLE[rep]) return <TableReport d={d} org={org} reload={reload} selectable={['invw', 'billw', 'preg'].includes(rep)} />;
   if (rep === 'tb') return (
     <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead>
       <tbody>{d.accounts.map((a: any) => <tr key={a.code} className="border-t border-slate-100"><td>{a.code} {a.name}</td><td className="text-right">{a.debit ? fmt(a.debit) : ''}</td><td className="text-right">{a.credit ? fmt(a.credit) : ''}</td></tr>)}
@@ -233,6 +241,48 @@ function TdsReport({ d }: { d: any }) {
               <tr className="border-t-2 font-semibold"><td colSpan={7}>Total TDS</td><td className="text-right" data-testid="tds-total">{fmt(d.totalTds)}</td></tr></tbody></table>)}
       </div>
       <p className="text-xs text-amber-700">{d.note}</p>
+    </div>
+  );
+}
+
+/** A report built as a plain table. Document reports let you tick rows and archive or delete them. */
+function TableReport({ d, org, reload, selectable }: { d: any; org: Org; reload: () => void; selectable: boolean }) {
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [ok, setOk] = useState('');
+  const { error, busy, run } = useAction();
+  const ids: (number | null)[] = d.rowIds ?? [];
+  const bold = new Set<number>(d.boldRows ?? []);
+  const toggle = (id: number) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const act = (what: 'archive' | 'delete') => run(async () => {
+    const list = [...picked]; if (!list.length) return;
+    if (what === 'delete') {
+      if (!window.confirm(`Delete ${list.length} document(s)? Each is cancelled with a reversing entry. Ones with payments or credit/debit notes are skipped.`)) return;
+      const r = await api(`/orgs/${org.id}/documents/bulk-void`, { body: { ids: list, date: today(), reason: 'Deleted from a report' } });
+      setOk(`${r.voided.length} deleted.${r.failed.length ? ` ${r.failed.length} skipped: ${r.failed.map((x: any) => `${x.number ?? x.id} (${x.reason})`).join('; ')}` : ''}`);
+    } else {
+      await api(`/orgs/${org.id}/documents/bulk-archive`, { body: { ids: list, archived: true } });
+      setOk(`${list.length} archived. They no longer appear in this report or the lists; use "Show archived" on the Invoices or Bills page to see them.`);
+    }
+    setPicked(new Set()); reload();
+  });
+  return (
+    <div className="text-sm">
+      <p className="mb-2 text-slate-500">{d.subtitle}</p>
+      {selectable && picked.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-brand-50 px-3 py-2"><b>{picked.size} selected</b>
+          <Button variant="danger" disabled={busy} onClick={() => act('delete')}>Delete selected</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => act('archive')}>Archive selected</Button>
+          <Button variant="ghost" onClick={() => setPicked(new Set())}>Clear</Button></div>)}
+      <div className="mb-2 space-y-2"><ErrorMsg msg={error} />{ok && <p className="rounded bg-green-50 px-3 py-2 text-green-800">{ok}</p>}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full" data-testid="table-report"><thead><tr className="text-left text-slate-500">{selectable && <th className="w-8" />}{d.columns.map((c: any, i: number) => <th key={i} className={c.type === 'money' ? 'text-right' : ''}>{c.header}</th>)}</tr></thead>
+          <tbody>{d.rows.map((r: (string | number)[], ri: number) => (
+            <tr key={ri} className={`border-t border-slate-100 ${bold.has(ri) ? 'font-semibold' : ''}`}>
+              {selectable && <td>{ids[ri] != null && <input type="checkbox" aria-label={`Select ${r[0]}`} checked={picked.has(ids[ri] as number)} onChange={() => toggle(ids[ri] as number)} />}</td>}
+              {r.map((v, ci) => <td key={ci} className={d.columns[ci].type === 'money' ? 'text-right' : ''}>{d.columns[ci].type === 'money' ? (typeof v === 'number' ? fmt(v) : '') : String(v)}</td>)}
+            </tr>))}</tbody></table>
+        {d.rows.length === 0 && <p className="py-6 text-center text-slate-500">Nothing to show for these dates.</p>}
+      </div>
     </div>
   );
 }

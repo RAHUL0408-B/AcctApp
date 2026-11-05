@@ -15,6 +15,7 @@ import { Inventory } from './Inventory';
 import { Approvals, ExpenseClaims } from './Approvals';
 import { Budgets, Tracking, YearEnd } from './Planning';
 import { Overview } from './Overview';
+import { Journal } from './Journal';
 import { Money } from './Money';
 import { Projects } from './Projects';
 
@@ -60,6 +61,8 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Projects', items: [{ key: 'projects', label: 'Projects' }] },
 ];
 
+const PLURAL: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
+
 export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const reloadAccounts = () => api<Account[]>(`/orgs/${org.id}/accounts`).then(setAccounts);
@@ -74,17 +77,17 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'quotes': return <PreDocs org={org} kind="quote" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'recurring': return <Recurring org={org} canPost={canPost} accounts={accounts} />;
-    case 'customers': return <Contacts org={org} canPost={canPost} only="customer" startNew={isNew} />;
-    case 'contacts': return <Contacts org={org} canPost={canPost} startNew={isNew} />;
+    case 'customers': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} only="customer" startNew={isNew} />;
+    case 'contacts': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} startNew={isNew} />;
     case 'bills': return <Documents org={org} kind="purchases" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'purchase-orders': return <PreDocs org={org} kind="purchase_order" canPost={canPost} accounts={accounts} startNew={isNew} />;
-    case 'suppliers': return <Contacts org={org} canPost={canPost} only="supplier" startNew={isNew} />;
+    case 'suppliers': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} only="supplier" startNew={isNew} />;
     case 'bank': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="reconcile" />;
     case 'bank-rules': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="rules" />;
     case 'money': return <Money org={org} canPost={canPost} accounts={accounts} tab={sub === 'receive' || sub === 'transfer' ? sub : 'spend'} go={go} />;
     case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} /></>;
     case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Every account that transactions can post to." /><Chart org={org} accounts={accounts} canManage={canManage} reload={reloadAccounts} /></>;
-    case 'assets': return <FixedAssets org={org} canManage={canManage} />;
+    case 'assets': return <FixedAssets org={org} canManage={canManage} accounts={accounts} />;
     case 'items': return <Items org={org} canPost={canPost} accounts={accounts} />;
     case 'reports': return <><PageHeader title="Reports" subtitle="Financial statements, analytics, ageing, GST and TDS. Star a report to add it to the Reporting menu." /><Reports org={org} accounts={accounts} initial={sub} /></>;
     case 'tasks': return <><PageHeader title="Tasks and deadlines" subtitle="Filing due dates and anything else the team needs to do for this client." /><Tasks org={org} canPost={canPost} /></>;
@@ -103,80 +106,6 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
   }
 }
-
-export function Journal({ org, accounts, canPost }: { org: Org; accounts: Account[]; canPost: boolean }) {
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today), [narration, setNarration] = useState('');
-  const [rows, setRows] = useState([{ accountId: '', debit: '', credit: '' }, { accountId: '', debit: '', credit: '' }]);
-  const { error, busy, run, setError } = useAction();
-  const [ok, setOk] = useState(''), [reason, setReason] = useState('Correction');
-  const load = useCallback(() => api(`/orgs/${org.id}/journal`).then(setEntries), [org.id]);
-  useEffect(() => { load(); }, [load]);
-
-  const name = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
-  const totalD = rows.reduce((s, r) => s + (r.debit ? safe(r.debit) : 0), 0), totalC = rows.reduce((s, r) => s + (r.credit ? safe(r.credit) : 0), 0);
-
-  const submit = () => run(async () => {
-    setOk('');
-    const lines = rows.filter((r) => r.accountId).map((r) => ({ accountId: Number(r.accountId), ...(r.debit ? { debit: toPaise(r.debit) } : {}), ...(r.credit ? { credit: toPaise(r.credit) } : {}) }));
-    await api(`/orgs/${org.id}/journal`, { body: { date, narration, lines } });
-    setNarration(''); setRows(rows.map(() => ({ accountId: '', debit: '', credit: '' }))); setOk('Entry posted.'); load();
-  });
-  const reverse = (id: number) => run(async () => {
-        await api(`/orgs/${org.id}/journal/${id}/reverse`, { body: { date: today, reason } }); setOk('Reversal posted.'); load();
-  });
-
-  return (
-    <>
-      {canPost && (
-        <Card title="New journal entry">
-          <div className="grid gap-3 md:grid-cols-3">
-            <Field label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <div className="md:col-span-2"><Field label="Narration" value={narration} onChange={(e) => setNarration(e.target.value)} /></div>
-          </div>
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="text-left text-slate-500"><th>Account</th><th className="w-36">Debit (₹)</th><th className="w-36">Credit (₹)</th></tr></thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td className="pr-2"><select aria-label={`Account ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1" value={r.accountId}
-                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, accountId: e.target.value } : x)))}>
-                    <option value="">Select account…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
-                  </select></td>
-                  <td className="pr-2"><input aria-label={`Debit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.debit}
-                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, debit: e.target.value, credit: e.target.value ? '' : x.credit } : x)))} /></td>
-                  <td><input aria-label={`Credit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.credit}
-                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, credit: e.target.value, debit: e.target.value ? '' : x.debit } : x)))} /></td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td></tr></tfoot>
-          </table>
-          <div className="mt-3 flex items-center gap-3">
-            <Button variant="ghost" onClick={() => setRows([...rows, { accountId: '', debit: '', credit: '' }])}>Add line</Button>
-            <Button onClick={submit} disabled={busy}>Post entry</Button>
-          </div>
-          <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
-        </Card>
-      )}
-      <Card title="Posted entries">
-        {canPost && <div className="mb-3 max-w-sm"><Field label="Reason used when reversing an entry" value={reason} onChange={(e) => setReason(e.target.value)} /></div>}
-        {entries.length === 0 ? <p className="text-sm text-slate-500">Nothing posted yet.</p> : entries.map((e) => (
-          <div key={e.id} className="border-b border-slate-100 py-3 last:border-0">
-            <div className="flex items-center justify-between text-sm">
-              <span><b>#{e.id}</b> · {e.date} · {e.narration}{e.reversesId && <em className="ml-2 text-amber-700">(reversal of #{e.reversesId})</em>}</span>
-              {canPost && !e.reversesId && <Button variant="ghost" onClick={() => { setError(''); reverse(e.id); }}>Reverse</Button>}
-            </div>
-            <ul className="mt-1 text-sm text-slate-600">{e.lines.map((l, i) => <li key={i} className="flex justify-between"><span>{name(l.accountId)}</span><span>{l.debit ? `Dr ${fmt(l.debit)}` : `Cr ${fmt(l.credit)}`}</span></li>)}</ul>
-          </div>
-        ))}
-      </Card>
-    </>
-  );
-}
-
-function safe(s: string) { try { return toPaise(s); } catch { return 0; } }
 
 function TrialBalance({ org }: { org: Org }) {
   const [tb, setTb] = useState<TB | null>(null);
@@ -213,7 +142,7 @@ export function Chart({ org, accounts, canManage, reload }: { org: Org; accounts
         </Card>
       )}
       {['asset', 'liability', 'equity', 'income', 'expense'].map((t) => (
-        <Card key={t} title={t[0].toUpperCase() + t.slice(1) + 's'}>
+        <Card key={t} title={PLURAL[t]}>
           <ul className="grid gap-x-8 text-sm md:grid-cols-2">{(groups[t] ?? []).map((a) => <li key={a.id} className="flex justify-between border-b border-slate-100 py-1"><span>{a.code} · {a.name}</span><span className="text-slate-400">{a.group}</span></li>)}</ul>
         </Card>
       ))}

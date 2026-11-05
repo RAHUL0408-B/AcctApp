@@ -86,7 +86,8 @@ export class FirmController {
   @Post('files')
   async upload(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'read'); // clients may upload paperwork for their accountant
-    const b = parse(z.object({ name: z.string().min(1).max(200), mime: z.string(), dataBase64: z.string().min(1), category: z.string().max(40).default('general') }), body);
+    const b = parse(z.object({ name: z.string().min(1).max(200), mime: z.string(), dataBase64: z.string().min(1), category: z.string().max(40).default('general'),
+      linkType: z.enum(['document', 'journal', 'asset']).optional(), linkId: z.number().int().positive().optional() }).refine((x) => (x.linkType == null) === (x.linkId == null), 'Give both linkType and linkId'), body);
     if (!MIME[b.mime]) throw new BadRequestException(`File type not allowed. Allowed: ${Object.keys(MIME).join(', ')}`);
     const data = Buffer.from(b.dataBase64, 'base64');
     if (data.length === 0 || data.length > MAX_FILE) throw new BadRequestException('File must be between 1 byte and 10 MB');
@@ -97,17 +98,17 @@ export class FirmController {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, data);
     return withOrg(orgId, async (c) => {
-      const r = (await c.query('INSERT INTO files(org_id,name,mime,size,sha256,storage_key,category,uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-        [orgId, name, b.mime, data.length, createHash('sha256').update(data).digest('hex'), key, b.category, uid])).rows[0];
+      const r = (await c.query('INSERT INTO files(org_id,name,mime,size,sha256,storage_key,category,uploaded_by,link_type,link_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
+        [orgId, name, b.mime, data.length, createHash('sha256').update(data).digest('hex'), key, b.category, uid, b.linkType ?? null, b.linkId ?? null])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'upload', entity: 'file', entityId: r.id, after: { name, size: data.length }, ip });
       return { id: Number(r.id) };
     });
   }
 
   @Get('files')
-  async files(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+  async files(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('linkType') linkType?: string, @Query('linkId') linkId?: string) {
     await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query('SELECT id,name,mime,size,category,created_at AS "createdAt" FROM files ORDER BY id DESC')).rows.map((r) => num(r, 'id', 'size')));
+    return withOrg(orgId, async (c) => (await c.query('SELECT id,name,mime,size,category,link_type AS "linkType",link_id AS "linkId",created_at AS "createdAt" FROM files WHERE ($1::text IS NULL OR (link_type=$1 AND link_id=$2::bigint)) ORDER BY id DESC', [linkType ?? null, linkId ? Number(linkId) : null])).rows.map((r) => num(r, 'id', 'size', 'linkId')));
   }
 
   @Get('files/:id/download')
@@ -156,7 +157,8 @@ export class FirmController {
           if (dup.rowCount) { errors.push(`Skipped existing contact ${r.name}`); continue; }
           const state = r.stateCode ?? (r.gstin ? r.gstin.slice(0, 2) : null);
           const okState = state ? (await c.query('SELECT 1 FROM gst_states WHERE code=$1', [state])).rowCount : 1;
-          await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [orgId, r.kind, r.name, r.gstin ?? null, r.pan ?? null, okState ? state : null, r.email ?? null, r.phone ?? null]);
+          await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,bank_account_name,bank_name,bank_account_no,bank_ifsc) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+            [orgId, r.kind, r.name, r.gstin ?? null, r.pan ?? null, okState ? state : null, r.email ?? null, r.phone ?? null, r.bankAccountName ?? null, r.bankName ?? null, r.bankAccountNo ?? null, r.bankIfsc ?? null]);
           imported++;
         }
       } else if (kind === 'accounts') {
@@ -194,6 +196,17 @@ export class FirmController {
     res.setHeader('Content-Type', fmt === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${report}.${fmt}"`);
     res.send(data);
+  }
+
+  /** The same figures as an export, as JSON, for showing on screen. */
+  @Get('report-table/:report')
+  async reportTable(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('report') report: string, @Query() q: Record<string, string>) {
+    await requireOrg(uid, orgId, 'read');
+    if (!(REPORTS as readonly string[]).includes(report)) throw new NotFoundException(`Unknown report. Available: ${REPORTS.join(', ')}`);
+    for (const k of ['from', 'to', 'asOf']) if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(q[k])) throw new BadRequestException(`${k} must be YYYY-MM-DD`);
+    const fy = financialYearOf(today());
+    return withOrg(orgId, (c) => buildTable(c, report as ReportName, { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined }))
+      .catch((e) => { throw new BadRequestException(e.message); });
   }
 
   @Get('documents/:id/pdf')

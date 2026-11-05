@@ -1,4 +1,4 @@
-import { matchRule, monthEnds, monthlyDepreciation, nextDate } from '../src/extras/calc';
+import { matchRule, monthEnds, monthlyDepreciation, nextDate, yearFraction } from '../src/extras/calc';
 
 describe('depreciation', () => {
   const base = { cost: 12000000, residual: 1200000, rateBp: 1000, purchaseDate: '2025-04-10', accumulated: 0 }; // Rs 1,20,000 cost, Rs 12,000 residual, 10%
@@ -8,6 +8,22 @@ describe('depreciation', () => {
   it('written down value: Rs 1,20,000 x 10% / 12 = Rs 1,000, then falls as book value falls', () => {
     expect(monthlyDepreciation({ ...base, method: 'wdv' })).toBe(100000);
     expect(monthlyDepreciation({ ...base, method: 'wdv', accumulated: 100000 })).toBe(99167); // 1,19,000 x 10%/12 = 991.67
+  });
+  it('useful life: cost less residual spread evenly over the life in months', () => {
+    // Rs 1,08,000 to write off over 36 months = Rs 3,000 a month
+    expect(monthlyDepreciation({ ...base, method: 'slm_life', rateBp: 1, usefulLifeMonths: 36 })).toBe(300000);
+    expect(monthlyDepreciation({ ...base, method: 'slm_life', rateBp: 1 })).toBe(0); // no life given
+  });
+  it('actual days: a part first month counts only the days owned, over the days in the year', () => {
+    const a = { ...base, method: 'slm' as const, dayBasis: 'actual_days' as const, purchaseDate: '2025-04-21', periodEnd: '2025-04-30' }; // 10 of 365 days
+    expect(yearFraction(a)).toBeCloseTo(10 / 365, 10);
+    expect(monthlyDepreciation(a)).toBe(Math.round(10800000 * 0.1 * 10 / 365));
+    // a full month later in the year is its real length, not 1/12
+    expect(yearFraction({ ...a, periodEnd: '2025-05-31' })).toBeCloseTo(31 / 365, 10);
+    // leap year
+    expect(yearFraction({ ...a, purchaseDate: '2024-01-01', periodEnd: '2024-02-29' })).toBeCloseTo(29 / 366, 10);
+    // months basis is untouched by the new options
+    expect(monthlyDepreciation({ ...base, method: 'slm', dayBasis: 'months' })).toBe(90000);
   });
   it('never depreciates below the residual value', () => {
     expect(monthlyDepreciation({ ...base, method: 'slm', accumulated: base.cost - base.residual - 30000 })).toBe(30000);

@@ -30,6 +30,8 @@ export const SYSTEM_ACCOUNTS = {
   '3100': { name: 'Reserves and Surplus', type: 'equity', group: 'Capital' },
   '4300': { name: 'Foreign Exchange Gain / Loss', type: 'income', group: 'Other Income' },
   '5050': { name: 'Cost of Goods Sold', type: 'expense', group: 'Cost of Goods Sold' },
+  '4400': { name: 'Profit on Sale of Fixed Assets', type: 'income', group: 'Other Income' },
+  '5590': { name: 'Loss on Sale of Fixed Assets', type: 'expense', group: 'Operating Expenses' },
 } as const;
 
 /** Like accountIdByCode, but creates the account from SYSTEM_ACCOUNTS if this organisation does not have it yet. */

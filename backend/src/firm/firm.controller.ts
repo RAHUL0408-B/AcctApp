@@ -12,7 +12,8 @@ import { insertEntry } from '../ledger/post';
 import { requireOrg } from '../tenancy/acl';
 import { aged } from '../accounting/reports';
 import { deadlinesBetween, Rule } from './deadlines';
-import { buildTable, renderInvoicePdf, renderPdf, renderXlsx, REPORTS, ReportName } from './exporter';
+import { buildTable, InvoiceView, renderInvoicesPdf, renderPdfMulti, renderXlsxMulti, REPORTS, ReportName } from './exporter';
+import { parseOptions, TEMPLATE_INFO } from './styles';
 import { parseAccounts, parseContacts, parseVouchers } from './importer';
 
 const DATA_DIR = () => process.env.DATA_DIR ?? join(process.cwd(), 'data');
@@ -182,20 +183,59 @@ export class FirmController {
   }
 
   // ---------- exports ----------
+  private async tablesFor(orgId: number, reports: string[], q: Record<string, string>) {
+    for (const r of reports) if (!(REPORTS as readonly string[]).includes(r)) throw new NotFoundException(`Unknown report "${r}". Available: ${REPORTS.join(', ')}`);
+    for (const k of ['from', 'to', 'asOf']) if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(q[k])) throw new BadRequestException(`${k} must be YYYY-MM-DD`);
+    const fy = financialYearOf(today());
+    const params = { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined };
+    return withOrg(orgId, async (c) => { const out = []; for (const r of reports) out.push(await buildTable(c, r as ReportName, params)); return out; })
+      .catch((e) => { throw new BadRequestException(e.message); });
+  }
+
+  private sendFile(res: Response, fmt: string, name: string, data: Buffer) {
+    res.setHeader('Content-Type', fmt === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}.${fmt}"`);
+    res.send(data);
+  }
+
+  /** The templates people can choose from, and the reports that can be combined. */
+  @Get('export-options')
+  async exportOptions(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    return { templates: TEMPLATE_INFO, reports: REPORTS };
+  }
+
+  /** Column headings of a report, so the export panel can offer to leave some out. */
+  @Get('export-columns/:report')
+  async exportColumns(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('report') report: string, @Query() q: Record<string, string>) {
+    await requireOrg(uid, orgId, 'read');
+    const [t] = await this.tablesFor(orgId, [report], q);
+    return { columns: t.columns.map((c) => c.header) };
+  }
+
   @Get('export/:report')
   async exportReport(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('report') report: string, @Query() q: Record<string, string>, @Res() res: Response) {
     await requireOrg(uid, orgId, 'read');
-    if (!(REPORTS as readonly string[]).includes(report)) throw new NotFoundException(`Unknown report. Available: ${REPORTS.join(', ')}`);
     const fmt = q.format === 'xlsx' ? 'xlsx' : 'pdf';
-    for (const k of ['from', 'to', 'asOf']) if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(q[k])) throw new BadRequestException(`${k} must be YYYY-MM-DD`);
-    const fy = financialYearOf(today());
     const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const table = await withOrg(orgId, (c) => buildTable(c, report as ReportName, { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined }))
-      .catch((e) => { throw new BadRequestException(e.message); });
-    const data = fmt === 'pdf' ? await renderPdf(table, org.name) : await renderXlsx(table, org.name);
-    res.setHeader('Content-Type', fmt === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${report}.${fmt}"`);
-    res.send(data);
+    const tables = await this.tablesFor(orgId, [report], q);
+    const o = parseOptions(q);
+    this.sendFile(res, fmt, report, fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : await renderXlsxMulti(tables, org.name, o));
+  }
+
+  /** Several reports in one PDF (each on its own pages) or one Excel workbook (one sheet each): ?reports=pnl,balance-sheet,trial-balance */
+  @Get('export-multi')
+  async exportMulti(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query() q: Record<string, string>, @Res() res: Response) {
+    await requireOrg(uid, orgId, 'read');
+    const reports = [...new Set((q.reports ?? '').split(',').map((x) => x.trim()).filter(Boolean))];
+    if (!reports.length) throw new BadRequestException('Choose at least one report');
+    if (reports.length > 15) throw new BadRequestException('Choose at most 15 reports at a time');
+    if (reports.includes('ledger') && !q.accountId) throw new BadRequestException('The Ledger report needs an account. Choose one, or use "All ledgers" instead.');
+    const fmt = q.format === 'xlsx' ? 'xlsx' : 'pdf';
+    const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const tables = await this.tablesFor(orgId, reports, q);
+    const o = parseOptions(q);
+    this.sendFile(res, fmt, 'reports', fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : await renderXlsxMulti(tables, org.name, o));
   }
 
   /** The same figures as an export, as JSON, for showing on screen. */
@@ -209,26 +249,45 @@ export class FirmController {
       .catch((e) => { throw new BadRequestException(e.message); });
   }
 
-  @Get('documents/:id/pdf')
-  async invoicePdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Res() res: Response) {
-    await requireOrg(uid, orgId, 'read');
+  private async invoiceViews(orgId: number, ids: number[]): Promise<InvoiceView[]> {
     const org = (await getPool().query('SELECT name,gstin FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const v = await withOrg(orgId, async (c) => {
-      const d = (await c.query('SELECT d.*, ct.name AS cname, ct.gstin AS cgstin FROM documents d JOIN contacts ct ON ct.id=d.contact_id WHERE d.id=$1', [id])).rows[0];
-      if (!d) return null;
-      const lines = (await c.query('SELECT description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows;
-      return { d, lines };
+    const iso = (x: unknown) => (x ? new Date(x as string).toISOString().slice(0, 10) : null);
+    return withOrg(orgId, async (c) => {
+      const out: InvoiceView[] = [];
+      for (const id of ids) {
+        const d = (await c.query('SELECT d.*, ct.name AS cname, ct.gstin AS cgstin FROM documents d JOIN contacts ct ON ct.id=d.contact_id WHERE d.id=$1', [id])).rows[0];
+        if (!d) throw new NotFoundException(`Document ${id} not found`);
+        const lines = (await c.query('SELECT description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows;
+        out.push({
+          orgName: org.name, orgGstin: org.gstin, type: d.doc_type, number: d.number, issueDate: iso(d.issue_date)!, dueDate: iso(d.due_date), contact: d.cname, contactGstin: d.cgstin, placeOfSupply: d.place_of_supply,
+          lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), gstRateBp: l.gst_rate_bp })),
+          subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
+        });
+      }
+      return out;
     });
-    if (!v) throw new NotFoundException('Document not found');
-    const d = v.d;
-    const pdf = await renderInvoicePdf({
-      orgName: org.name, orgGstin: org.gstin, type: d.doc_type, number: d.number, issueDate: new Date(d.issue_date).toISOString().slice(0, 10),
-      dueDate: d.due_date ? new Date(d.due_date).toISOString().slice(0, 10) : null, contact: d.cname, contactGstin: d.cgstin, placeOfSupply: d.place_of_supply,
-      lines: v.lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), gstRateBp: l.gst_rate_bp })),
-      subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
-    });
+  }
+
+  @Get('documents/:id/pdf')
+  async invoicePdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Query() q: Record<string, string>, @Res() res: Response) {
+    await requireOrg(uid, orgId, 'read');
+    const [v] = await this.invoiceViews(orgId, [id]);
+    const pdf = await renderInvoicesPdf([v], parseOptions(q));
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${String(d.number).replace(/\//g, '-')}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${v.number.replace(/\//g, '-')}.pdf"`);
+    res.send(pdf);
+  }
+
+  /** Several invoices or bills in one PDF: ?ids=1,2,3 */
+  @Get('documents-pdf')
+  async invoicesPdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query() q: Record<string, string>, @Res() res: Response) {
+    await requireOrg(uid, orgId, 'read');
+    const ids = [...new Set((q.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) throw new BadRequestException('Choose at least one document');
+    if (ids.length > 100) throw new BadRequestException('Choose at most 100 documents at a time');
+    const pdf = await renderInvoicesPdf(await this.invoiceViews(orgId, ids), parseOptions(q));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="documents.pdf"');
     res.send(pdf);
   }
 

@@ -3,6 +3,7 @@ import { api, download, fileToBase64, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { ExportPanel, prefsQuery } from '../export';
 import type { Contact } from './Contacts';
 import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, linesToApi } from './Lines';
 
@@ -41,6 +42,11 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
   const [nextNumber, setNextNumber] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
+  const [pdfFor, setPdfFor] = useState<{ ids: number[]; title: string } | null>(null); // the "Customize export" panel
+  /** One or several documents as PDF. Several go into a single file, each starting on a new page. */
+  const downloadPdf = (ids: number[], style: string, name?: string) => run(() => ids.length === 1
+    ? download(`/orgs/${org.id}/documents/${ids[0]}/pdf?${style}`, `${(name ?? 'document').replace(/\//g, '-')}.pdf`)
+    : download(`/orgs/${org.id}/documents-pdf?ids=${ids.join(',')}&${style}`, 'documents.pdf'));
   const [ok, setOk] = useState('');
   const [pay, setPay] = useState<{ id: number; number: string; amount: string; accountId: string; date: string; reference: string; currency: string; foreign: string } | null>(null);
   const { error, busy, run, setError } = useAction();
@@ -252,10 +258,13 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
             <p className="text-xs text-slate-500">GST (CGST+SGST or IGST) and TDS are worked out when you save. Each line posts to its account: the product's default, then the contact's default.</p></div>
         </Card>
       )}
+      {pdfFor && <ExportPanel title={pdfFor.title} formats={['pdf']} busy={busy} onExport={(_f, style) => downloadPdf(pdfFor.ids, style, pdfFor.title)} onClose={() => setPdfFor(null)} />}
       <Card actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}>
         {canPost && selected.size > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-brand-50 px-3 py-2 text-sm"><b>{selected.size} selected</b>
             <Button variant="danger" disabled={busy} onClick={() => bulk('delete')}>Delete selected</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => downloadPdf([...selected], prefsQuery())}>Download as one PDF</Button>
+            <Button variant="ghost" onClick={() => setPdfFor({ ids: [...selected], title: `${selected.size} documents in one PDF` })}>PDF style…</Button>
             <Button variant="ghost" disabled={busy} onClick={() => bulk(showArchived ? 'restore' : 'archive')}>{showArchived ? 'Restore selected' : 'Archive selected'}</Button>
             <Button variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button></div>
         )}
@@ -273,7 +282,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
                 <td className="text-right">{d.outstanding !== undefined && (d.docType === 'invoice' || d.docType === 'bill') && d.status === 'posted' ? fmt(d.outstanding) : ''}</td>
                 <td className="pl-4"><Badge text={d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && d.outstanding === 0 ? 'paid' : d.status} />{d.isArchived && <span className="ml-1 text-xs">archived</span>}</td>
                 <td className="space-x-1 whitespace-nowrap text-right">
-                  <Button variant="ghost" onClick={() => { setError(''); download(`/orgs/${org.id}/documents/${d.id}/pdf`, `${d.number.replace(/\//g, '-')}.pdf`).catch((e) => setError(e.message)); }}>PDF</Button>
+                  <Button variant="ghost" onClick={() => { setError(''); downloadPdf([d.id], prefsQuery(), d.number); }}>PDF</Button>
+                  <Button variant="ghost" aria-label={`PDF style for ${d.number}`} title="Choose a template and options" onClick={() => setPdfFor({ ids: [d.id], title: d.number })}>Style…</Button>
                   {canPost && sales && d.status === 'posted' && <Button variant="ghost" onClick={() => email(d)}>Email</Button>}
                   {canPost && d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) > 0 && <Button variant="ghost" onClick={() => setPay({ id: d.id, number: d.number, amount: d.currency === 'INR' ? String((d.outstanding ?? 0) / 100) : '', accountId: '', date: today(), reference: '', currency: d.currency, foreign: '' })}>{payLabel}</Button>}
                   {canEdit(d) && <Button variant="ghost" onClick={() => startEdit(d)}>Edit</Button>}

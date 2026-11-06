@@ -122,6 +122,19 @@ describe('journal rules and bulk reverse', () => {
     expect(rules[0]).toMatchObject({ name: 'Insurance', runs: 3, active: false });
     await post('/journal-rules', { name: 'Bad', narration: 'x', frequency: 'monthly', startDate: '2026-01-01', lines: [{ accountId: acc('5550'), debit: 1 }, { accountId: acc('1500'), credit: 2 }] }).expect(400);
   });
+  it('keeps the cost centre on a repeating journal and refuses an unknown one', async () => {
+    await post('/tracking', { name: 'Department', options: ['Sales', 'Admin'] }).expect(201);
+    const cats = (await get('/tracking').expect(200)).body;
+    const dept = cats.find((c: any) => c.name === 'Department');
+    const admin = dept.options.find((o: any) => o.name === 'Admin').id;
+    const lines = (cc: number) => [{ accountId: acc('5550'), debit: 5000, trackingOptionId: cc }, { accountId: acc('1500'), credit: 5000 }];
+    await post('/journal-rules', { name: 'Admin cost', narration: 'Admin cost', frequency: 'yearly', startDate: '2026-02-15', lines: lines(999999) }).expect(400);
+    await post('/journal-rules', { name: 'Admin cost', narration: 'Admin cost', frequency: 'yearly', startDate: '2026-02-15', lines: lines(admin) }).expect(201);
+    expect((await post('/journal-rules/run').expect(201)).body.created).toBeGreaterThanOrEqual(1);
+    const r = (await get(`/reports/pnl-by-tracking?categoryId=${dept.id}&from=2026-01-01&to=2026-12-31`).expect(200)).body;
+    expect(r.columns).toContain('Admin');
+    expect(r.expenses.totals[r.columns.indexOf('Admin')]).toBe(5000);
+  });
   it('reverses several journal entries and refuses ones that belong to documents', async () => {
     const j1 = (await post('/journal', { date: '2026-04-01', narration: 'One', lines: [{ accountId: acc('5550'), debit: 500 }, { accountId: acc('1000'), credit: 500 }] }).expect(201)).body.id;
     const j2 = (await post('/journal', { date: '2026-04-01', narration: 'Two', lines: [{ accountId: acc('5550'), debit: 700 }, { accountId: acc('1000'), credit: 700 }] }).expect(201)).body.id;
@@ -287,5 +300,73 @@ describe('new reports', () => {
       const r = await binary(ctx.http().get(`${base()}/export/${name}?format=${format}&from=2026-01-01&to=2026-12-31&asOf=2026-12-31`).set(auth(t))).expect(200);
       expect((r.body as Buffer).length).toBeGreaterThan(500);
     }
+  });
+});
+
+describe('export templates, options and combined exports', () => {
+  const range = 'from=2026-01-01&to=2026-12-31&asOf=2026-12-31';
+  const bin = (path: string) => binary(ctx.http().get(base() + path).set(auth(t))).expect(200).then((r: any) => r.body as Buffer);
+  const pages = (pdf: Buffer) => (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+  const ExcelJS = require('exceljs');
+  const sheets = async (buf: Buffer) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb; };
+
+  it('lists five templates', async () => {
+    const r = (await get('/export-options').expect(200)).body;
+    expect(r.templates.map((x: any) => x.name)).toEqual(['classic', 'modern', 'minimal', 'corporate', 'elegant']);
+  });
+
+  it.each(['classic', 'modern', 'minimal', 'corporate', 'elegant'])('renders a report and an invoice in the %s template', async (tpl) => {
+    const rep = await bin(`/export/trial-balance?format=pdf&${range}&template=${tpl}`);
+    expect(rep.subarray(0, 4).toString()).toBe('%PDF');
+    const d = (await post('/documents', invoice({ number: `TPL-${tpl}` })).expect(201)).body.id;
+    const inv = await bin(`/documents/${d}/pdf?template=${tpl}&accent=%23b91c1c&footer=Thank%20you`);
+    expect(inv.subarray(0, 4).toString()).toBe('%PDF');
+    expect(inv.length).toBeGreaterThan(1500);
+  });
+
+  it('applies customisation: leaves columns out and changes the title in Excel, with a centred merged heading', async () => {
+    const plain = await sheets(await bin(`/export/trial-balance?format=xlsx&${range}`));
+    const ws = plain.worksheets[0];
+    const cols = ws.getRow(ws.actualRowCount > 0 ? 5 : 5).cellCount;
+    const custom = await sheets(await bin(`/export/trial-balance?format=xlsx&${range}&template=corporate&title=Board%20pack&note=Draft&hide=0&footer=Confidential`));
+    const cs = custom.worksheets[0];
+    expect(cs.getCell('A2').value).toBe('Board pack');
+    expect(cs.getCell('A2').alignment?.horizontal).toBe('center');
+    expect(cs.getCell('A1').alignment?.horizontal).toBe('center');
+    expect(cs.model.merges.length).toBeGreaterThan(0);
+    expect(cs.getRow(6).cellCount).toBeLessThan(cols + 1);
+    expect(cs.views[0].state).toBe('frozen');
+    expect(cs.headerFooter.oddFooter).toContain('Confidential');
+  });
+
+  it('ignores a bad template, colour and column list instead of failing', async () => {
+    const r = await bin(`/export/trial-balance?format=pdf&${range}&template=nope&accent=zzz&hide=abc,-1&fontSize=99&paper=x`);
+    expect(r.subarray(0, 4).toString()).toBe('%PDF');
+  });
+
+  it('puts several reports in one PDF and one workbook', async () => {
+    const one = pages(await bin(`/export/pnl?format=pdf&${range}`));
+    const many = await bin(`/export-multi?format=pdf&${range}&reports=pnl,balance-sheet,trial-balance,fixed-assets&template=modern`);
+    expect(many.subarray(0, 4).toString()).toBe('%PDF');
+    expect(pages(many)).toBeGreaterThanOrEqual(one + 3);
+    const wb = await sheets(await bin(`/export-multi?format=xlsx&${range}&reports=pnl,balance-sheet,trial-balance`));
+    expect(wb.worksheets.map((w: any) => w.name)).toHaveLength(3);
+    await ctx.http().get(`${base()}/export-multi?format=pdf`).set(auth(t)).expect(400);
+    await ctx.http().get(`${base()}/export-multi?format=pdf&reports=ledger`).set(auth(t)).expect(400);
+    await ctx.http().get(`${base()}/export-multi?format=pdf&reports=nope`).set(auth(t)).expect(404);
+  });
+
+  it('puts several invoices in one PDF', async () => {
+    const a = (await post('/documents', invoice({ number: 'MULTI-1' })).expect(201)).body.id;
+    const b = (await post('/documents', invoice({ number: 'MULTI-2' })).expect(201)).body.id;
+    const single = pages(await bin(`/documents/${a}/pdf`));
+    const both = await bin(`/documents-pdf?ids=${a},${b}&template=elegant`);
+    expect(pages(both)).toBeGreaterThanOrEqual(single + 1);
+    await ctx.http().get(`${base()}/documents-pdf`).set(auth(t)).expect(400);
+  });
+
+  it('lists a report\'s columns for the picker', async () => {
+    const r = (await get(`/export-columns/trial-balance?${range}`).expect(200)).body;
+    expect(r.columns.length).toBeGreaterThan(2);
   });
 });

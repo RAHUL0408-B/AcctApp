@@ -2,12 +2,13 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, useAction } from '../ui';
+import { ExportPanel, prefsQuery } from '../export';
 
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
 const REPORTS = [
   ['tb', 'Trial balance'], ['pnl', 'Profit & loss'], ['bs', 'Balance sheet'], ['ledger', 'Ledger'],
   ['cf', 'Cash flow'], ['ar', 'Aged receivables'], ['ap', 'Aged payables'], ['gstr1', 'GSTR-1'], ['gstr3b', 'GSTR-3B'],
-  ['pnlm', 'P&L by month'], ['pnlt', 'P&L by category'], ['bva', 'Budget vs actual'],
+  ['pnlm', 'P&L by month'], ['pnlt', 'P&L by cost centre'], ['bva', 'Budget vs actual'],
   ['stcf', 'Short-term cash flow'], ['snap', 'Business snapshot'], ['tds', 'TDS deducted'],
   ['alll', 'All ledgers'], ['invw', 'Invoice-wise'], ['billw', 'Bill-wise'], ['preg', 'Purchase register'], ['far', 'Fixed asset register'],
 ] as const;
@@ -71,9 +72,19 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
   });
   useEffect(() => { load(); }, [rep, org.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}`, `${EXPORT[rep]}.${format}`));
+  const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}&${prefsQuery()}`, `${EXPORT[rep]}.${format}`));
+  // Customize panel: for this report (with its columns), or several reports combined into one file.
+  const [panel, setPanel] = useState<null | 'one' | 'many'>(null);
+  const [cols, setCols] = useState<string[] | undefined>();
+  const openOne = () => run(async () => { setCols(undefined); setPanel('one'); const r = await api(`/orgs/${org.id}/export-columns/${EXPORT[rep]}?${query()}`).catch(() => null); setCols(r?.columns); });
+  const exportOne = (format: 'pdf' | 'xlsx', style: string) => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}&${style}`, `${EXPORT[rep]}.${format}`));
+  const manyChoices = REPORTS.filter(([k]) => EXPORT[k]).map(([k, label]) => ({ key: k, label, disabled: k === 'ledger' && !accountId ? 'choose an account first' : undefined }));
+  const exportMany = (format: 'pdf' | 'xlsx', style: string, chosen: string[]) => run(() => {
+    const p = new URLSearchParams({ from, to, asOf: to, ...(accountId ? { accountId } : {}) });
+    return download(`/orgs/${org.id}/export-multi?format=${format}&reports=${chosen.map((k) => EXPORT[k]).join(',')}&${p}&${style}`, `reports.${format}`);
+  });
   // Every account's ledger in one file, for the same dates.
-  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}`, `all-ledgers.${format}`); });
+  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}&${prefsQuery()}`, `all-ledgers.${format}`); });
 
   return (
     <>
@@ -85,18 +96,22 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
             : <label>{RANGED.includes(rep) ? 'To' : 'As at'} <input aria-label="To" type="date" className="rounded border border-slate-300 px-2 py-1" value={to} onChange={(e) => setTo(e.target.value)} /></label>}
           {rep === 'ledger' && <select aria-label="Ledger account" className="rounded border border-slate-300 px-2 py-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             <option value="">Account…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select>}
-          {rep === 'pnlt' && (categories.length ? <select aria-label="Tracking category" className="rounded border border-slate-300 px-2 py-1" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-            : <span className="text-slate-500">Add a tracking category under Setup first.</span>)}
+          {rep === 'pnlt' && (categories.length ? <select aria-label="Cost centre group" className="rounded border border-slate-300 px-2 py-1" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            : <span className="text-slate-500">Add a cost centre group under Accounting first.</span>)}
           {rep === 'bva' && (budgets.length ? <select aria-label="Budget" className="rounded border border-slate-300 px-2 py-1" value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>{budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
             : <span className="text-slate-500">Create a budget under Accounting first.</span>)}
           <Button onClick={load}>Run</Button>
           <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
           {EXPORT[rep] && <><Button variant="ghost" onClick={() => exp('pdf')}>Export PDF</Button>
-          <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button></>}
+          <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button>
+          <Button variant="ghost" aria-expanded={panel === 'one'} onClick={() => (panel === 'one' ? setPanel(null) : openOne())}>Customize export…</Button></>}
+          <Button variant="ghost" aria-expanded={panel === 'many'} onClick={() => setPanel(panel === 'many' ? null : 'many')}>Export several reports…</Button>
           {rep === 'ledger' && <><Button variant="ghost" onClick={() => expAll('xlsx')}>Export all accounts (Excel)</Button><Button variant="ghost" onClick={() => expAll('pdf')}>Export all accounts (PDF)</Button></>}
         </div>
         <div className="mt-3"><ErrorMsg msg={error} /></div>
       </Card>
+      {panel === 'one' && EXPORT[rep] && <ExportPanel title={REPORTS.find((r) => r[0] === rep)![1]} formats={['pdf', 'xlsx']} columns={cols} busy={false} onExport={exportOne} onClose={() => setPanel(null)} />}
+      {panel === 'many' && <ExportPanel title="several reports in one file" formats={['pdf', 'xlsx']} choices={manyChoices} chosen={EXPORT[rep] ? [rep] : []} allowTitle={false} onExport={exportMany} onClose={() => setPanel(null)} />}
       {data && data.rep === rep && <Card title={REPORTS.find((r) => r[0] === rep)![1]}><ReportView rep={rep} d={data.d} org={org} reload={load} /></Card>}
     </>
   );

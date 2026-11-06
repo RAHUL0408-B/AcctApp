@@ -67,6 +67,7 @@ await page.getByRole('cell', { name: 'Widget Maker' }).waitFor();
 // ---- export invoice in USD
 await nav('Invoices');
 await btn('New invoice').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Inc');
 await page.getByLabel('Supply type').selectOption({ label: 'Export under LUT (no GST)' });
 await page.getByLabel('Currency').fill('USD');
@@ -90,6 +91,7 @@ await btn('Save item').click();
 await page.getByRole('cell', { name: 'WID', exact: true }).waitFor();
 await nav('Bills');
 await btn('New bill').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Widget Maker');
 await page.getByLabel('Add from catalogue').selectOption({ label: 'WID · Widget' });
 await page.getByText('stock', { exact: true }).first().waitFor();
@@ -107,6 +109,7 @@ step('10 widgets bought at Rs 100: stock Rs 1,000, agrees with the Inventory acc
 // ---- approval
 await nav('Invoices');
 await btn('New invoice').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Local Co');
 await page.getByLabel('Description 1').fill('Consulting');
 await page.getByLabel('Rate 1').fill('200');
@@ -135,10 +138,10 @@ await page.getByText('paid', { exact: true }).waitFor();
 step('expense claim of Rs 450 submitted, approved and repaid');
 
 // ---- tracking and budgets
-await nav('Tracking categories');
-await page.getByLabel('Category name').fill('Branch');
-await page.getByLabel('Options, separated by commas').fill('Mumbai, Pune');
-await btn('Add category').click();
+await nav('Cost centres');
+await page.getByLabel('Group name (for example Branch)').fill('Branch');
+await page.getByLabel('Cost centres, separated by commas').fill('Mumbai, Pune');
+await btn('Add group').click();
 await page.getByText('Pune', { exact: true }).waitFor();
 await nav('Budgets');
 await page.getByLabel('Name', { exact: true }).fill('Plan');

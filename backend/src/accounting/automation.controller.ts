@@ -10,7 +10,7 @@ import { insertEntry } from '../ledger/post';
 import { nextDate } from '../extras/calc';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
-const lineSchema = z.object({ accountId: z.number().int().positive(), debit: z.number().int().min(0).default(0), credit: z.number().int().min(0).default(0), memo: z.string().max(200).optional() });
+const lineSchema = z.object({ accountId: z.number().int().positive(), debit: z.number().int().min(0).default(0), credit: z.number().int().min(0).default(0), memo: z.string().max(200).optional(), trackingOptionId: z.number().int().positive().optional() });
 const num = (r: any, ...ks: string[]) => { for (const k of ks) if (r[k] != null) r[k] = Number(r[k]); return r; };
 
 @Controller('orgs/:orgId')
@@ -62,6 +62,8 @@ export class AutomationController {
     return withOrg(orgId, async (c) => {
       const ids = [...new Set(b.lines.map((l) => l.accountId))];
       if ((await c.query('SELECT id FROM accounts WHERE id = ANY($1) AND is_active', [ids])).rowCount !== ids.length) throw new BadRequestException('Every line needs an active account');
+      const centres = [...new Set(b.lines.map((l) => l.trackingOptionId).filter((x): x is number => !!x))];
+      if (centres.length && (await c.query('SELECT id FROM tracking_options WHERE id = ANY($1) AND active', [centres])).rowCount !== centres.length) throw new BadRequestException('Unknown cost centre');
       const r = (await c.query('INSERT INTO journal_rules(org_id,name,narration,lines,frequency,next_date,end_date,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
         [orgId, b.name, b.narration, JSON.stringify(b.lines), b.frequency, b.startDate, b.endDate ?? null, uid])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'journal_rule', entityId: r.id, after: { name: b.name, frequency: b.frequency }, ip });

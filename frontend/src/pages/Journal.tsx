@@ -4,14 +4,14 @@ import { api, download, fileToBase64, fmt, toPaise } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, Select } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
-import type { Account } from './Lines';
+import type { Account, TrackingCategory } from './Lines';
 
 interface Entry { id: number; date: string; narration: string; reference?: string | null; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface Rule { id: number; name: string; narration: string; frequency: string; nextDate: string; endDate: string | null; active: boolean; runs: number; lastRun: string | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface Attachment { id: number; name: string }
 
 const safe = (s: string) => { try { return toPaise(s); } catch { return 0; } };
-const blankRows = () => [{ accountId: '', debit: '', credit: '' }, { accountId: '', debit: '', credit: '' }];
+const blankRows = () => [{ accountId: '', debit: '', credit: '', cc: '' }, { accountId: '', debit: '', credit: '', cc: '' }];
 const FREQ = [['monthly', 'Every month'], ['weekly', 'Every week'], ['quarterly', 'Every quarter'], ['yearly', 'Every year']];
 
 export function Journal({ org, accounts, canPost }: { org: Org; accounts: Account[]; canPost: boolean }) {
@@ -28,12 +28,14 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
   const [ok, setOk] = useState(''), [reason, setReason] = useState('Correction');
   const load = useCallback(() => api(`/orgs/${org.id}/journal`).then(setEntries), [org.id]);
   const loadRules = useCallback(() => api<Rule[]>(`/orgs/${org.id}/journal-rules`).then(setRules), [org.id]);
+  const [centres, setCentres] = useState<{ id: number; label: string }[]>([]); // cost centres (tracking options) the entry can be tagged with
+  useEffect(() => { api<TrackingCategory[]>(`/orgs/${org.id}/tracking`).then((c) => setCentres(c.flatMap((x) => x.options.map((o) => ({ id: o.id, label: `${x.name}: ${o.name}` }))))).catch(() => undefined); }, [org.id]);
   useEffect(() => { load(); loadRules(); }, [load, loadRules]);
   useEffect(() => { setSelected(new Set()); }, [entries]);
 
   const name = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
   const totalD = rows.reduce((s, r) => s + (r.debit ? safe(r.debit) : 0), 0), totalC = rows.reduce((s, r) => s + (r.credit ? safe(r.credit) : 0), 0);
-  const apiLines = () => rows.filter((r) => r.accountId).map((r) => ({ accountId: Number(r.accountId), ...(r.debit ? { debit: toPaise(r.debit) } : {}), ...(r.credit ? { credit: toPaise(r.credit) } : {}) }));
+  const apiLines = () => rows.filter((r) => r.accountId).map((r) => ({ accountId: Number(r.accountId), ...(r.debit ? { debit: toPaise(r.debit) } : {}), ...(r.credit ? { credit: toPaise(r.credit) } : {}), ...(r.cc ? { trackingOptionId: Number(r.cc) } : {}) }));
   const clear = () => { setNarration(''); setRows(blankRows()); setFiles([]); setRule({ on: false, name: '', frequency: 'monthly', endDate: '' }); };
 
   const submit = () => run(async () => {
@@ -75,8 +77,17 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
             <Field label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             <div className="md:col-span-2"><Field label="Narration" value={narration} onChange={(e) => setNarration(e.target.value)} /></div>
           </div>
+          {centres.length > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+              <label className="font-medium text-slate-600" htmlFor="jcc-all">Cost centre for the whole entry</label>
+              <select id="jcc-all" aria-label="Cost centre for all lines" className="rounded border border-slate-300 bg-white px-2 py-1" value={rows.every((r) => r.cc === rows[0].cc) ? rows[0].cc : 'mixed'}
+                onChange={(e) => e.target.value !== 'mixed' && setRows(rows.map((r) => ({ ...r, cc: e.target.value })))}>
+                <option value="">None</option>{!rows.every((r) => r.cc === rows[0].cc) && <option value="mixed">Different on each line</option>}
+                {centres.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+              <span className="text-xs text-slate-500">Sets every line. You can still change one line.</span>
+            </div>)}
           <table className="mt-4 w-full text-sm">
-            <thead><tr className="text-left text-slate-500"><th>Account</th><th className="w-36">Debit (₹)</th><th className="w-36">Credit (₹)</th></tr></thead>
+            <thead><tr className="text-left text-slate-500"><th>Account</th><th className="w-36">Debit (₹)</th><th className="w-36">Credit (₹)</th>{centres.length > 0 && <th className="w-52">Cost centre</th>}</tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}>
@@ -86,12 +97,14 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
                   </select></td>
                   <td className="pr-2"><input aria-label={`Debit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.debit}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, debit: e.target.value, credit: e.target.value ? '' : x.credit } : x)))} /></td>
-                  <td><input aria-label={`Credit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.credit}
+                  <td className="pr-2"><input aria-label={`Credit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.credit}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, credit: e.target.value, debit: e.target.value ? '' : x.debit } : x)))} /></td>
+                  {centres.length > 0 && <td><select aria-label={`Cost centre ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1" value={r.cc} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, cc: e.target.value } : x)))}>
+                    <option value="">—</option>{centres.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></td>}
                 </tr>
               ))}
             </tbody>
-            <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td></tr></tfoot>
+            <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td>{centres.length > 0 && <td />}</tr></tfoot>
           </table>
           <div className="mt-3 grid gap-4 md:grid-cols-2">
             <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Attach documents (policy, bill, working)</span>
@@ -109,7 +122,7 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
             </div>
           </div>
           <div className="mt-3 flex items-center gap-3">
-            <Button variant="ghost" onClick={() => setRows([...rows, { accountId: '', debit: '', credit: '' }])}>Add line</Button>
+            <Button variant="ghost" onClick={() => setRows([...rows, { accountId: '', debit: '', credit: '', cc: rows.length && rows.every((x) => x.cc === rows[0].cc) ? rows[0].cc : '' }])}>Add line</Button>
             <Button onClick={submit} disabled={busy}>{rule.on ? 'Save rule' : 'Post entry'}</Button>
           </div>
           <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>

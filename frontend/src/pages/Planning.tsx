@@ -1,4 +1,4 @@
-// Tracking categories, budgets and year-end closing.
+// Cost centres (tracking categories), budgets and year-end closing.
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
@@ -18,20 +18,20 @@ export function Tracking({ org, canManage }: { org: Org; canManage: boolean }) {
   useEffect(() => { load(); }, [load]);
   return (
     <>
-      <PageHeader title="Tracking categories" subtitle="Tag income and expense lines (for example by branch or project) and see profit for each under Reports." />
+      <PageHeader title="Cost centres" subtitle="Create a group (for example Branch or Department) with its cost centres (Mumbai, Pune). Then pick one on each invoice, bill and journal line, and see profit for each under Reports." />
       <div className="mb-3"><ErrorMsg msg={error} /></div>
       {canManage && (
-        <Card title="New category">
+        <Card title="New cost centre group">
           <div className="grid gap-3 md:grid-cols-3">
-            <Field label="Category name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Branch" />
-            <div className="md:col-span-2"><Field label="Options, separated by commas" value={f.options} onChange={(e) => setF({ ...f, options: e.target.value })} placeholder="Mumbai, Pune" /></div>
+            <Field label="Group name (for example Branch)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Branch" />
+            <div className="md:col-span-2"><Field label="Cost centres, separated by commas" value={f.options} onChange={(e) => setF({ ...f, options: e.target.value })} placeholder="Mumbai, Pune" /></div>
           </div>
           <div className="mt-3"><Button disabled={busy || !f.name} onClick={() => run(async () => {
             await api(`/orgs/${org.id}/tracking`, { body: { name: f.name, options: f.options.split(',').map((x) => x.trim()).filter(Boolean) } }); setF({ name: '', options: '' }); load();
-          })}>Add category</Button></div>
+          })}>Add group</Button></div>
         </Card>
       )}
-      {cats.length === 0 ? <Card><Empty text="No tracking categories yet." /></Card> : cats.map((c) => (
+      {cats.length === 0 ? <Card><Empty text="No cost centres yet. Add a group such as Branch, with its cost centres, above." /></Card> : cats.map((c) => (
         <Card key={c.id} title={c.name}>
           <div className="flex flex-wrap gap-2">{c.options.map((o) => <span key={o.id} className="rounded-full bg-brand-50 px-3 py-1 text-sm text-brand-800">{o.name}</span>)}</div>
           {canManage && <div className="mt-3 flex items-end gap-2"><Field label="Add option" value={newOpt[c.id] ?? ''} onChange={(e) => setNewOpt({ ...newOpt, [c.id]: e.target.value })} />

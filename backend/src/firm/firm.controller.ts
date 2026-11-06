@@ -13,7 +13,8 @@ import { requireOrg } from '../tenancy/acl';
 import { aged } from '../accounting/reports';
 import { deadlinesBetween, Rule } from './deadlines';
 import { buildTable, InvoiceView, renderInvoicesPdf, renderPdfMulti, renderXlsxMulti, REPORTS, ReportName } from './exporter';
-import { parseOptions, TEMPLATE_INFO } from './styles';
+import { optionsFor } from './styles';
+import { templateConfigFor } from './templates';
 import { parseAccounts, parseContacts, parseVouchers } from './importer';
 
 const DATA_DIR = () => process.env.DATA_DIR ?? join(process.cwd(), 'data');
@@ -198,13 +199,6 @@ export class FirmController {
     res.send(data);
   }
 
-  /** The templates people can choose from, and the reports that can be combined. */
-  @Get('export-options')
-  async exportOptions(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
-    return { templates: TEMPLATE_INFO, reports: REPORTS };
-  }
-
   /** Column headings of a report, so the export panel can offer to leave some out. */
   @Get('export-columns/:report')
   async exportColumns(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('report') report: string, @Query() q: Record<string, string>) {
@@ -219,7 +213,7 @@ export class FirmController {
     const fmt = q.format === 'xlsx' ? 'xlsx' : 'pdf';
     const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
     const tables = await this.tablesFor(orgId, [report], q);
-    const o = parseOptions(q);
+    const o = optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'report')), q);
     this.sendFile(res, fmt, report, fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : await renderXlsxMulti(tables, org.name, o));
   }
 
@@ -234,7 +228,7 @@ export class FirmController {
     const fmt = q.format === 'xlsx' ? 'xlsx' : 'pdf';
     const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
     const tables = await this.tablesFor(orgId, reports, q);
-    const o = parseOptions(q);
+    const o = optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'report')), q);
     this.sendFile(res, fmt, 'reports', fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : await renderXlsxMulti(tables, org.name, o));
   }
 
@@ -272,7 +266,7 @@ export class FirmController {
   async invoicePdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Query() q: Record<string, string>, @Res() res: Response) {
     await requireOrg(uid, orgId, 'read');
     const [v] = await this.invoiceViews(orgId, [id]);
-    const pdf = await renderInvoicesPdf([v], parseOptions(q));
+    const pdf = await renderInvoicesPdf([v], optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'document')), q));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${v.number.replace(/\//g, '-')}.pdf"`);
     res.send(pdf);
@@ -285,7 +279,7 @@ export class FirmController {
     const ids = [...new Set((q.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0))];
     if (!ids.length) throw new BadRequestException('Choose at least one document');
     if (ids.length > 100) throw new BadRequestException('Choose at most 100 documents at a time');
-    const pdf = await renderInvoicesPdf(await this.invoiceViews(orgId, ids), parseOptions(q));
+    const pdf = await renderInvoicesPdf(await this.invoiceViews(orgId, ids), optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'document')), q));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="documents.pdf"');
     res.send(pdf);

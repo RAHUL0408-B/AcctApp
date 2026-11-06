@@ -71,6 +71,13 @@ export async function download(path: string, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** POST something and get back a PDF as an object URL, to show in a frame (used to preview a template design). */
+export async function previewPdf(path: string, body: unknown): Promise<string> {
+  const res = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) }, body: JSON.stringify(body) });
+  if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(Array.isArray(d.message) ? d.message.join('; ') : d.message ?? `Error ${res.status}`); }
+  return URL.createObjectURL(await res.blob());
+}
+
 export const today = () => new Date().toISOString().slice(0, 10);
 
 /** Read a File as base64 (without the data: prefix). */

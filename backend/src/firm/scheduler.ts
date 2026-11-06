@@ -2,6 +2,7 @@
 import { getPool, withOrg } from '../db/db';
 import { financialYearOf } from '../ledger/ledger';
 import { buildTable, renderPdf, renderXlsx, ReportName } from './exporter';
+import { templateConfigFor } from './templates';
 import { processOutbox, queueMail } from './mailer';
 import { createBackup, pruneBackups, verifyBackup } from '../ops/backup';
 import { log, metrics } from '../ops/metrics';
@@ -45,7 +46,8 @@ export async function runScheduledReports(today = iso(new Date())) {
       for (const s of due) {
         const fy = financialYearOf(today);
         const table = await buildTable(c, s.report as ReportName, { from: fy.start, to: today, asOf: today });
-        const data = s.format === 'pdf' ? await renderPdf(table, o.name) : await renderXlsx(table, o.name);
+        const look = { ...(await templateConfigFor(c, 'report')), hide: [] as number[] }; // the organisation's chosen report template
+        const data = s.format === 'pdf' ? await renderPdf(table, o.name, look) : await renderXlsx(table, o.name, look);
         const attachment = { name: `${s.report}-${today}.${s.format}`, mime: s.format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data };
         for (const to of s.recipients) { await queueMail({ orgId: Number(o.id), to, subject: `${table.title} - ${o.name}`, body: `Attached: ${table.title} (${table.subtitle}).`, attachment }); sent++; }
         const nextRun = s.frequency === 'weekly' ? addDays(today, 7) : addMonth(today);

@@ -310,9 +310,9 @@ describe('export templates, options and combined exports', () => {
   const ExcelJS = require('exceljs');
   const sheets = async (buf: Buffer) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb; };
 
-  it('lists five templates', async () => {
-    const r = (await get('/export-options').expect(200)).body;
-    expect(r.templates.map((x: any) => x.name)).toEqual(['classic', 'modern', 'minimal', 'corporate', 'elegant']);
+  it('lists five built-in templates', async () => {
+    const r = (await get('/export-settings').expect(200)).body;
+    expect(r.presets.map((x: any) => x.name)).toEqual(['classic', 'modern', 'minimal', 'corporate', 'elegant']);
   });
 
   it.each(['classic', 'modern', 'minimal', 'corporate', 'elegant'])('renders a report and an invoice in the %s template', async (tpl) => {
@@ -368,5 +368,108 @@ describe('export templates, options and combined exports', () => {
   it('lists a report\'s columns for the picker', async () => {
     const r = (await get(`/export-columns/trial-balance?${range}`).expect(200)).body;
     expect(r.columns.length).toBeGreaterThan(2);
+  });
+});
+
+describe('export template settings (owner only)', () => {
+  const ExcelJS = require('exceljs');
+  const range = 'from=2026-01-01&to=2026-12-31&asOf=2026-12-31';
+  const as = (token: string, method: 'get' | 'post' | 'put' | 'delete', path: string, body?: object) => (ctx.http() as any)[method](base() + path).set(auth(token)).send(body ?? {});
+  let accountant: string, staff: string, client: string, otherOwner: string, otherOrg: number, tplId: number;
+  const design = { accent: '#b91c1c', headColour: '#7f1d1d', textColour: '#222222', font: 'mono', fontSize: 10, heading: 'band', tableHeader: 'solid', zebra: true, grid: true, rowLines: false, orientation: 'landscape', paper: 'A3', pageNumbers: false, footer: 'Brand footer', invoiceLabel: 'COMMERCIAL INVOICE' };
+  const headerRow = async (path: string) => { const r = await binary(ctx.http().get(base() + path).set(auth(t))).expect(200); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(r.body); return wb.worksheets[0].getRow(5).getCell(1); };
+
+  beforeAll(async () => {
+    accountant = (await ctx.register('acct@tpl.com', 'Acct Own Firm')).token;
+    staff = (await ctx.register('staff@tpl.com', 'Staff Own Firm')).token;
+    client = (await ctx.register('client@tpl.com', 'Client Own Firm')).token;
+    await ctx.http().post('/api/members').set(auth(t)).send({ firmId, email: 'acct@tpl.com', role: 'accountant' }).expect(201);
+    await ctx.http().post('/api/members').set(auth(t)).send({ firmId, email: 'staff@tpl.com', role: 'staff' }).expect(201);
+    await ctx.http().post('/api/members').set(auth(t)).send({ firmId, email: 'client@tpl.com', role: 'client', orgId: org }).expect(201);
+    const other = await ctx.register('other@tpl.com', 'Other Firm');
+    otherOwner = other.token; otherOrg = await ctx.newOrg(other.token, other.firmId, 'Other Traders');
+  });
+
+  it('starts with Classic for reports and invoices', async () => {
+    const r = (await get('/export-settings').expect(200)).body;
+    expect(r).toMatchObject({ canEdit: true, defaults: { report: 'classic', document: 'classic' }, templates: [] });
+  });
+
+  it('lets the owner design a template; values are checked and completed', async () => {
+    const r = await post('/export-templates', { name: 'Brand red', config: { ...design, accent: 'not-a-colour', fontSize: 99 } }).expect(201);
+    tplId = r.body.id;
+    const saved = (await get('/export-settings').expect(200)).body.templates.find((x: any) => x.id === tplId);
+    expect(saved.config).toMatchObject({ font: 'mono', heading: 'band', tableHeader: 'solid', headColour: '#7f1d1d', footer: 'Brand footer', accent: '#111111', fontSize: 9, paper: 'A3' });
+    await post('/export-templates', { name: 'brand RED', config: design }).expect(409);
+    await post('/export-templates', { name: '', config: design }).expect(400);
+  });
+
+  it('keeps the owner as the only person who can change templates; others can still read them', async () => {
+    for (const who of [accountant, staff, client]) {
+      await as(who, 'post', '/export-templates', { name: 'Nope', config: design }).expect(403);
+      await as(who, 'put', `/export-templates/${tplId}`, { name: 'Nope' }).expect(403);
+      await as(who, 'delete', `/export-templates/${tplId}`).expect(403);
+      await as(who, 'put', '/export-defaults', { report: 'modern', document: 'modern' }).expect(403);
+      await as(who, 'post', '/export-preview', { config: design, kind: 'report' }).expect(403);
+      const r = (await as(who, 'get', '/export-settings').expect(200)).body;
+      expect(r.canEdit).toBe(false);
+    }
+  });
+
+  it('applies the chosen template to reports without any options in the request', async () => {
+    await put('/export-defaults', { report: `custom:${tplId}`, document: 'modern' }).expect(200);
+    const cell = await headerRow(`/export/trial-balance?format=xlsx&${range}`);
+    expect(cell.font.name).toBe('Courier New');
+    expect(cell.fill.fgColor.argb).toBe('FF7F1D1D');           // the design's table heading colour
+    expect(cell.value).toBe('Code');
+    const multi = await binary(ctx.http().get(`${base()}/export-multi?format=xlsx&${range}&reports=trial-balance,pnl`).set(auth(t))).expect(200);
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(multi.body);
+    expect(wb.worksheets[0].getRow(5).getCell(1).fill.fgColor.argb).toBe('FF7F1D1D');
+  });
+
+  it('lets a request still ask for another built-in template', async () => {
+    const cell = await headerRow(`/export/trial-balance?format=xlsx&${range}&template=elegant`);
+    expect(cell.font.name).toBe('Times New Roman');
+  });
+
+  it('uses the chosen templates for invoice PDFs and scheduled reports', async () => {
+    const d = (await post('/documents', invoice({ number: 'TPL-DEFAULT' })).expect(201)).body.id;
+    const withModern = (await binary(ctx.http().get(`${base()}/documents/${d}/pdf`).set(auth(t))).expect(200)).body as Buffer;
+    await put('/export-defaults', { report: `custom:${tplId}`, document: 'classic' }).expect(200);
+    const withClassic = (await binary(ctx.http().get(`${base()}/documents/${d}/pdf`).set(auth(t))).expect(200)).body as Buffer;
+    expect(withModern.equals(withClassic)).toBe(false);
+    const sched = await post('/scheduled-reports', { report: 'trial-balance', format: 'xlsx', frequency: 'weekly', recipients: ['a@b.com'], firstRun: '2020-01-01' }).expect(201);
+    expect(sched.body.id).toBeGreaterThan(0);
+  });
+
+  it('refuses a template that does not exist or belongs to another organisation', async () => {
+    await put('/export-defaults', { report: 'custom:99999999', document: 'classic' }).expect(400);
+    await put('/export-defaults', { report: 'sparkly', document: 'classic' }).expect(400);
+    const theirs = (await ctx.http().post(`/api/orgs/${otherOrg}/export-templates`).set(auth(otherOwner)).send({ name: 'Theirs', config: design }).expect(201)).body.id;
+    await put('/export-defaults', { report: `custom:${theirs}`, document: 'classic' }).expect(400);
+    expect((await ctx.http().get(`/api/orgs/${otherOrg}/export-settings`).set(auth(otherOwner)).expect(200)).body.templates).toHaveLength(1);
+    await ctx.http().get(`/api/orgs/${otherOrg}/export-settings`).set(auth(t)).expect(404);   // not a member of that organisation
+  });
+
+  it('edits a template and previews the design as a PDF', async () => {
+    await put(`/export-templates/${tplId}`, { name: 'Brand red v2', config: { ...design, font: 'serif' } }).expect(200);
+    expect((await get('/export-settings').expect(200)).body.templates[0]).toMatchObject({ name: 'Brand red v2', config: { font: 'serif' } });
+    for (const kind of ['report', 'invoice']) {
+      const r = await binary(ctx.http().post(`${base()}/export-preview`).set(auth(t)).send({ config: design, kind })).expect(201);
+      expect((r.body as Buffer).subarray(0, 4).toString()).toBe('%PDF');
+    }
+    await post('/export-preview', { config: design, kind: 'nope' }).expect(400);
+  });
+
+  it('puts a deleted template back to Classic', async () => {
+    await put('/export-defaults', { report: `custom:${tplId}`, document: `custom:${tplId}` }).expect(200);
+    await del(`/export-templates/${tplId}`).expect(200);
+    expect((await get('/export-settings').expect(200)).body.defaults).toEqual({ report: 'classic', document: 'classic' });
+    await del(`/export-templates/${tplId}`).expect(404);
+  });
+
+  it('limits how many templates can be kept', async () => {
+    for (let i = 0; i < 20; i++) await post('/export-templates', { name: `T${i}`, config: design }).expect(201);
+    await post('/export-templates', { name: 'One too many', config: design }).expect(400);
   });
 });

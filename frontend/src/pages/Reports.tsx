@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, useAction } from '../ui';
-import { ExportPanel, prefsQuery } from '../export';
+import { CombinePanel } from '../export';
 
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
 const REPORTS = [
@@ -72,19 +72,16 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
   });
   useEffect(() => { load(); }, [rep, org.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}&${prefsQuery()}`, `${EXPORT[rep]}.${format}`));
-  // Customize panel: for this report (with its columns), or several reports combined into one file.
-  const [panel, setPanel] = useState<null | 'one' | 'many'>(null);
-  const [cols, setCols] = useState<string[] | undefined>();
-  const openOne = () => run(async () => { setCols(undefined); setPanel('one'); const r = await api(`/orgs/${org.id}/export-columns/${EXPORT[rep]}?${query()}`).catch(() => null); setCols(r?.columns); });
-  const exportOne = (format: 'pdf' | 'xlsx', style: string) => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}&${style}`, `${EXPORT[rep]}.${format}`));
+  const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}`, `${EXPORT[rep]}.${format}`));
+  // Several reports combined into one file. How the file looks comes from the organisation's report template.
+  const [combine, setCombine] = useState(false);
   const manyChoices = REPORTS.filter(([k]) => EXPORT[k]).map(([k, label]) => ({ key: k, label, disabled: k === 'ledger' && !accountId ? 'choose an account first' : undefined }));
-  const exportMany = (format: 'pdf' | 'xlsx', style: string, chosen: string[]) => run(() => {
+  const exportMany = (format: 'pdf' | 'xlsx', chosen: string[]) => run(() => {
     const p = new URLSearchParams({ from, to, asOf: to, ...(accountId ? { accountId } : {}) });
-    return download(`/orgs/${org.id}/export-multi?format=${format}&reports=${chosen.map((k) => EXPORT[k]).join(',')}&${p}&${style}`, `reports.${format}`);
+    return download(`/orgs/${org.id}/export-multi?format=${format}&reports=${chosen.map((k) => EXPORT[k]).join(',')}&${p}`, `reports.${format}`);
   });
   // Every account's ledger in one file, for the same dates.
-  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}&${prefsQuery()}`, `all-ledgers.${format}`); });
+  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}`, `all-ledgers.${format}`); });
 
   return (
     <>
@@ -103,15 +100,13 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
           <Button onClick={load}>Run</Button>
           <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
           {EXPORT[rep] && <><Button variant="ghost" onClick={() => exp('pdf')}>Export PDF</Button>
-          <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button>
-          <Button variant="ghost" aria-expanded={panel === 'one'} onClick={() => (panel === 'one' ? setPanel(null) : openOne())}>Customize export…</Button></>}
-          <Button variant="ghost" aria-expanded={panel === 'many'} onClick={() => setPanel(panel === 'many' ? null : 'many')}>Export several reports…</Button>
+          <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button></>}
+          <Button variant="ghost" aria-expanded={combine} onClick={() => setCombine(!combine)}>Export several reports…</Button>
           {rep === 'ledger' && <><Button variant="ghost" onClick={() => expAll('xlsx')}>Export all accounts (Excel)</Button><Button variant="ghost" onClick={() => expAll('pdf')}>Export all accounts (PDF)</Button></>}
         </div>
         <div className="mt-3"><ErrorMsg msg={error} /></div>
       </Card>
-      {panel === 'one' && EXPORT[rep] && <ExportPanel title={REPORTS.find((r) => r[0] === rep)![1]} formats={['pdf', 'xlsx']} columns={cols} busy={false} onExport={exportOne} onClose={() => setPanel(null)} />}
-      {panel === 'many' && <ExportPanel title="several reports in one file" formats={['pdf', 'xlsx']} choices={manyChoices} chosen={EXPORT[rep] ? [rep] : []} allowTitle={false} onExport={exportMany} onClose={() => setPanel(null)} />}
+      {combine && <CombinePanel title="Export several reports in one file" choices={manyChoices} chosen={EXPORT[rep] ? [rep] : []} busy={false} onExport={exportMany} onClose={() => setCombine(false)} />}
       {data && data.rep === rep && <Card title={REPORTS.find((r) => r[0] === rep)![1]}><ReportView rep={rep} d={data.d} org={org} reload={load} /></Card>}
     </>
   );

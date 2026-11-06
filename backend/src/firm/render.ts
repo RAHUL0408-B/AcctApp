@@ -107,7 +107,7 @@ export function renderPdfMulti(tables: Table[], orgName: string, o: ExportOption
       let x = 40;
       texts.forEach((s, i) => {
         if (look.grid) doc.rect(x, y - 2, w[i], rowH).strokeColor('#c9ced8').lineWidth(0.4).stroke();
-        doc.fillColor(o2.ink ?? '#111111').font(o2.bold ? look.bold : look.font).fontSize(fs)
+        doc.fillColor(o2.ink ?? look.text).font(o2.bold ? look.bold : look.font).fontSize(fs)
           .text(fit(doc, s, w[i] - 6), x + 3, y + 1, { width: w[i] - 6, align: t.columns[i].type === 'money' ? 'right' : 'left', lineBreak: false });
         x += w[i];
       });
@@ -115,7 +115,7 @@ export function renderPdfMulti(tables: Table[], orgName: string, o: ExportOption
     const headerRow = () => {
       const y = doc.y;
       const solid = look.headFill === 'solid', tinted = look.headFill === 'tint';
-      cells(t.columns.map((c) => c.header), y, { bold: true, fill: solid ? look.accent : tinted ? tint(look.accent, 0.86) : undefined, ink: solid ? onColour(look.accent) : tinted ? look.accent : '#111111' });
+      cells(t.columns.map((c) => c.header), y, { bold: true, fill: solid ? look.headColour : tinted ? tint(look.headColour, 0.86) : undefined, ink: solid ? onColour(look.headColour) : tinted ? look.headColour : look.text });
       if (!solid && !tinted) doc.moveTo(40, y + rowH - 1).lineTo(40 + W, y + rowH - 1).strokeColor(look.accent).lineWidth(look.head === 'minimal' ? 0.6 : 1).stroke();
       doc.y = y + rowH + 2;
     };
@@ -161,8 +161,8 @@ function addSheet(wb: ExcelJS.Workbook, sheetName: string, t: Table, orgName: st
   const title = single ? (o.title ?? t.title) : t.title;
   const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] });
   const n = t.columns.length, argb = (hex: string) => `FF${hex.slice(1).toUpperCase()}`;
-  const fontName = look.font === 'Times-Roman' ? 'Times New Roman' : 'Calibri';
-  const accent = look.accent, solid = look.headFill === 'solid', tinted = look.headFill === 'tint';
+  const fontName = look.excelFont;
+  const accent = look.accent, headC = look.headColour, solid = look.headFill === 'solid', tinted = look.headFill === 'tint';
   const side = { style: 'thin' as const, color: { argb: 'FFC9CED8' } };
 
   // ----- centred heading block: organisation, report, period, note
@@ -182,10 +182,10 @@ function addSheet(wb: ExcelJS.Workbook, sheetName: string, t: Table, orgName: st
   const head = ws.addRow(t.columns.map((c) => c.header));
   head.height = 24;
   head.eachCell((c, i) => {
-    c.font = { name: fontName, bold: true, size: 11, color: { argb: solid ? argb(onColour(accent)) : tinted ? argb(accent) : 'FF111111' } };
+    c.font = { name: fontName, bold: true, size: 11, color: { argb: solid ? argb(onColour(headC)) : tinted ? argb(headC) : argb(look.text) } };
     c.alignment = { horizontal: t.columns[i - 1].type === 'money' ? 'right' : 'left', vertical: 'middle', wrapText: true, indent: 1 };
-    if (solid) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(accent) } };
-    else if (tinted) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(tint(accent, 0.86)) } };
+    if (solid) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(headC) } };
+    else if (tinted) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(tint(headC, 0.86)) } };
     c.border = solid || look.grid ? { top: side, bottom: side, left: side, right: side } : { bottom: { style: look.head === 'minimal' ? 'thin' : 'medium', color: { argb: argb(accent) } } };
   });
   const headerRowNo = head.number;
@@ -198,7 +198,7 @@ function addSheet(wb: ExcelJS.Workbook, sheetName: string, t: Table, orgName: st
     row.eachCell({ includeEmpty: true }, (c, i) => {
       if (i > n) return;
       const money = t.columns[i - 1].type === 'money';
-      c.font = { name: fontName, size: 10, bold };
+      c.font = { name: fontName, size: 10, bold, color: { argb: argb(look.text) } };
       c.alignment = { horizontal: money ? 'right' : 'left', vertical: 'middle', indent: money ? 0 : 1 };
       if (money) c.numFmt = '#,##0.00;[Red]-#,##0.00';
       if (bold) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(tint(accent, accent === '#111111' ? 0.92 : 0.88)) } };
@@ -241,7 +241,7 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
     doc.on('data', (d) => chunks.push(d)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject);
     const drawInvoice = (v: InvoiceView) => {
     const W = doc.page.width - 80, pageH = doc.page.height, fs = Math.min(o.fontSize, 10.5);
-    const label = (views.length === 1 ? o.title : undefined) ?? ({ invoice: 'TAX INVOICE', bill: 'PURCHASE BILL', credit_note: 'CREDIT NOTE', debit_note: 'DEBIT NOTE' }[v.type] ?? v.type.toUpperCase());
+    const label = (views.length === 1 ? o.title : undefined) ?? (v.type === 'invoice' && o.invoiceLabel ? o.invoiceLabel : undefined) ?? ({ invoice: 'TAX INVOICE', bill: 'PURCHASE BILL', credit_note: 'CREDIT NOTE', debit_note: 'DEBIT NOTE' }[v.type] ?? v.type.toUpperCase());
     const ink = onColour(look.accent), soft = tint(look.accent, 0.9);
 
     // ----- heading
@@ -272,28 +272,28 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
 
     // ----- details
     const top = doc.y;
-    doc.fillColor('#111111').font(look.font).fontSize(fs);
+    doc.fillColor(look.text).font(look.font).fontSize(fs);
     const meta: [string, string][] = [['Number', v.number], ['Date', v.issueDate], ...(v.dueDate ? [['Due', v.dueDate] as [string, string]] : []), ['Place of supply', v.placeOfSupply ?? '-']];
     const billBox = look.grid || look.head === 'band';
-    if (billBox) doc.roundedRect(40, top, W / 2 - 10, 62, 4).fillAndStroke(soft, tint(look.accent, 0.6)).fillColor('#111111');
+    if (billBox) doc.roundedRect(40, top, W / 2 - 10, 62, 4).fillAndStroke(soft, tint(look.accent, 0.6)).fillColor(look.text);
     doc.font(look.bold).fontSize(fs - 1).fillColor(look.accent).text(v.type === 'bill' || v.type === 'debit_note' ? 'SUPPLIER' : 'BILL TO', 50, top + 8, { width: W / 2 - 30 });
-    doc.font(look.bold).fontSize(fs + 1.5).fillColor('#111111').text(v.contact, 50, doc.y + 1, { width: W / 2 - 30 });
+    doc.font(look.bold).fontSize(fs + 1.5).fillColor(look.text).text(v.contact, 50, doc.y + 1, { width: W / 2 - 30 });
     doc.font(look.font).fontSize(fs).fillColor('#444444').text(v.contactGstin ? `GSTIN: ${v.contactGstin}` : 'Unregistered', 50, doc.y, { width: W / 2 - 30 });
     let my = top + 8;
-    meta.forEach(([k, val]) => { doc.font(look.font).fontSize(fs).fillColor('#666666').text(k, 40 + W / 2 + 20, my, { width: 90, lineBreak: false }); doc.font(look.bold).fillColor('#111111').text(fit(doc, val, W / 2 - 112), 40 + W / 2 + 112, my, { width: W / 2 - 112, lineBreak: false }); my += fs + 5; });
+    meta.forEach(([k, val]) => { doc.font(look.font).fontSize(fs).fillColor('#666666').text(k, 40 + W / 2 + 20, my, { width: 90, lineBreak: false }); doc.font(look.bold).fillColor(look.text).text(fit(doc, val, W / 2 - 112), 40 + W / 2 + 112, my, { width: W / 2 - 112, lineBreak: false }); my += fs + 5; });
     doc.y = Math.max(doc.y, my, top + 62) + 16;
 
     // ----- lines table
     const cols = [{ h: 'Description', w: W - 285, a: 'left' }, { h: 'HSN/SAC', w: 60, a: 'left' }, { h: 'Qty', w: 40, a: 'right' }, { h: 'Rate', w: 70, a: 'right' }, { h: 'GST %', w: 40, a: 'right' }, { h: 'Amount', w: 75, a: 'right' }] as const;
     const rowH = fs + 8;
-    const row = (cells: string[], y: number, bold: boolean, fill?: string, colour = '#111111') => {
+    const row = (cells: string[], y: number, bold: boolean, fill?: string, colour = look.text) => {
       if (fill) doc.rect(40, y - 3, W, rowH).fill(fill);
       let x = 40; doc.fillColor(colour).font(bold ? look.bold : look.font).fontSize(fs);
       cells.forEach((s, i) => { if (look.grid) doc.rect(x, y - 3, cols[i].w, rowH).strokeColor('#c9ced8').lineWidth(0.4).stroke(); doc.fillColor(colour).text(fit(doc, s, cols[i].w - 6), x + 3, y + 1, { width: cols[i].w - 6, align: cols[i].a, lineBreak: false }); x += cols[i].w; });
     };
     const header = () => {
       const y = doc.y, solid = look.headFill === 'solid', tinted = look.headFill === 'tint';
-      row(cols.map((c) => c.h), y, true, solid ? look.accent : tinted ? tint(look.accent, 0.86) : undefined, solid ? ink : tinted ? look.accent : '#111111');
+      row(cols.map((c) => c.h), y, true, solid ? look.headColour : tinted ? tint(look.headColour, 0.86) : undefined, solid ? onColour(look.headColour) : tinted ? look.headColour : look.text);
       if (!solid && !tinted) doc.moveTo(40, y + rowH - 3).lineTo(40 + W, y + rowH - 3).strokeColor(look.accent).lineWidth(look.head === 'minimal' ? 0.6 : 1).stroke();
       doc.y = y + rowH;
     };

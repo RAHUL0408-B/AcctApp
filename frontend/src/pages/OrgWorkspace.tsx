@@ -14,6 +14,7 @@ import { PageHeader } from '../kit';
 import { Inventory } from './Inventory';
 import { Approvals, ExpenseClaims } from './Approvals';
 import { Budgets, Tracking, YearEnd } from './Planning';
+import { ExportTemplates } from './ExportTemplates';
 import { Overview } from './Overview';
 import { Journal } from './Journal';
 import { Money } from './Money';
@@ -24,11 +25,11 @@ interface Entry { id: number; date: string; narration: string; reversesId: numbe
 interface TB { accounts: { code: string; name: string; debit: number; credit: number }[]; totalDebit: number; totalCredit: number; balanced: boolean }
 
 export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
-  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking'
+  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking' | 'export-templates'
   | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings';
 
 /** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
-export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; heading?: string; divider?: boolean; gear?: boolean }
+export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; owner?: boolean; heading?: string; divider?: boolean; gear?: boolean }
 
 /** Top-bar menus. Entries marked manage are only shown to owners and accountants. */
 export const NAV: { group: string; items: NavItem[] }[] = [
@@ -52,6 +53,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'tracking', label: 'Cost centres' },
     { key: 'files', label: 'Documents', heading: 'Records and setup' }, { key: 'year-end', label: 'Year-end close' },
     { key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true },
+    { key: 'export-templates', label: 'Export templates', owner: true },
     { key: 'settings', label: 'Organisation settings', gear: true }] },
   { group: 'Tax', items: [
     { key: 'reports', sub: 'gstr1', label: 'GSTR-1', heading: 'GST' }, { key: 'reports', sub: 'gstr3b', label: 'GSTR-3B' },
@@ -103,6 +105,7 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'budgets': return <Budgets org={org} canManage={canManage} accounts={accounts} />;
     case 'year-end': return <YearEnd org={org} canManage={canManage} />;
     case 'tracking': return <Tracking org={org} canManage={canManage} />;
+    case 'export-templates': return <ExportTemplates org={org} role={role} />;
     case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
   }
 }

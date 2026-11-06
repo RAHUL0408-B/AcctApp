@@ -5,7 +5,6 @@ import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account, Item } from './Lines';
-import { ExportPanel, prefsQuery } from '../export';
 
 export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; accounts: Account[] }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -122,8 +121,7 @@ export function FixedAssets({ org, canManage, accounts = [] }: { org: Org; canMa
     setExisting(await api<Attachment[]>(`/orgs/${org.id}/files?linkType=asset&linkId=${a.id}`).catch(() => []));
     setFiles([]); setEditing(a.id); setShow(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  const [customExport, setCustomExport] = useState(false);
-  const exportRegister = (format: 'xlsx' | 'pdf', style = prefsQuery()) => run(() => download(`/orgs/${org.id}/export/fixed-assets?format=${format}&asOf=${today()}&${style}`, `fixed-asset-register.${format === 'xlsx' ? 'xlsx' : 'pdf'}`));
+  const exportRegister = (format: 'xlsx' | 'pdf') => run(() => download(`/orgs/${org.id}/export/fixed-assets?format=${format}&asOf=${today()}`, `fixed-asset-register.${format === 'xlsx' ? 'xlsx' : 'pdf'}`));
 
   const disposeCall = (d: NonNullable<typeof disposing>, preview: boolean) => api(`/orgs/${org.id}/fixed-assets/${d.id}/dispose`, { body: { date: d.date, proceeds: d.proceeds ? toPaise(d.proceeds) : 0, ...(d.accountId ? { accountId: Number(d.accountId) } : {}), preview } });
   const previewDisposal = () => run(async () => { if (disposing) setDisposing({ ...disposing, preview: await disposeCall(disposing, true) }); });
@@ -139,10 +137,8 @@ export function FixedAssets({ org, canManage, accounts = [] }: { org: Org; canMa
       <PageHeader title="Fixed assets" subtitle="Asset register with depreciation posted to the ledger." actions={<>
         <Button variant="ghost" disabled={busy} onClick={() => exportRegister('xlsx')}>Export Excel</Button>
         <Button variant="ghost" disabled={busy} onClick={() => exportRegister('pdf')}>Export PDF</Button>
-        <Button variant="ghost" aria-expanded={customExport} onClick={() => setCustomExport(!customExport)}>Customize export…</Button>
         {canManage && <Button onClick={() => { if (show) reset(); else { setF(blank); setEditing(null); setShow(true); } }}>{show ? 'Close' : 'New asset'}</Button>}</>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
-      {customExport && <ExportPanel title="Fixed asset register" formats={['pdf', 'xlsx']} busy={busy} onExport={(format, style) => exportRegister(format, style)} onClose={() => setCustomExport(false)} />}
       {show && (
         <Card title={editing ? `Edit ${f.name || 'asset'}` : 'New asset'}>
           <div className="grid gap-3 md:grid-cols-3">

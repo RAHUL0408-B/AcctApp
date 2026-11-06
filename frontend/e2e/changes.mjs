@@ -249,26 +249,16 @@ await btn('Post entry').click();
 await ok('Entry posted.');
 step('cost centre chosen once for a whole invoice and journal, and changed on a single line');
 
-// ---- export templates: customise one report, several reports in one file, several invoices in one PDF
+// ---- exports: one template for everything, set by the owner under Export templates
 const fs = await import('fs');
 const grabbed = async (click) => { const [dl] = await Promise.all([page.waitForEvent('download'), click()]); const buf = fs.readFileSync(await dl.path()); return { name: dl.suggestedFilename(), head: buf.subarray(0, 4).toString('latin1'), size: buf.length }; };
 await menu('Reporting', 'All reports');
 await heading('Reports');
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
-await btn('Customize export…').click();
-for (const n of ['Classic', 'Modern', 'Minimal', 'Corporate', 'Elegant']) await page.getByRole('radio', { name: `${n} template` }).waitFor();
-await page.getByRole('radio', { name: 'Corporate template' }).click();
-await page.getByLabel('Export title').fill('Board pack');
-await page.getByLabel('Export footer').fill('Confidential');
-await page.getByLabel('Page direction').selectOption('landscape');
-await page.getByLabel('Include column Credit').uncheck();
-if (process.env.SHOT_DIR) await page.screenshot({ path: process.env.SHOT_DIR + '/export-panel.png', fullPage: true });
-let f = await grabbed(() => btn('Download PDF').click());
+assert.strictEqual(await page.getByRole('button', { name: 'Customize export…' }).count(), 0, 'the per-export customise option is gone');
+let f = await grabbed(() => btn('Export PDF').click());
 assert.strictEqual(f.head, '%PDF'); assert.strictEqual(f.name, 'trial-balance.pdf');
-f = await grabbed(() => btn('Download Excel').click());
-assert.strictEqual(f.head.slice(0, 2), 'PK');
-assert.strictEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('export-preferences')).template), 'corporate', 'the chosen template is remembered');
-step('report exported as PDF and Excel from the Customize panel (template, title, footer, direction, column left out) and the choice is remembered');
+step('reports export straight away; the per-export customise option is gone');
 
 await btn('Export several reports…').click();
 await page.getByLabel('Profit & loss', { exact: true }).check();
@@ -287,11 +277,74 @@ await heading('Invoices');
 await page.getByLabel('Select all', { exact: true }).check();
 f = await grabbed(() => btn('Download as one PDF').click());
 assert.strictEqual(f.head, '%PDF'); assert.strictEqual(f.name, 'documents.pdf');
-await btn('PDF style…').click();
-await page.getByRole('radio', { name: 'Elegant template' }).click();
-f = await grabbed(() => btn('Download PDF').click());
-assert.strictEqual(f.head, '%PDF');
-step('all selected invoices downloaded as one PDF, in the chosen template');
+assert.strictEqual(await page.getByRole('button', { name: 'PDF style…' }).count(), 0);
+step('all selected invoices downloaded as one PDF');
+
+// the owner designs a template and uses it everywhere
+await menu('Accounting', 'Export templates');
+await heading('Export templates');
+await page.getByText('Ready-made templates').waitFor();
+for (const n of ['Classic', 'Modern', 'Minimal', 'Corporate', 'Elegant']) await page.getByRole('button', { name: `Customise ${n}` }).waitFor();
+await btn('New template').click();
+await page.getByLabel('Template name').fill('Brand red');
+await page.getByRole('button', { name: 'Start from Modern' }).click();
+await page.getByLabel('Main colour', { exact: true }).fill('#b91c1c');
+await page.getByRole('radio', { name: 'Typeface Typewriter' }).click();
+await page.getByRole('radio', { name: 'Heading Coloured band' }).click();
+await page.getByRole('radio', { name: 'Table heading Solid colour' }).click();
+await page.getByLabel('Table heading uses the main colour').uncheck();
+await page.getByLabel('Table heading colour').fill('#7f1d1d');
+await page.getByLabel('Striped rows').check();
+await page.getByLabel('Footer text').fill('Brand footer');
+await page.getByLabel('Invoice heading').fill('COMMERCIAL INVOICE');
+await btn('Preview report').click();
+await page.getByTitle('Template preview').waitFor();
+await btn('Preview invoice').click();
+await page.getByText('Preview: sample invoice').waitFor();
+await btn('Save template').click();
+await ok(/Template "Brand red" saved/);
+await page.getByRole('button', { name: 'Edit Brand red' }).waitFor();
+await page.getByLabel('Template for reports').selectOption({ label: 'Brand red (yours)' });
+await page.getByLabel('Template for invoices and bills').selectOption({ label: 'Corporate' });
+await btn('Save choice').click();
+await ok(/Reports now use Brand red; invoices and bills use Corporate/);
+const tok = await page.evaluate(() => sessionStorage.getItem('token'));
+const orgId = Number(page.url().match(/#\/o\/(\d+)\//)[1]);
+const api = async (path, body, token = tok) => (await fetch(`${URL}/api${path}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: body ? JSON.stringify(body) : undefined })).json();
+const saved = await api(`/orgs/${orgId}/export-settings`);
+assert(saved.defaults.report.startsWith('custom:') && saved.defaults.document === 'corporate', 'the choices are saved on the server');
+assert.strictEqual(saved.templates[0].config.font, 'mono');
+step('owner designed "Brand red" (colours, typeface, heading, table style, footer), previewed it as PDF, and chose it for reports and Corporate for invoices');
+
+await menu('Reporting', 'All reports');
+await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
+f = await grabbed(() => btn('Export Excel').click());
+assert.strictEqual(f.head.slice(0, 2), 'PK');
+step('reports now download in the chosen template with no options to pick');
+
+// a staff member sees the choices but cannot change them
+const staffEmail = `staff${Date.now()}@example.com`;
+const reg = await (await fetch(`${URL}/api/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: staffEmail, password, fullName: 'Staff Person', firmName: 'Staff Own Firm', acceptTerms: true }) })).json();
+assert(reg.token, 'staff user registered');
+const me = await api('/auth/me');
+await api('/members', { firmId: me.memberships[0].firmId, email: staffEmail, role: 'staff' });
+const staffPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await staffPage.goto(URL);
+await staffPage.getByLabel('Email').fill(staffEmail);
+await staffPage.getByLabel('Password').fill(password);
+await staffPage.getByRole('button', { name: 'Log in' }).click();
+await staffPage.getByRole('navigation', { name: 'Account' }).waitFor();
+await staffPage.evaluate((p) => { location.hash = p; }, `/o/${orgId}/export-templates`);
+await staffPage.getByRole('heading', { name: 'Export templates', level: 1 }).waitFor();
+await staffPage.getByText('Only the owner can change export templates').waitFor();
+assert.strictEqual(await staffPage.getByRole('button', { name: 'New template' }).count(), 0, 'staff cannot design templates');
+assert.strictEqual(await staffPage.getByRole('button', { name: 'Save choice' }).count(), 0, 'staff cannot change the choice');
+assert(await staffPage.getByLabel('Template for reports').isDisabled(), 'the choice is read-only for staff');
+await staffPage.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }).click();
+await staffPage.locator('header').getByRole('button', { name: 'Chart of accounts', exact: true }).waitFor();
+assert.strictEqual(await staffPage.locator('header').getByRole('button', { name: 'Export templates', exact: true }).count(), 0, 'the menu hides Export templates from staff');
+await staffPage.close();
+step('a staff login sees the choices read-only and the menu hides Export templates');
 
 // ---- expense claim: rejected claim is corrected and resubmitted
 await menu('Purchases', 'Expense claims');

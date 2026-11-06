@@ -43,26 +43,45 @@ const ICONS = {
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-2.82-1.17l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3 15.08H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.17-2.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 2.82 1.17l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 20.91 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
 };
 
-/** A top-bar menu that opens on click and closes on outside click or Escape. */
-function Menu({ label, active, children, align = 'left', trigger, width = 'min-w-60' }: { label: string; active?: boolean; children: (close: () => void) => ReactNode; align?: 'left' | 'right'; trigger?: ReactNode; width?: string }) {
-  const [open, setOpen] = useState(false);
+/**
+ * A top-bar menu that opens on click and closes on outside click or Escape.
+ * Pass open/onOpenChange to let the parent keep one menu open at a time, and onHover to switch menus by hovering
+ * once one is open. Arrow keys move between entries.
+ */
+function Menu({ label, active, children, align = 'left', trigger, width = 'min-w-60', open: controlled, onOpenChange, onHover }: {
+  label: string; active?: boolean; children: (close: () => void) => ReactNode; align?: 'left' | 'right'; trigger?: ReactNode; width?: string;
+  open?: boolean; onOpenChange?: (open: boolean) => void; onHover?: () => void;
+}) {
+  const [inner, setInner] = useState(false);
+  const open = controlled ?? inner;
+  const setOpen = (v: boolean) => (onOpenChange ? onOpenChange(v) : setInner(v));
   const ref = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); button.current?.focus(); } };
     document.addEventListener('mousedown', away); document.addEventListener('keydown', esc);
     return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
-  }, [open]);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  const entries = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-menu-entry]') ?? []);
+  const arrow = (e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const list = entries(); if (!list.length) return;
+    e.preventDefault();
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    list[e.key === 'ArrowDown' ? (at + 1) % list.length : (at <= 0 ? list.length - 1 : at - 1)].focus();
+  };
   return (
-    <div ref={ref} className="relative">
-      <button aria-haspopup="true" aria-expanded={open} aria-label={trigger ? label : undefined} title={trigger ? label : undefined} onClick={() => setOpen(!open)}
-        className={trigger ? `flex h-10 min-w-10 items-center justify-center rounded-md px-2 text-white transition-colors ${open ? 'bg-white/20' : 'hover:bg-white/15'}`
-          : `relative flex h-14 items-center gap-1 px-3 text-sm font-medium transition-colors ${active || open ? 'bg-white/10 text-white' : 'text-indigo-100 hover:bg-white/10 hover:text-white'} ${active ? 'after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-white' : ''}`}>
-        {trigger ?? label}
+    <div ref={ref} className="relative" onKeyDown={arrow} onMouseEnter={onHover}>
+      <button ref={button} aria-haspopup="true" aria-expanded={open} aria-label={trigger ? label : undefined} title={trigger ? label : undefined} onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); e.stopPropagation(); setOpen(true); } }}
+        className={trigger ? `flex h-10 min-w-10 items-center justify-center rounded-md px-2 text-white transition-colors focus-visible:outline-2 focus-visible:outline-white ${open ? 'bg-white/20' : 'hover:bg-white/15'}`
+          : `relative flex h-14 items-center gap-1 px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white ${active || open ? 'bg-white/10 text-white' : 'text-indigo-100 hover:bg-white/10 hover:text-white'} ${active ? 'after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-white' : ''}`}>
+        {trigger ?? <>{label}<svg width="9" height="9" viewBox="0 0 10 10" aria-hidden className={`opacity-70 transition-transform ${open ? 'rotate-180' : ''}`}><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></>}
       </button>
       {open && (
-        <div className={`absolute top-full z-40 mt-1 ${width} rounded-lg border border-slate-200 bg-white py-2 text-slate-800 shadow-xl ${align === 'right' ? 'right-0' : 'left-0'}`}>
+        <div className={`absolute top-full z-40 mt-1 max-w-[calc(100vw-1rem)] ${width} rounded-lg border border-slate-200 bg-white py-2 text-slate-800 shadow-xl ${align === 'right' ? 'right-0' : 'left-0'}`}>
           {children(() => setOpen(false))}
         </div>
       )}
@@ -70,8 +89,8 @@ function Menu({ label, active, children, align = 'left', trigger, width = 'min-w
   );
 }
 const MenuItem = ({ active, onClick, children, right, shortcut }: { active?: boolean; onClick: () => void; children: ReactNode; right?: ReactNode; shortcut?: string }) => (
-  <button onClick={onClick} aria-keyshortcuts={shortcut ? `Alt+${shortcut}` : undefined}
-    className={`flex w-full items-center justify-between gap-6 px-5 py-2 text-left text-sm ${active ? 'bg-brand-50 font-medium text-brand-700' : 'text-slate-700 hover:bg-slate-100'}`}>
+  <button data-menu-entry onClick={onClick} aria-current={active ? 'page' : undefined} aria-keyshortcuts={shortcut ? `Alt+${shortcut}` : undefined}
+    className={`flex w-full items-center justify-between gap-6 px-5 py-2 text-left text-sm focus-visible:bg-slate-100 focus-visible:outline-none ${active ? 'bg-brand-50 font-medium text-brand-700' : 'text-slate-700 hover:bg-slate-100'}`}>
     {children}
     {right && <span aria-hidden>{right}</span>}
     {shortcut && <span aria-hidden className="flex gap-1 text-xs text-slate-500"><kbd className="rounded border border-slate-300 bg-slate-50 px-1.5">Alt</kbd><kbd className="rounded border border-slate-300 bg-slate-50 px-1.5">{shortcut}</kbd></span>}
@@ -80,11 +99,26 @@ const MenuItem = ({ active, onClick, children, right, shortcut }: { active?: boo
 const MenuHeading = ({ children }: { children: ReactNode }) => <p className="px-5 pb-1 pt-2 text-xs font-semibold text-slate-500">{children}</p>;
 const MenuDivider = () => <hr className="my-2 border-slate-200" />;
 
+type Section = { heading?: string; items: NavItem[] };
+/** Split a menu's entries into sections: a new one starts at every heading or divider. */
+const sectionsOf = (items: NavItem[]): Section[] => {
+  const out: Section[] = [];
+  for (const i of items) { if (!out.length || i.heading || i.divider) out.push({ heading: i.heading, items: [i] }); else out[out.length - 1].items.push(i); }
+  return out;
+};
+/** A menu with three or more headed sections is laid out in columns instead of one long list. */
+const isWide = (items: NavItem[]) => sectionsOf(items).filter((x) => x.heading).length >= 3;
+const hrefOf = (i: NavItem) => (i.sub ? `${i.key}/${i.sub}` : i.key);
+
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(!!getToken());
+  const [openGroup, setOpenGroup] = useState<string | null>(null); // which top-bar section menu is open
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileGroup, setMobileGroup] = useState<string | null>(null);
   const route = useRoute();
+  useEffect(() => { setOpenGroup(null); setMobileOpen(false); }, [route]);
 
   const load = useCallback(async () => {
     const token = getToken(); // if the user logs out (or in as someone else) while this runs, drop the stale result
@@ -122,15 +156,23 @@ export function App() {
   const firmRole = me.memberships.find((x) => x.orgId === null);
   const logout = () => { setToken(null); setMe(null); setOrgs([]); navigate('/clients'); };
   const isActive = (i: NavItem) => page === i.key && (!i.sub || i.sub === sub);
+  /** "Sales › Invoices": where the current page lives in the menus. */
+  const crumb: [string, string?] | null = (() => {
+    if (!org) return null;
+    const hit = (strict: boolean) => { for (const g of NAV) for (const i of g.items) if (i.key === page && (strict ? !i.sub || i.sub === sub : true)) return [g.group, g.items.length === 1 ? undefined : i.label] as [string, string?]; return null; };
+    return hit(true) ?? hit(false);
+  })();
 
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 bg-nav text-white shadow-md">
         <div className="flex h-14 items-center gap-1 px-3">
+          {org && <button className="mr-1 flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 xl:hidden" aria-label={mobileOpen ? 'Close menu' : 'Open menu'} aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d={mobileOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} /></svg></button>}
           <button className="mr-1 flex items-center gap-2 rounded-md px-2 py-1 text-lg font-bold tracking-tight hover:bg-white/10" onClick={() => navigate('/clients')} aria-label={`${APP_NAME} home`}><Logo /><span className="hidden 2xl:inline">{APP_NAME}</span></button>
 
           <Menu label="Organisation menu" width="w-80" trigger={
-            <span className="flex max-w-56 items-center gap-2 text-sm font-semibold"><span className="truncate">{org?.name ?? 'All clients'}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></span>}>
+            <span className="flex max-w-24 items-center gap-2 text-sm font-semibold sm:max-w-56"><span className="truncate">{org?.name ?? 'All clients'}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></span>}>
             {(close) => {
               const to = (p: string) => { close(); navigate(p); };
               return (<>
@@ -155,27 +197,38 @@ export function App() {
           </Menu>
 
           {org && (
-            <nav className="flex items-center" aria-label="Client sections">
+            <nav className="hidden items-center xl:flex" aria-label="Client sections">
               {NAV.map((g) => {
                 const items = g.items.filter((i) => !i.manage || canManage);
                 if (!items.length) return null;
                 const groupActive = items.some(isActive);
                 if (items.length === 1) {
                   const i = items[0];
-                  return <button key={g.group} aria-current={groupActive ? 'page' : undefined} onClick={() => goOrg(i.sub ? `${i.key}/${i.sub}` : i.key)}
-                    className={`relative flex h-14 items-center px-3 text-sm font-medium transition-colors ${groupActive ? 'bg-white/10 text-white after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-white' : 'text-indigo-100 hover:bg-white/10 hover:text-white'}`}>{i.label}</button>;
+                  return <button key={g.group} aria-current={groupActive ? 'page' : undefined} onClick={() => goOrg(hrefOf(i))} onMouseEnter={() => setOpenGroup(null)}
+                    className={`relative flex h-14 items-center px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white ${groupActive ? 'bg-white/10 text-white after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-white' : 'text-indigo-100 hover:bg-white/10 hover:text-white'}`}>{i.label}</button>;
                 }
+                const wide = isWide(items);
                 return (
-                  <Menu key={g.group} label={g.group} active={groupActive}>
+                  <Menu key={g.group} label={g.group} active={groupActive} width={wide ? 'w-[46rem]' : 'min-w-60'}
+                    open={openGroup === g.group} onOpenChange={(v) => setOpenGroup(v ? g.group : null)} onHover={() => openGroup && openGroup !== g.group && setOpenGroup(g.group)}>
                     {(close) => {
                       const to = (p: string) => { close(); goOrg(p); };
+                      const entry = (i: NavItem, n: number) => <MenuItem key={`${i.key}-${i.sub ?? ''}-${n}`} active={isActive(i)} onClick={() => to(hrefOf(i))} right={i.gear ? <Icon d={ICONS.gear} size={16} /> : undefined}>{i.label}</MenuItem>;
+                      if (wide) {
+                        // Columns: one per heading, so a long list stays on one screen and is easy to scan.
+                        return (
+                          <div className="grid grid-cols-3 divide-x divide-slate-100">
+                            {sectionsOf(items).map((sec, n) => (
+                              <div key={n}>{sec.heading && <MenuHeading>{sec.heading}</MenuHeading>}{sec.items.map(entry)}</div>))}
+                          </div>);
+                      }
                       const favs = g.group === 'Reporting' ? favouriteReports() : [];
                       return (<>
                         {items.map((i, n) => (
                           <div key={`${i.key}-${i.sub ?? ''}-${n}`}>
                             {i.divider && <MenuDivider />}
                             {i.heading && <MenuHeading>{i.heading}</MenuHeading>}
-                            <MenuItem active={isActive(i)} onClick={() => to(i.sub ? `${i.key}/${i.sub}` : i.key)} right={i.gear ? <Icon d={ICONS.gear} size={16} /> : undefined}>{i.label}</MenuItem>
+                            {entry(i, n)}
                           </div>))}
                         {g.group === 'Reporting' && <>
                           <MenuDivider /><MenuHeading>Favourite reports ★</MenuHeading>
@@ -204,7 +257,7 @@ export function App() {
                 {(close) => <SearchPanel org={org} onPick={(p) => { close(); goOrg(p); }} />}
               </Menu>
             )}
-            <button aria-label="Help" title="Help" onClick={() => navigate('/help')} className="flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/15"><Icon d={ICONS.help} /></button>
+            <button aria-label="Help" title="Help" onClick={() => navigate('/help')} className="hidden h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 sm:flex"><Icon d={ICONS.help} /></button>
             {org && <Notifications org={org} onPick={(p) => goOrg(p)} />}
             <nav aria-label="Account" className="ml-1">
               <Menu label="Account menu" align="right" width="w-64" trigger={<span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-xs font-bold ring-2 ring-white/30">{initialsOf(me.fullName)}</span>}>
@@ -224,13 +277,38 @@ export function App() {
             </nav>
           </div>
         </div>
+        {org && mobileOpen && (
+          <nav aria-label="Small-screen menu" className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t border-white/10 bg-nav xl:hidden">
+            {NAV.map((g) => {
+              const items = g.items.filter((i) => !i.manage || canManage);
+              if (!items.length) return null;
+              const groupActive = items.some(isActive);
+              if (items.length === 1) return <button key={g.group} onClick={() => goOrg(hrefOf(items[0]))} aria-current={groupActive ? 'page' : undefined}
+                className={`flex w-full items-center px-5 py-3 text-left text-sm font-medium ${groupActive ? 'bg-white/10 text-white' : 'text-indigo-100 hover:bg-white/10'}`}>{items[0].label}</button>;
+              const opened = mobileGroup === g.group;
+              return (
+                <div key={g.group}>
+                  <button aria-expanded={opened} onClick={() => setMobileGroup(opened ? null : g.group)}
+                    className={`flex w-full items-center justify-between px-5 py-3 text-left text-sm font-medium ${groupActive ? 'text-white' : 'text-indigo-100'} hover:bg-white/10`}>{g.group}
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className={`transition-transform ${opened ? 'rotate-180' : ''}`}><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></button>
+                  {opened && <div className="bg-white py-1 text-slate-800">
+                    {sectionsOf(items).map((sec, n) => (
+                      <div key={n}>{sec.heading && <MenuHeading>{sec.heading}</MenuHeading>}
+                        {sec.items.map((i, k) => <MenuItem key={`${i.key}-${i.sub ?? ''}-${k}`} active={isActive(i)} onClick={() => goOrg(hrefOf(i))} right={i.gear ? <Icon d={ICONS.gear} size={16} /> : undefined}>{i.label}</MenuItem>)}</div>))}
+                  </div>}
+                </div>);
+            })}
+          </nav>
+        )}
       </header>
 
       {org && (
         <div className="border-b border-slate-200 bg-white px-6">
-          <div className="mx-auto flex max-w-7xl items-center gap-3 py-2 text-sm">
-            <span className="flex h-7 w-7 items-center justify-center rounded bg-brand-100 text-xs font-bold text-brand-800">{initialsOf(org.name)}</span>
-            <span className="font-semibold text-slate-900">{org.name}</span>
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+            <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-slate-500">
+              <span className="truncate font-semibold text-slate-900">{org.name}</span>
+              {crumb && <><span aria-hidden>›</span><span>{crumb[0]}</span>{crumb[1] && <><span aria-hidden>›</span><span aria-current="page" className="font-medium text-slate-800">{crumb[1]}</span></>}</>}
+            </nav>
             {org.gstin && <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">GSTIN {org.gstin}</span>}
             <span className="ml-auto text-xs text-slate-500">Your role: <b className="capitalize text-slate-700">{role}</b></span>
           </div>

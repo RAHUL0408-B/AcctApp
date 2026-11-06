@@ -48,11 +48,11 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Accounting', items: [
     { key: 'bank', label: 'Bank accounts', heading: 'Banking' }, { key: 'bank-rules', label: 'Bank rules' },
     { key: 'money', sub: 'spend', label: 'Spend money' }, { key: 'money', sub: 'receive', label: 'Receive money' }, { key: 'money', sub: 'transfer', label: 'Transfer money' },
-    { key: 'files', label: 'Documents', divider: true },
-    { key: 'coa', label: 'Chart of accounts', heading: 'Accounting tools', divider: true }, { key: 'assets', label: 'Fixed assets' }, { key: 'journal', label: 'Manual journals' },
-    { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'tracking', label: 'Tracking categories' }, { key: 'year-end', label: 'Year-end close' },
+    { key: 'coa', label: 'Chart of accounts', heading: 'Ledger' }, { key: 'journal', label: 'Manual journals' }, { key: 'assets', label: 'Fixed assets' },
+    { key: 'inventory', label: 'Inventory' }, { key: 'budgets', label: 'Budgets' }, { key: 'tracking', label: 'Cost centres' },
+    { key: 'files', label: 'Documents', heading: 'Records and setup' }, { key: 'year-end', label: 'Year-end close' },
     { key: 'import', label: 'Import data', manage: true }, { key: 'schedules', label: 'Scheduled emails', manage: true },
-    { key: 'settings', label: 'Organisation settings', divider: true, gear: true }] },
+    { key: 'settings', label: 'Organisation settings', gear: true }] },
   { group: 'Tax', items: [
     { key: 'reports', sub: 'gstr1', label: 'GSTR-1', heading: 'GST' }, { key: 'reports', sub: 'gstr3b', label: 'GSTR-3B' },
     { key: 'reports', sub: 'tds', label: 'TDS deducted', heading: 'TDS', divider: true },

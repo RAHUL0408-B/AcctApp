@@ -30,11 +30,10 @@ export function ContactPicker({ label, contacts, value, onChange }: { label: str
   const [text, setText] = useState(selected?.name ?? '');
   useEffect(() => { setText(selected?.name ?? ''); }, [selected?.name]);
   const listId = useMemo(() => `contacts-${Math.random().toString(36).slice(2)}`, []);
-  const change = (v: string) => {
-    setText(v);
-    const hit = contacts.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
-    onChange(hit ? String(hit.id) : '');
-  };
+  const resolve = (v: string) => contacts.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
+  const change = (v: string) => { setText(v); const hit = resolve(v); onChange(hit ? String(hit.id) : ''); };
+  // The list can arrive after the name was typed (slow network, or the contact was just added): match again when it does.
+  useEffect(() => { const hit = resolve(text); if (hit && String(hit.id) !== value) onChange(String(hit.id)); }, [contacts]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div>
       <Field label={label} aria-label="Contact" list={listId} autoComplete="off" placeholder="Start typing a name…" value={text} onChange={(e) => change(e.target.value)} />
@@ -124,8 +123,19 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
           <div className="mt-3 flex items-center gap-3"><Button disabled={busy || !newItem.code || !newItem.name} onClick={saveNewItem}>Save and add to this document</Button><ErrorMsg msg={error} /></div>
         </div>
       )}
+      {trackingOptions.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <label className="font-medium text-slate-600" htmlFor="cc-all">Cost centre for the whole document</label>
+          <select id="cc-all" aria-label="Cost centre for all lines" className="rounded border border-slate-300 bg-white px-2 py-1" value={lines.every((l) => (l.trackingOptionId ?? '') === (lines[0].trackingOptionId ?? '')) ? lines[0].trackingOptionId ?? '' : 'mixed'}
+            onChange={(e) => e.target.value !== 'mixed' && setLines(lines.map((l) => ({ ...l, trackingOptionId: e.target.value })))}>
+            <option value="">None</option>
+            {!lines.every((l) => (l.trackingOptionId ?? '') === (lines[0].trackingOptionId ?? '')) && <option value="mixed">Different on each line</option>}
+            {trackingOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+          <span className="text-xs text-slate-500">Sets every line below. You can still change a single line.</span>
+        </div>
+      )}
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-slate-500"><th>Description</th><th className="w-24">HSN/SAC</th><th className="w-20">Qty</th><th className="w-28">Rate ({currency === 'INR' ? '₹' : currency})</th><th className="w-24">GST</th><th className="w-48">Account</th>{trackingOptions.length > 0 && <th className="w-40">Tracking</th>}<th className="w-28 text-right">Amount</th><th className="w-8" /></tr></thead>
+        <thead><tr className="text-left text-slate-500"><th>Description</th><th className="w-24">HSN/SAC</th><th className="w-20">Qty</th><th className="w-28">Rate ({currency === 'INR' ? '₹' : currency})</th><th className="w-24">GST</th><th className="w-48">Account</th>{trackingOptions.length > 0 && <th className="w-44">Cost centre</th>}<th className="w-28 text-right">Amount</th><th className="w-8" /></tr></thead>
         <tbody>{lines.map((l, i) => {
           const bp = Number(l.gstRateBp) || 0;
           return (
@@ -140,7 +150,7 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
                 {bp > 0 && !noTax && <span className="block text-[11px] text-slate-500">{intra ? `CGST ${bp / 200}% + SGST ${bp / 200}%` : `IGST ${bp / 100}%`}</span>}</td>
               <td className="pr-1"><select aria-label={`Account ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.accountId} onChange={(e) => set(i, 'accountId', e.target.value)}>
                 <option value="">Default</option>{options.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select></td>
-              {trackingOptions.length > 0 && <td className="pr-1"><select aria-label={`Tracking ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.trackingOptionId ?? ''} onChange={(e) => set(i, 'trackingOptionId', e.target.value)}>
+              {trackingOptions.length > 0 && <td className="pr-1"><select aria-label={`Cost centre ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.trackingOptionId ?? ''} onChange={(e) => set(i, 'trackingOptionId', e.target.value)}>
                 <option value="">—</option>{trackingOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></td>}
               <td className="text-right">{fmt(total(l))}</td>
               <td>{lines.length > 1 && <button type="button" aria-label={`Remove line ${i + 1}`} className="text-slate-400 hover:text-red-600" onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>}</td>

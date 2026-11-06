@@ -85,6 +85,7 @@ step('customer, supplier and product added');
 // ---- quote -> invoice
 await nav('Quotes');
 await btn('New quote').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Add from catalogue').selectOption({ label: 'CONS-01 · Consulting' });
 await btn('Create').click();
@@ -92,6 +93,7 @@ await page.getByText('Created QU-0001: total ₹590.00').waitFor();
 await btn('Accepted').click();
 await page.getByText('accepted', { exact: true }).waitFor();
 await btn('Convert to invoice').click();
+await btn('Post invoice').click(); // the new review step before posting
 await page.getByText(/QU-0001 converted to INV\/\d\d-\d\d\/0001/).waitFor();
 step('quote QU-0001 (Rs 500 + 18% = Rs 590) accepted and converted to an invoice');
 
@@ -99,6 +101,7 @@ step('quote QU-0001 (Rs 500 + 18% = Rs 590) accepted and converted to an invoice
 await nav('Invoices');
 await heading('Invoices');
 await btn('New invoice').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Consulting hours');
 await page.getByLabel('HSN 1').fill('9983');
@@ -125,6 +128,7 @@ step('customer statement: 590 + 1,180 - 1,180 payment = 590 owed');
 if (process.env.SHOT_DIR) { await nav('Invoices'); await page.getByRole('cell', { name: /INV\/\d\d-\d\d\/0002/ }).first().waitFor(); await page.screenshot({ path: process.env.SHOT_DIR + '/invoices.png' }); }
 await nav('Bills');
 await btn('New bill').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Pro Advisors');
 await page.getByLabel('TDS section').selectOption({ label: '194J · Professional / technical fees' });
 await page.getByLabel('Description 1').fill('Audit fee');
@@ -167,6 +171,7 @@ await btn('New asset').click();
 await page.getByLabel('Name', { exact: true }).fill('Laptop');
 await page.getByLabel('Purchase date').fill(`${fyYear}-04-10`);
 await page.getByLabel('Cost (₹)').fill('12000');
+await page.getByLabel('Depreciation method').selectOption('slm');
 await page.getByLabel('Rate per year (%)').fill('20');
 await btn('Save asset').click();
 await page.getByRole('cell', { name: 'Laptop' }).waitFor();
@@ -178,6 +183,7 @@ step('fixed asset Rs 12,000 at 20% straight line: 3 months = Rs 600 depreciation
 // ---- repeating invoice
 await nav('Repeating invoices');
 await btn('New repeating invoice').click();
+await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Monthly retainer');
 await page.getByLabel('Rate 1').fill('2000');

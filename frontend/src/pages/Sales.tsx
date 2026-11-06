@@ -129,7 +129,7 @@ export function Recurring({ org, canPost, accounts }: { org: Org; canPost: boole
       {show && (
         <Card title="New repeating invoice">
           <div className="grid gap-3 md:grid-cols-3">
-            <Select label="Customer" aria-label="Contact" value={f.contactId} onChange={(e) => setF({ ...f, contactId: e.target.value })}><option value="">Select…</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+            <ContactPicker label="Customer" contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
             <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x}>{x}</option>)}</Select>
             <Field label="First invoice date" type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
             <Field label="Stop after (optional)" type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />

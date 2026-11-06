@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmt } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
@@ -27,15 +27,23 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
   useEffect(() => { loadRules(); }, [loadRules]);
 
   const loadBanks = useCallback(() => api<BankAcc[]>(`/orgs/${org.id}/bank-accounts`).then((b) => { setBanks(b); if (!sel && b[0]) setSel(b[0].id); }), [org.id, sel]);
+  const loadSeq = useRef(0); // only the newest load may update the screen
   const loadTxns = useCallback(async () => {
     if (!sel) return;
+    const mine = ++loadSeq.current;
     const t = await api<Txn[]>(`/orgs/${org.id}/bank-accounts/${sel}/transactions`);
+    if (mine !== loadSeq.current) return;
     setTxns(t);
+    // Suggestions and invoice/bill matches for every open line, fetched together. One failing must not hide the rest.
+    const open = t.filter((x) => x.status === 'unreconciled');
+    const got = await Promise.all(open.map(async (x) => ({
+      id: x.id,
+      sugg: await api<any[]>(`/orgs/${org.id}/bank-transactions/${x.id}/suggestions`).catch(() => []),
+      docs: await api<DocMatch[]>(`/orgs/${org.id}/bank-transactions/${x.id}/document-matches`).catch(() => []), // details fetched as soon as the statement is in
+    })));
+    if (mine !== loadSeq.current) return;
     const s: typeof sugg = {}, dm: typeof docs = {};
-    for (const x of t.filter((x) => x.status === 'unreconciled')) {
-      s[x.id] = await api(`/orgs/${org.id}/bank-transactions/${x.id}/suggestions`);
-      dm[x.id] = await api(`/orgs/${org.id}/bank-transactions/${x.id}/document-matches`); // details fetched as soon as the statement is in
-    }
+    for (const g of got) { s[g.id] = g.sugg; dm[g.id] = g.docs; }
     setSugg(s); setDocs(dm);
   }, [org.id, sel]);
   useEffect(() => { loadBanks(); }, [loadBanks]);

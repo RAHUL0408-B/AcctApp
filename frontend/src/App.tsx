@@ -24,23 +24,11 @@ function useRoute() {
 }
 const navigate = (path: string) => { location.hash = path; };
 
-/**
- * One colour per top-bar section: a coloured pill in the bar, and the same colour on its menu (top bar, headings, highlights).
- * Full class names are written out so Tailwind can see them.
- */
-interface Tone { pill: string; on: string; bar: string; item: string; itemOn: string; head: string; row: string }
-const TONES: Record<string, Tone> = {
-  Home: { pill: 'bg-slate-500/80 hover:bg-slate-400', on: 'bg-slate-400', bar: 'border-slate-500', item: 'bg-slate-100/80 hover:bg-slate-200 focus-visible:bg-slate-200', itemOn: 'bg-slate-200 font-medium text-slate-900', head: 'text-slate-600', row: 'border-slate-400' },
-  Sales: { pill: 'bg-emerald-600/90 hover:bg-emerald-500', on: 'bg-emerald-500', bar: 'border-emerald-500', item: 'bg-emerald-100/70 hover:bg-emerald-200 focus-visible:bg-emerald-200', itemOn: 'bg-emerald-100 font-medium text-emerald-900', head: 'text-emerald-700', row: 'border-emerald-400' },
-  Purchases: { pill: 'bg-orange-600/90 hover:bg-orange-500', on: 'bg-orange-500', bar: 'border-orange-500', item: 'bg-orange-100/70 hover:bg-orange-200 focus-visible:bg-orange-200', itemOn: 'bg-orange-100 font-medium text-orange-900', head: 'text-orange-700', row: 'border-orange-400' },
-  Reporting: { pill: 'bg-violet-600/90 hover:bg-violet-500', on: 'bg-violet-500', bar: 'border-violet-500', item: 'bg-violet-100/70 hover:bg-violet-200 focus-visible:bg-violet-200', itemOn: 'bg-violet-100 font-medium text-violet-900', head: 'text-violet-700', row: 'border-violet-400' },
-  Accounting: { pill: 'bg-sky-600/90 hover:bg-sky-500', on: 'bg-sky-500', bar: 'border-sky-500', item: 'bg-sky-100/70 hover:bg-sky-200 focus-visible:bg-sky-200', itemOn: 'bg-sky-100 font-medium text-sky-900', head: 'text-sky-700', row: 'border-sky-400' },
-  Tax: { pill: 'bg-rose-600/90 hover:bg-rose-500', on: 'bg-rose-500', bar: 'border-rose-500', item: 'bg-rose-100/70 hover:bg-rose-200 focus-visible:bg-rose-200', itemOn: 'bg-rose-100 font-medium text-rose-900', head: 'text-rose-700', row: 'border-rose-400' },
-  Contacts: { pill: 'bg-teal-600/90 hover:bg-teal-500', on: 'bg-teal-500', bar: 'border-teal-500', item: 'bg-teal-100/70 hover:bg-teal-200 focus-visible:bg-teal-200', itemOn: 'bg-teal-100 font-medium text-teal-900', head: 'text-teal-700', row: 'border-teal-400' },
-  Projects: { pill: 'bg-amber-600/90 hover:bg-amber-500', on: 'bg-amber-500', bar: 'border-amber-500', item: 'bg-amber-100/70 hover:bg-amber-200 focus-visible:bg-amber-200', itemOn: 'bg-amber-100 font-medium text-amber-900', head: 'text-amber-700', row: 'border-amber-400' },
-};
-const NEUTRAL: Tone = { pill: '', on: '', bar: 'border-slate-200', item: 'hover:bg-slate-100 focus-visible:bg-slate-100', itemOn: 'bg-brand-50 font-medium text-brand-700', head: 'text-slate-500', row: '' };
-const toneOf = (group: string): Tone => TONES[group] ?? TONES.Home;
+/** The bar uses one accent colour (the brand violet): a soft light tab for the current section, and the same violet tint inside every menu. */
+interface Tone { pill: string; on: string; bar: string; item: string; itemOn: string; head: string }
+const BAR: Tone = { pill: 'text-indigo-100 hover:bg-white/10 hover:text-white', on: 'bg-white/15 text-white', bar: 'border-brand-500', item: 'hover:bg-brand-50 focus-visible:bg-brand-50', itemOn: 'bg-brand-100 font-medium text-brand-800', head: 'text-brand-700' };
+/** Menus that are not sections of the bar (create, search, notifications, account). */
+const NEUTRAL: Tone = { ...BAR, pill: '', on: '', bar: 'border-slate-200', head: 'text-slate-500' };
 const ToneCtx = createContext<Tone>(NEUTRAL);
 
 /** The "+" menu. Alt + the letter works anywhere inside an organisation. */
@@ -96,7 +84,7 @@ function Menu({ label, active, children, align = 'left', trigger, width = 'min-w
       <button ref={button} aria-haspopup="true" aria-expanded={open} aria-label={trigger ? label : undefined} title={trigger ? label : undefined} onClick={() => setOpen(!open)}
         onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); e.stopPropagation(); setOpen(true); } }}
         className={trigger ? `flex h-10 min-w-10 items-center justify-center rounded-md px-2 text-white transition-colors focus-visible:outline-2 focus-visible:outline-white ${open ? 'bg-white/20' : 'hover:bg-white/15'}`
-          : `relative mx-0.5 flex h-9 items-center gap-1 rounded-md px-3 text-sm font-semibold text-white transition-colors focus-visible:outline-2 focus-visible:outline-white ${tone ? (active || open ? `${tone.on} ring-2 ring-white/70 shadow-md` : tone.pill) : (active || open ? 'bg-white/10' : 'hover:bg-white/10')}`}>
+          : `relative mx-0.5 flex h-9 items-center gap-1 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-white ${tone ? (active || open ? `${tone.on}${active ? ' after:absolute after:inset-x-2 after:-bottom-[10px] after:h-0.5 after:rounded after:bg-white' : ''}` : tone.pill) : (active || open ? 'bg-white/10 text-white' : 'text-white hover:bg-white/10')}`}>
         {trigger ?? <>{label}<svg width="9" height="9" viewBox="0 0 10 10" aria-hidden className={`opacity-70 transition-transform ${open ? 'rotate-180' : ''}`}><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></>}
       </button>
       {open && (
@@ -221,17 +209,17 @@ export function App() {
           {org && (
             <nav className="hidden items-center xl:flex" aria-label="Client sections">
               {NAV.map((g) => {
-                const items = g.items.filter((i) => !i.manage || canManage);
+                const items = g.items.filter((i) => (!i.manage || canManage) && (!i.owner || role === 'owner'));
                 if (!items.length) return null;
                 const groupActive = items.some(isActive);
                 if (items.length === 1) {
                   const i = items[0];
                   return <button key={g.group} aria-current={groupActive ? 'page' : undefined} onClick={() => goOrg(hrefOf(i))} onMouseEnter={() => setOpenGroup(null)}
-                    className={`relative mx-0.5 flex h-9 items-center rounded-md px-3 text-sm font-semibold text-white transition-colors focus-visible:outline-2 focus-visible:outline-white ${groupActive ? `${toneOf(g.group).on} ring-2 ring-white/70 shadow-md` : toneOf(g.group).pill}`}>{i.label}</button>;
+                    className={`relative mx-0.5 flex h-9 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-white ${groupActive ? `${BAR.on} after:absolute after:inset-x-2 after:-bottom-[10px] after:h-0.5 after:rounded after:bg-white` : BAR.pill}`}>{i.label}</button>;
                 }
                 const wide = isWide(items);
                 return (
-                  <Menu key={g.group} label={g.group} tone={toneOf(g.group)} active={groupActive} width={wide ? 'w-[46rem]' : 'min-w-60'}
+                  <Menu key={g.group} label={g.group} tone={BAR} active={groupActive} width={wide ? 'w-[46rem]' : 'min-w-60'}
                     open={openGroup === g.group} onOpenChange={(v) => setOpenGroup(v ? g.group : null)} onHover={() => openGroup && openGroup !== g.group && setOpenGroup(g.group)}>
                     {(close) => {
                       const to = (p: string) => { close(); goOrg(p); };
@@ -302,17 +290,17 @@ export function App() {
         {org && mobileOpen && (
           <nav aria-label="Small-screen menu" className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t border-white/10 bg-nav xl:hidden">
             {NAV.map((g) => {
-              const items = g.items.filter((i) => !i.manage || canManage);
+              const items = g.items.filter((i) => (!i.manage || canManage) && (!i.owner || role === 'owner'));
               if (!items.length) return null;
               const groupActive = items.some(isActive);
-              const tone = toneOf(g.group);
+              const tone = BAR;
               if (items.length === 1) return <button key={g.group} onClick={() => goOrg(hrefOf(items[0]))} aria-current={groupActive ? 'page' : undefined}
-                className={`flex w-full items-center border-l-4 px-5 py-3 text-left text-sm font-semibold text-white ${tone.row} ${groupActive ? tone.on : tone.pill}`}>{items[0].label}</button>;
+                className={`flex w-full items-center px-5 py-3 text-left text-sm font-medium ${groupActive ? tone.on : tone.pill}`}>{items[0].label}</button>;
               const opened = mobileGroup === g.group;
               return (
                 <div key={g.group}>
                   <button aria-expanded={opened} onClick={() => setMobileGroup(opened ? null : g.group)}
-                    className={`flex w-full items-center justify-between border-l-4 px-5 py-3 text-left text-sm font-semibold text-white ${tone.row} ${groupActive || opened ? tone.on : tone.pill}`}>{g.group}
+                    className={`flex w-full items-center justify-between px-5 py-3 text-left text-sm font-medium ${groupActive || opened ? tone.on : tone.pill}`}>{g.group}
                     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className={`transition-transform ${opened ? 'rotate-180' : ''}`}><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></button>
                   {opened && <ToneCtx.Provider value={tone}><div className="bg-white py-1 text-slate-800">
                     {sectionsOf(items).map((sec, n) => (
@@ -330,7 +318,7 @@ export function App() {
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
             <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-slate-500">
               <span className="truncate font-semibold text-slate-900">{org.name}</span>
-              {crumb && <><span aria-hidden>›</span><span className={`rounded px-2 py-0.5 text-xs font-semibold text-white ${toneOf(crumb[0]).on}`}>{crumb[0]}</span>{crumb[1] && <><span aria-hidden>›</span><span aria-current="page" className="font-medium text-slate-800">{crumb[1]}</span></>}</>}
+              {crumb && <><span aria-hidden>›</span><span>{crumb[0]}</span>{crumb[1] && <><span aria-hidden>›</span><span aria-current="page" className="font-medium text-slate-800">{crumb[1]}</span></>}</>}
             </nav>
             {org.gstin && <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">GSTIN {org.gstin}</span>}
             <span className="ml-auto text-xs text-slate-500">Your role: <b className="capitalize text-slate-700">{role}</b></span>

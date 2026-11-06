@@ -33,5 +33,5 @@ node e2e/workspace.mjs        # login page, menus, shortcuts, search, money, cas
 ```
 Set `WEB_URL` to test another address (for example the live site) and `STEP_TIMEOUT=60000` for slow hosts.
 
-## Login page and parent company
-The login page introduces the product to first-time users and presents FinTaxVers, the parent company. Its details live in `PARENT` at the top of `src/pages/Auth.tsx`; add the phone number, email and office address there once confirmed.
+## Login page
+The login page is also the landing page: a headline, an illustration of the dashboard, the log-in and sign-up form, and sections on features, who it is for, access levels and how to start. The text lives in `src/pages/Auth.tsx`.

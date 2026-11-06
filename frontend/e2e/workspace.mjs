@@ -3,6 +3,7 @@
 // business snapshot, TDS report, favourite reports, projects and last login.
 // Needs the app running (API and web). Run: node e2e/workspace.mjs   (WEB_URL and STEP_TIMEOUT work as in full.mjs)
 import { chromium } from 'playwright-core';
+import assert from 'assert';
 
 const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -24,10 +25,13 @@ const today = new Date().toISOString().slice(0, 10);
 // ---- login page
 await page.goto(URL);
 await page.getByRole('heading', { name: 'Log in', level: 1 }).waitFor();
-await page.getByRole('heading', { name: 'A FinTaxVers product' }).waitFor();
-for (const s of ['GST', 'Income Tax', 'Tax Audit', 'ROC & Company Registration']) await page.getByRole('listitem').getByText(s, { exact: true }).waitFor();
-await page.getByText('Nagpur & Pan-India').first().waitFor();
-step('login page shows the product introduction and FinTaxVers services');
+await page.getByRole('heading', { name: 'Books, GST and TDS for every client, in one place.' }).waitFor();
+await page.getByRole('img', { name: /Illustration of the dashboard/ }).waitFor();
+for (const h of ['What you can do', 'Who it is for', 'The right access for everyone', 'Up and running in three steps']) await page.getByRole('heading', { name: h }).waitFor();
+for (const r of ['Owner', 'Accountant', 'Staff', 'Client']) await page.getByText(r, { exact: true }).first().waitFor();
+await page.getByRole('button', { name: 'Who it is for' }).click();   // the page links scroll to their section
+assert.ok(!/fintaxvers/i.test(await page.locator('body').innerText()), 'the old company name is gone from the page');
+step('landing page: headline, dashboard picture, features, audiences, access levels and steps; no old company name');
 
 await btn('Create an account').click();
 await page.getByLabel('Your name').fill('Asha Rao');

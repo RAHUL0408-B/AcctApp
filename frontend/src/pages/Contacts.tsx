@@ -9,11 +9,12 @@ export interface Contact {
   id: number; kind: string; name: string; gstin: string | null; pan: string | null; stateCode: string | null; email?: string | null; phone?: string | null;
   isIndividual?: boolean; country?: string; bankAccountName?: string | null; bankName?: string | null; bankAccountNo?: string | null; bankIfsc?: string | null;
   defaultSalesAccountId?: number | null; defaultPurchaseAccountId?: number | null; isArchived?: boolean;
+  msmeType?: string | null; udyamNo?: string | null; msmeAgreedDays?: number | null;
 }
 interface Statement { contact: { name: string }; openingBalance: number; closingBalance: number; lines: { date: string; ref: string; type: string; amount: number; balance: number }[] }
 
 const blank = { kind: 'customer' as string, name: '', gstin: '', pan: '', stateCode: '', email: '', phone: '', isIndividual: false, country: 'IN',
-  bankAccountName: '', bankName: '', bankAccountNo: '', bankIfsc: '', defaultSalesAccountId: '', defaultPurchaseAccountId: '' };
+  bankAccountName: '', bankName: '', bankAccountNo: '', bankIfsc: '', defaultSalesAccountId: '', defaultPurchaseAccountId: '', msmeType: '', udyamNo: '', msmeAgreedDays: '' };
 
 const TEMPLATE = 'Name,Type,GSTIN,PAN,State Code,Email,Phone,Bank Account Name,Bank Name,Bank Account Number,IFSC\nAcme Pvt Ltd,Customer,,AAACA1234A,27,accounts@acme.example,9876543210,Acme Pvt Ltd,HDFC Bank,12345678901,HDFC0000001\n';
 const csvCell = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -50,6 +51,7 @@ export function Contacts({ org, canPost, canManage = false, accounts = [], only,
     ...(f.bankAccountName ? { bankAccountName: f.bankAccountName } : {}), ...(f.bankName ? { bankName: f.bankName } : {}),
     ...(f.bankAccountNo ? { bankAccountNo: f.bankAccountNo.replace(/\s/g, '') } : {}), ...(f.bankIfsc ? { bankIfsc: f.bankIfsc.toUpperCase() } : {}),
     defaultSalesAccountId: f.defaultSalesAccountId ? Number(f.defaultSalesAccountId) : null, defaultPurchaseAccountId: f.defaultPurchaseAccountId ? Number(f.defaultPurchaseAccountId) : null,
+    ...(f.msmeType ? { msmeType: f.msmeType } : {}), ...(f.udyamNo.trim() ? { udyamNo: f.udyamNo.trim().toUpperCase() } : {}), ...(f.msmeAgreedDays ? { msmeAgreedDays: Number(f.msmeAgreedDays) } : {}),
   });
   const reset = () => { setF({ ...blank, kind: only ?? 'customer' }); setEditing(null); setShow(false); };
   const save = () => run(async () => {
@@ -61,7 +63,8 @@ export function Contacts({ org, canPost, canManage = false, accounts = [], only,
     setOk(''); setError('');
     setF({ kind: c.kind, name: c.name, gstin: c.gstin ?? '', pan: c.pan ?? '', stateCode: c.stateCode ?? '', email: c.email ?? '', phone: c.phone ?? '', isIndividual: !!c.isIndividual, country: c.country ?? 'IN',
       bankAccountName: c.bankAccountName ?? '', bankName: c.bankName ?? '', bankAccountNo: c.bankAccountNo ?? '', bankIfsc: c.bankIfsc ?? '',
-      defaultSalesAccountId: c.defaultSalesAccountId ? String(c.defaultSalesAccountId) : '', defaultPurchaseAccountId: c.defaultPurchaseAccountId ? String(c.defaultPurchaseAccountId) : '' });
+      defaultSalesAccountId: c.defaultSalesAccountId ? String(c.defaultSalesAccountId) : '', defaultPurchaseAccountId: c.defaultPurchaseAccountId ? String(c.defaultPurchaseAccountId) : '',
+      msmeType: c.msmeType ?? '', udyamNo: c.udyamNo ?? '', msmeAgreedDays: c.msmeAgreedDays ? String(c.msmeAgreedDays) : '' });
     setEditing(c.id); setShow(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const archive = (c: Contact) => run(async () => { await api(`/orgs/${org.id}/contacts/${c.id}/archive`, { body: { archived: !c.isArchived } }); setOk(c.isArchived ? `${c.name} restored.` : `${c.name} archived.`); load(); });
@@ -132,6 +135,16 @@ export function Contacts({ org, canPost, canManage = false, accounts = [], only,
             <Field label="Account number" inputMode="numeric" value={f.bankAccountNo} onChange={(e) => setF({ ...f, bankAccountNo: e.target.value })} />
             <Field label="IFSC code" maxLength={11} value={f.bankIfsc} onChange={(e) => setF({ ...f, bankIfsc: e.target.value.toUpperCase() })} />
           </div>
+          {f.kind !== 'customer' && <>
+            <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">MSME (Udyam) status</h3>
+            <div className="grid gap-3 md:grid-cols-3">
+              <Select label="MSME type" aria-label="MSME type" value={f.msmeType} onChange={(e) => setF({ ...f, msmeType: e.target.value })}>
+                <option value="">Not MSME, or not known</option><option value="micro">Micro enterprise</option><option value="small">Small enterprise</option><option value="medium">Medium enterprise</option></Select>
+              <Field label="Udyam registration number" aria-label="Udyam number" placeholder="UDYAM-MH-26-0012345" value={f.udyamNo} onChange={(e) => setF({ ...f, udyamNo: e.target.value.toUpperCase() })} />
+              <Field label="Payment days agreed in writing" aria-label="Agreed payment days" inputMode="numeric" placeholder="None: 15 days apply" value={f.msmeAgreedDays} onChange={(e) => setF({ ...f, msmeAgreedDays: e.target.value.replace(/\D/g, '') })} />
+            </div>
+            {(f.msmeType === 'micro' || f.msmeType === 'small') && <p className="mt-2 text-xs text-slate-500">Section 43B(h): pay this supplier within {f.msmeAgreedDays ? Math.min(Number(f.msmeAgreedDays), 45) : 15} days of each bill, or the expense is allowed only in the year it is paid. Tax, Compliance checks lists what is due.</p>}
+          </>}
           <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">Default accounts</h3>
           <div className="grid gap-3 md:grid-cols-3">
             <Select label="Default sales account" value={f.defaultSalesAccountId} onChange={(e) => setF({ ...f, defaultSalesAccountId: e.target.value })}><option value="">None (use the item or 4000)</option>{incomeAccts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>

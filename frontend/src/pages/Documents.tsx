@@ -113,7 +113,13 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
       setOk(`Sent for approval (total ${foreign ? f.currency + ' ' : '₹'}${fmt(d.total)}). It reaches the books once an owner or accountant approves it.`);
       resetForm(); return;
     }
-    const r = editing ? await api(`/orgs/${org.id}/documents/${editing.id}`, { method: 'PUT', body: b }) : await api(`/orgs/${org.id}/documents`, { body: b });
+    let r;
+    try { r = editing ? await api(`/orgs/${org.id}/documents/${editing.id}`, { method: 'PUT', body: b }) : await api(`/orgs/${org.id}/documents`, { body: b }); }
+    catch (e) {
+      // The same supplier bill entered twice would claim its GST credit twice: say so, and post only if confirmed.
+      if (editing || !/^Possible duplicate/.test((e as Error).message) || !window.confirm(`${(e as Error).message}\n\nPost this bill anyway?`)) throw e;
+      r = await api(`/orgs/${org.id}/documents`, { body: { ...b, allowDuplicate: true } });
+    }
     let attachNote = '';
     try { await uploadAll(r.id); } catch (e) { attachNote = ` The document was saved, but a file could not be attached: ${(e as Error).message}`; }
     setOk(`${editing ? 'Updated' : 'Created'} ${r.number}: total ₹${fmt(r.total)}${r.foreignTotal ? ` (${r.currency} ${fmt(r.foreignTotal)})` : ''}${r.tdsAmount ? `, TDS ₹${fmt(r.tdsAmount)}, net payable ₹${fmt(r.netPayable)}` : ''}${r.rcm && (r.rcm.cgst + r.rcm.sgst + r.rcm.igst) ? `, reverse-charge GST ₹${fmt(r.rcm.cgst + r.rcm.sgst + r.rcm.igst)} to pay` : ''}.${attachNote}`);

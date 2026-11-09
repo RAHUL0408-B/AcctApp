@@ -15,6 +15,7 @@ import { Inventory } from './Inventory';
 import { Approvals, ExpenseClaims } from './Approvals';
 import { Budgets, Tracking, YearEnd } from './Planning';
 import { ExportTemplates } from './ExportTemplates';
+import { Compliance } from './Compliance';
 import { Overview } from './Overview';
 import { Journal } from './Journal';
 import { Money } from './Money';
@@ -25,7 +26,7 @@ interface Entry { id: number; date: string; narration: string; reversesId: numbe
 interface TB { accounts: { code: string; name: string; debit: number; credit: number }[]; totalDebit: number; totalCredit: number; balanced: boolean }
 
 export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
-  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking' | 'export-templates'
+  | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking' | 'export-templates' | 'compliance'
   | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings';
 
 /** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
@@ -58,6 +59,8 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Tax', items: [
     { key: 'reports', sub: 'gstr1', label: 'GSTR-1', heading: 'GST' }, { key: 'reports', sub: 'gstr3b', label: 'GSTR-3B' },
     { key: 'reports', sub: 'tds', label: 'TDS deducted', heading: 'TDS', divider: true },
+    { key: 'compliance', sub: '2b', label: 'GSTR-2B match', heading: 'Checks', divider: true }, { key: 'compliance', sub: 'msme', label: 'MSME payments (43B(h))' },
+    { key: 'compliance', sub: 'itc180', label: 'ITC 180-day rule' },
     { key: 'tasks', label: 'Tasks and deadlines', divider: true }] },
   { group: 'Contacts', items: [{ key: 'contacts', label: 'All contacts' }, { key: 'customers', label: 'Customers' }, { key: 'suppliers', label: 'Suppliers' }] },
   { group: 'Projects', items: [{ key: 'projects', label: 'Projects' }] },
@@ -110,6 +113,7 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'year-end': return <YearEnd org={org} canManage={canManage} />;
     case 'tracking': return <Tracking org={org} canManage={canManage} />;
     case 'export-templates': return <ExportTemplates org={org} role={role} />;
+    case 'compliance': return <Compliance org={org} canPost={canPost} sub={sub} go={go} />;
     case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
   }
 }

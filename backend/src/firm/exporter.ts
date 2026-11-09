@@ -1,5 +1,6 @@
 // Turns report data into a plain table, then renders that table as PDF or Excel.
 import { PoolClient } from 'pg';
+import { itcTable, msmeTable } from '../compliance/checks';
 import { accountBalances, aged, balanceSheet, gstr1, gstr3b, ledgerStatement, profitAndLoss } from '../accounting/reports';
 
 export interface Col { header: string; type: 'text' | 'money' }
@@ -7,7 +8,7 @@ export interface Table { title: string; subtitle: string; columns: Col[]; rows: 
   /** For document reports: the document behind each row (null for total rows), so the screen can archive or delete them. */
   rowIds?: (number | null)[]; }
 
-export const REPORTS = ['trial-balance', 'pnl', 'balance-sheet', 'aged-receivables', 'aged-payables', 'ledger', 'all-ledgers', 'gstr3b', 'gstr1-b2b', 'fixed-assets', 'invoice-wise', 'bill-wise', 'purchase-register'] as const;
+export const REPORTS = ['trial-balance', 'pnl', 'balance-sheet', 'aged-receivables', 'aged-payables', 'ledger', 'all-ledgers', 'gstr3b', 'gstr1-b2b', 'fixed-assets', 'invoice-wise', 'bill-wise', 'purchase-register', 'msme-43bh', 'itc-180'] as const;
 export type ReportName = (typeof REPORTS)[number];
 export interface ReportParams { from: string; to: string; asOf: string; accountId?: number; }
 
@@ -114,6 +115,8 @@ export async function buildTable(c: PoolClient, name: ReportName, p: ReportParam
           ['4. ITC available', 0, g.section4_itcAvailable.igst, g.section4_itcAvailable.cgst, g.section4_itcAvailable.sgst],
           ['Net tax payable (negative = carry forward)', 0, g.netTaxPayable.igst, g.netTaxPayable.cgst, g.netTaxPayable.sgst]], boldRows: [3] };
     }
+    case 'msme-43bh': return msmeTable(c, p.from, p.asOf);
+    case 'itc-180': return itcTable(c, p.asOf);
     case 'gstr1-b2b': {
       const g = await gstr1(c, p.from, p.to);
       return { title: 'GSTR-1 B2B Invoices', subtitle: `${p.from} to ${p.to}`, columns: [T('Invoice'), T('Date'), T('GSTIN'), T('POS'), M('Taxable'), M('IGST'), M('CGST'), M('SGST')],

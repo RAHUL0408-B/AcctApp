@@ -1,5 +1,6 @@
 // Read-only views over the books: sales and purchases overviews, search, notifications, the setup guide,
 // short-term cash flow, the business snapshot with its health scorecard, and the TDS deducted report.
+import { fyOfDate, itc180Report, msmeReport } from '../compliance/checks';
 import { BadRequestException, Controller, Get, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { withOrg } from '../db/db';
@@ -132,6 +133,14 @@ export class InsightsController {
       add('tasks-soon', tasksSoon, `${tasksSoon} task(s) or filing deadline(s) due this week`, 'tasks', 'warn');
       const quotes = await one("SELECT COUNT(*) AS n FROM pre_documents WHERE kind='quote' AND status IN ('draft','sent') AND expiry_date BETWEEN $1::date AND $2::date", [t, soon]);
       add('quotes', quotes, `${quotes} quote(s) expiring this week`, 'quotes', 'info');
+      // Compliance: MSME suppliers to pay before the 43B(h) limit, and input tax credit to reverse after 180 days unpaid.
+      const msme = await msmeReport(c, fyOfDate(t).start, t);
+      const msmeLate = msme.rows.filter((r) => r.status === 'overdue'), msmeSoon = msme.rows.filter((r) => r.status === 'due' && (r.daysLeft ?? 99) <= 7);
+      add('msme-overdue', msmeLate.length, `${msmeLate.length} MSME bill(s) past the 43B(h) limit, ${rupees(msmeLate.reduce((s, r) => s + r.unpaid, 0))} unpaid: the expense is not allowed until paid`, 'compliance/msme', 'bad');
+      add('msme-soon', msmeSoon.length, `${msmeSoon.length} MSME bill(s) to pay within 7 days to keep the expense allowed`, 'compliance/msme', 'warn');
+      const itc = await itc180Report(c, t);
+      const rev = itc.rows.filter((r) => r.status === 'reverse');
+      add('itc-180', rev.length, `${rev.length} bill(s) unpaid for over 180 days: ${rupees(itc.totals.reverseNow)} input tax credit to reverse`, 'compliance/itc180', 'bad');
       return { count: items.length, items };
     });
   }

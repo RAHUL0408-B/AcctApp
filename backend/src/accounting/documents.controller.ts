@@ -1,3 +1,4 @@
+import { invoiceKey } from '../compliance/checks';
 import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { z } from 'zod';
@@ -23,12 +24,31 @@ const contactSchema = z.object({
   isIndividual: z.boolean().default(false), country: z.string().regex(/^[A-Z]{2}$/, 'Use a 2-letter country code').default('IN'),
   bankAccountName: z.string().max(200).optional(), bankName: z.string().max(200).optional(), bankAccountNo: z.string().regex(/^\d{6,20}$/, 'Account number must be 6-20 digits').optional(),
   bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code').optional(),
+  // MSME (Udyam) status, for the 43B(h) payment check. Agreed days only count with a written agreement, and never above 45.
+  msmeType: z.enum(['micro', 'small', 'medium']).optional(),
+  udyamNo: z.string().trim().toUpperCase().regex(/^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/, 'Udyam number looks like UDYAM-MH-26-0012345').optional(),
+  msmeAgreedDays: z.number().int().min(1).max(365).optional(),
   defaultSalesAccountId: z.number().int().positive().nullable().optional(), defaultPurchaseAccountId: z.number().int().positive().nullable().optional(),
 });
 const CONTACT_COLS = `id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual",country,
   bank_account_name AS "bankAccountName",bank_name AS "bankName",bank_account_no AS "bankAccountNo",bank_ifsc AS "bankIfsc",
-  default_sales_account_id AS "defaultSalesAccountId",default_purchase_account_id AS "defaultPurchaseAccountId",is_archived AS "isArchived"`;
+  default_sales_account_id AS "defaultSalesAccountId",default_purchase_account_id AS "defaultPurchaseAccountId",is_archived AS "isArchived",
+  msme_type AS "msmeType",udyam_no AS "udyamNo",msme_agreed_days AS "msmeAgreedDays"`;
 const shapeContact = (r: any) => ({ ...r, id: Number(r.id), defaultSalesAccountId: r.defaultSalesAccountId ? Number(r.defaultSalesAccountId) : null, defaultPurchaseAccountId: r.defaultPurchaseAccountId ? Number(r.defaultPurchaseAccountId) : null });
+/**
+ * A posted bill with the same supplier bill number from the same supplier, or from any supplier with the same GSTIN
+ * (the same supplier entered twice as two contacts). "INV/0042" and "inv-42" count as the same number.
+ */
+async function findDuplicateBill(c: PoolClient, contactId: number, ref: string) {
+  const rows = (await c.query(
+    `SELECT d.number, d.supplier_ref, d.issue_date::text AS date, ct.name AS supplier FROM documents d JOIN contacts ct ON ct.id = d.contact_id
+      WHERE d.doc_type='bill' AND d.status='posted' AND d.replaced_by IS NULL AND d.supplier_ref IS NOT NULL
+        AND (d.contact_id = $1 OR (ct.gstin IS NOT NULL AND ct.gstin = (SELECT gstin FROM contacts WHERE id=$1)))`, [contactId])).rows;
+  const key = invoiceKey(ref);
+  const hit = rows.find((r) => invoiceKey(r.supplier_ref) === key);
+  return hit ? { number: hit.number, ref: hit.supplier_ref, date: hit.date, supplier: hit.supplier } : null;
+}
+
 export const docSchema = z.object({
   docType: z.enum(['invoice', 'bill', 'credit_note', 'debit_note']), contactId: z.number().int().positive(),
   issueDate: date, dueDate: date.optional(), placeOfSupply: z.string().length(2).optional(), supplierRef: z.string().max(60).optional(),
@@ -106,6 +126,7 @@ export class DocumentsController {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
         [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
           b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null])).rows[0];
+      await c.query('UPDATE contacts SET msme_type=$2, udyam_no=$3, msme_agreed_days=$4 WHERE id=$1', [r.id, b.msmeType ?? null, b.udyamNo ?? null, b.msmeAgreedDays ?? null]);
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'contact', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
@@ -127,6 +148,7 @@ export class DocumentsController {
         bank_account_name=$11,bank_name=$12,bank_account_no=$13,bank_ifsc=$14,default_sales_account_id=$15,default_purchase_account_id=$16 WHERE id=$1`,
         [id, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
           b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null]);
+      await c.query('UPDATE contacts SET msme_type=$2, udyam_no=$3, msme_agreed_days=$4 WHERE id=$1', [id, b.msmeType ?? null, b.udyamNo ?? null, b.msmeAgreedDays ?? null]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'contact', entityId: id, before: shapeContact(before), after: b, ip });
       return { ok: true };
     });
@@ -192,6 +214,10 @@ export class DocumentsController {
     const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(docSchema, body);
     if (role === 'sales' && b.docType !== 'invoice') throw new ForbiddenException('You can raise invoices only');
+    if (b.docType === 'bill' && b.supplierRef && (body as { allowDuplicate?: unknown })?.allowDuplicate !== true) {
+      const dup = await withOrg(orgId, (c) => findDuplicateBill(c, b.contactId, b.supplierRef!));
+      if (dup) throw new ConflictException(`Possible duplicate: bill ${dup.number} from ${dup.supplier} dated ${dup.date} already has supplier bill no. ${dup.ref}. Entering the same bill twice claims its GST credit twice.`);
+    }
     if ((role === 'staff' || role === 'sales') && (await getPool().query('SELECT require_approval FROM organizations WHERE id=$1', [orgId])).rows[0]?.require_approval)
       throw new ForbiddenException('This organisation needs approval for new invoices and bills: submit it for approval instead');
     return withOrg(orgId, (c) => createDocument(c, orgId, uid, b, ip));

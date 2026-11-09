@@ -28,10 +28,18 @@ await page.getByRole('heading', { name: 'Log in', level: 1 }).waitFor();
 await page.getByRole('heading', { name: 'Books, GST and TDS for every client, in one place.' }).waitFor();
 await page.getByRole('img', { name: /Illustration of the dashboard/ }).waitFor();
 for (const h of ['What you can do', 'Who it is for', 'The right access for everyone', 'Up and running in three steps']) await page.getByRole('heading', { name: h }).waitFor();
-for (const r of ['Owner', 'Accountant', 'Staff', 'Client']) await page.getByText(r, { exact: true }).first().waitFor();
-await page.getByRole('button', { name: 'Who it is for' }).click();   // the page links scroll to their section
+for (const r of ['Owner', 'Accountant', 'Staff', 'Sales', 'Employee', 'Client']) await page.getByText(r, { exact: true }).first().waitFor();
+for (const h of ['Everything your practice runs on', 'Compliance checks that usually live in spreadsheets', 'Simple plans for every size of practice', 'Safe enough for your clients’ books', 'Questions people ask']) await page.getByRole('heading', { name: h }).waitFor();
+await page.getByRole('tab', { name: 'GST & TDS' }).click();                                   // product tour tabs switch the panel
+await page.getByRole('heading', { name: 'GST and TDS working papers, ready for filing' }).waitFor();
+for (const c of ['GSTR-2B match', 'MSME payments: section 43B(h)', 'ITC 180-day rule', 'Duplicate bill guard']) await page.getByRole('heading', { name: c, exact: true }).waitFor();
+for (const plan of ['Free', 'Starter', 'Practice', 'Firm']) await page.locator('#pricing').getByRole('heading', { name: plan, exact: true }).waitFor(); // live from the API
+await page.locator('#pricing').getByText('₹2,999').waitFor();
+await page.getByText('Does it file GST returns?').click();
+await page.getByText(/It prepares the GSTR-1 and GSTR-3B working papers/).waitFor();
+await page.getByRole('navigation', { name: 'Page sections' }).getByRole('button', { name: 'Who it is for' }).click();   // the page links scroll to their section
 assert.ok(!/fintaxvers/i.test(await page.locator('body').innerText()), 'the old company name is gone from the page');
-step('landing page: headline, dashboard picture, features, audiences, access levels and steps; no old company name');
+step('landing page: headline, dashboard picture, product tour, compliance checks, features, audiences, six access levels, live pricing, trust, questions and steps; no old company name');
 
 await btn('Create an account').click();
 await page.getByLabel('Your name').fill('Asha Rao');

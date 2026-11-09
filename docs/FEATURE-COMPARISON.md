@@ -5,6 +5,17 @@ AcctApp is an original product. The comparison is about capabilities, not copyin
 
 Legend: **Done** = built and tested. **Partial** = works with limits. **Not built** = a known gap.
 
+## Beyond Xero: problems Indian CAs have that it does not solve
+Xero is built for other countries. These checks take hours of spreadsheet work every month or at year-end, and AcctApp does them from the books.
+
+| Capability | Status | Notes |
+|---|---|---|
+| GSTR-2B matching against purchase bills | Done | Upload the portal JSON or a CSV. Matching uses the supplier GSTIN and the supplier bill number however it is written (INV/0042 = inv-42). Shows matched, tax differs, portal-only, books-only, credit at risk, and suppliers to chase with a reminder to send. Amended invoices (B2BA) and credit notes in GSTR-2B are not matched yet |
+| MSME payments under section 43B(h) | Done | MSME type, Udyam number and agreed days on suppliers; per bill the pay-by date (15 days, or agreed up to 45), paid on time, paid late, unpaid, and the expense not allowed for the year, including bills near 31 March. The bill date stands in for the date of acceptance |
+| Input tax credit 180-day rule (Rule 37) | Done | Credit to reverse on the unpaid part of bills older than 180 days, and bills reaching 180 days within 30 days. Interest under section 50 is not calculated |
+| Duplicate supplier bill guard | Done | The same supplier bill number from the same supplier, or from another contact with the same GSTIN, is stopped as a likely double GST credit unless confirmed |
+| Alerts for the above | Done | Notifications for MSME bills past or near their limit and for credit to reverse |
+
 ## What is still missing, in the order most people ask for it
 Everything in the tables below that is marked **Not built** or **Partial**, grouped by why it is not built yet.
 

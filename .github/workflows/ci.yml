@@ -82,7 +82,7 @@ jobs:
       # Google Chrome is already installed on GitHub's Ubuntu runners; the scripts use it through playwright-core.
       - name: Browser tests
         run: |
-          for f in smoke full more workspace changes team; do
+          for f in smoke full more workspace changes team checklist compliance; do
             echo "=== $f"
             node frontend/e2e/$f.mjs
           done

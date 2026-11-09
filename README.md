@@ -49,6 +49,7 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 | **Reports** | Dashboard with charts, trial balance, P&L (also by month and by cost centre), budget vs actual, short-term cash flow, business snapshot with health scorecard, TDS deducted, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
 | **Projects** | Time and costs per customer job, estimate vs actual, invoice unbilled work in one click. |
 | **Firm tools** | Practice overview across every client, tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
+| **Compliance checks** | Tax, Checks. **GSTR-2B match**: upload the portal file; bills are matched by supplier GSTIN and invoice number written any way; matched, tax differs, portal-only and books-only, credit at risk, and suppliers to chase with a ready-to-send reminder. **MSME payments, section 43B(h)**: MSME type and Udyam number on suppliers; pay-by date per bill, what is overdue, and the expense not allowed for the year (Form 3CD clause 22). **ITC 180-day rule**: credit to reverse on bills unpaid for 180 days, and bills about to cross. A supplier bill number used twice is stopped as a likely double GST credit. Alerts in notifications; PDF and Excel exports. |
 | **Export templates** | The owner chooses how every PDF and Excel file looks: five ready-made templates or their own design (colours, typeface, heading, table style, page), one for reports and one for invoices and bills. Several reports can go into one PDF or one workbook, and several invoices into one PDF. |
 | **Landing page and mobile** | A landing page with a dashboard illustration, features, audiences and access levels. The web app can be added to a phone's home screen (web app manifest and icons); there is no offline mode and no native app. |
 | **Platform** | Encrypted daily backups with an automatic restore test. DPDP consent, data export and erasure. Subscription plans with GST invoices. Health and metrics endpoints, JSON logs, error alerts. |
@@ -158,13 +159,15 @@ The backend reads environment variables (there is no `.env` loader).
 ## Tests
 
 ```bash
-npm test                         # 265 backend tests (15 files), with worked accounting examples
+npm test                         # 285 backend tests (16 files), with worked accounting and tax examples
 node frontend/e2e/smoke.mjs      # browser: register, journal, reversal, trial balance, 2FA
 node frontend/e2e/full.mjs       # browser: quote to invoice, GST, TDS, bank rules, assets, reports, exports, billing, privacy
 node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, cost centres, budgets, year-end, practice overview
 node frontend/e2e/workspace.mjs  # browser: landing page, menus, + menu and shortcuts, search, spend/transfer money, cash forecast, TDS, projects
 node frontend/e2e/changes.mjs    # browser: contacts, editing posted invoices, journal rules, bank matching, cost centres, exports, export templates
 node frontend/e2e/team.mjs       # browser: password reset and change, email confirmation, invitations, People and access, Sales and Employee views
+node frontend/e2e/checklist.mjs  # browser: the original 29-point change list, item by item
+node frontend/e2e/compliance.mjs # browser: MSME details, duplicate bill warning, GSTR-2B upload and match, 43B(h), 180-day ITC, alerts
 ```
 GitHub runs all of these on every push (`.github/workflows/ci.yml`). The browser scripts read the email outbox from the database (`DATABASE_URL`) to follow emailed links.
 
@@ -177,6 +180,9 @@ Worked examples the tests check include:
 - Rs 100 split three ways = 33.34 + 33.33 + 33.33
 - USD 1,000 export at Rs 83.25 received as Rs 84,000 = Rs 750 exchange gain
 - 10 bought at Rs 100 and 10 at Rs 130, then 5 sold = Rs 575 cost of goods sold
+- A micro supplier's bill of 25 March paid on 5 April is on time (limit 9 April); paid on 20 April, its Rs 1,000 expense is not allowed for the year (the GST is not part of it)
+- Rs 590 of a Rs 1,180 bill unpaid after 180 days = Rs 90 of credit to reverse (half of the Rs 180 GST)
+- INV/0042, inv-42 and INV 42 are the same invoice number when matching GSTR-2B
 
 ## Deploy
 

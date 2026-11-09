@@ -5,12 +5,13 @@ import { AuthScreen } from './pages/Auth';
 import { Clients } from './pages/Clients';
 import { NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
 import { Security } from './pages/Security';
+import { TeamPage } from './pages/Team';
 import { Billing, Help, Privacy } from './pages/Account';
 import { PracticeOverview } from './pages/PracticeOverview';
 import { favouriteReports } from './pages/Reports';
 
 export interface Me {
-  id: number; email: string; fullName: string; twoFactorEnabled: boolean; lastLogin: { at: string; ip: string | null } | null;
+  id: number; email: string; fullName: string; twoFactorEnabled: boolean; emailVerified: boolean; lastLogin: { at: string; ip: string | null } | null;
   memberships: { firmId: number; firmName: string; orgId: number | null; role: string }[];
 }
 export interface Org { id: number; name: string; gstin: string | null; firmId: number }
@@ -148,22 +149,37 @@ export function App() {
   const canManage = role === 'owner' || role === 'accountant', canPost = !!org && role !== 'client';
   const goOrg = (p: string) => org && navigate(`/o/${org.id}/${p}`);
 
+  // A link from a confirmation email (#/verify?token=...): confirm the address, then carry on at the client list.
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    const v = /^#\/verify\?token=([0-9a-f]{20,200})$/.exec(location.hash);
+    if (!v) return;
+    history.replaceState(null, '', location.pathname + '#/clients');
+    api('/auth/verify-email', { body: { token: v[1] } }).then(() => { setNotice('Thank you. Your email address is confirmed.'); load(); }).catch((e) => setNotice((e as Error).message));
+  }, [load]);
+
+  // Sales people and employees see a few pages only, so their "+" menu, search and notifications are narrower or absent.
+  const narrow = role === 'sales' || role === 'employee';
+  const createItems = narrow ? (role === 'sales' ? CREATE.filter(([, k]) => ['I', 'Q', 'C'].includes(k)) : []) : CREATE;
+  const visible = (i: NavItem) => (!i.manage || canManage) && (!i.owner || role === 'owner') && (!narrow || !!i.for?.includes(role as 'sales' | 'employee'));
+
   // Alt + letter shortcuts from the "+" menu.
   useEffect(() => {
-    if (!org || !canPost) return;
+    if (!org || !canPost || !createItems.length) return;
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      const hit = CREATE.find(([, k]) => k === e.key.toUpperCase());
+      const hit = createItems.find(([, k]) => k === e.key.toUpperCase());
       if (hit) { e.preventDefault(); navigate(`/o/${org.id}/${hit[2]}`); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [org, canPost]);
+  }, [org, canPost, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <p className="p-8 text-slate-500">Loading…</p>;
-  if (!me) return <AuthScreen onDone={() => { navigate('/clients'); setLoading(true); load(); }} />;
+  if (!me) return <>{notice && <NoticeBar text={notice} onClose={() => setNotice('')} />}<AuthScreen onDone={() => { navigate('/clients'); setLoading(true); load(); }} /></>;
 
   const firmRole = me.memberships.find((x) => x.orgId === null);
+  const canTeam = me.memberships.some((x) => x.orgId === null && (x.role === 'owner' || x.role === 'accountant'));
   const logout = () => { setToken(null); setMe(null); setOrgs([]); navigate('/clients'); };
   const isActive = (i: NavItem) => page === i.key && (!i.sub || i.sub === sub);
   /** "Sales › Invoices": where the current page lives in the menus. */
@@ -188,8 +204,9 @@ export function App() {
               return (<>
                 {org && <>
                   <div className="flex items-center gap-3 px-5 py-2"><span className="flex h-9 w-9 items-center justify-center rounded bg-brand-100 text-xs font-bold text-brand-800">{initialsOf(org.name)}</span><span className="font-semibold">{org.name}</span></div>
-                  <MenuItem onClick={() => to(`/o/${org.id}/settings`)}>Settings</MenuItem>
-                  <MenuItem onClick={() => to('/billing')}>Subscription and billing</MenuItem>
+                  {!narrow && <MenuItem onClick={() => to(`/o/${org.id}/settings`)}>Settings</MenuItem>}
+                  {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
+                  {!narrow && <MenuItem onClick={() => to('/billing')}>Subscription and billing</MenuItem>}
                   <MenuDivider />
                 </>}
                 <MenuHeading>Switch organisation</MenuHeading>
@@ -209,7 +226,7 @@ export function App() {
           {org && (
             <nav className="hidden items-center xl:flex" aria-label="Client sections">
               {NAV.map((g) => {
-                const items = g.items.filter((i) => (!i.manage || canManage) && (!i.owner || role === 'owner'));
+                const items = g.items.filter(visible);
                 if (!items.length) return null;
                 const groupActive = items.some(isActive);
                 if (items.length === 1) {
@@ -254,21 +271,21 @@ export function App() {
           )}
 
           <div className="ml-auto flex items-center gap-1">
-            {org && canPost && (
+            {org && canPost && createItems.length > 0 && (
               <Menu label="Create new" align="right" width="w-72" trigger={<Icon d={ICONS.plus} />}>
                 {(close) => (<>
                   <MenuHeading>Create new</MenuHeading>
-                  {CREATE.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); goOrg(p); }}>{l}</MenuItem>)}
+                  {createItems.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); goOrg(p); }}>{l}</MenuItem>)}
                 </>)}
               </Menu>
             )}
-            {org && (
+            {org && !narrow && (
               <Menu label="Search" align="right" width="w-[28rem]" trigger={<Icon d={ICONS.search} />}>
                 {(close) => <SearchPanel org={org} onPick={(p) => { close(); goOrg(p); }} />}
               </Menu>
             )}
             <button aria-label="Help" title="Help" onClick={() => navigate('/help')} className="hidden h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 sm:flex"><Icon d={ICONS.help} /></button>
-            {org && <Notifications org={org} onPick={(p) => goOrg(p)} />}
+            {org && !narrow && <Notifications org={org} onPick={(p) => goOrg(p)} />}
             <nav aria-label="Account" className="ml-1">
               <Menu label="Account menu" align="right" width="w-64" trigger={<span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-xs font-bold ring-2 ring-white/30">{initialsOf(me.fullName)}</span>}>
                 {(close) => {
@@ -276,7 +293,8 @@ export function App() {
                   return (<>
                     <div className="border-b border-slate-100 px-5 pb-2"><p className="text-sm font-semibold">{me.fullName}</p><p className="text-xs text-slate-500">{me.email}</p></div>
                     <MenuItem active={route === '/clients'} onClick={() => to('/clients')}>Clients</MenuItem>
-                    <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice</MenuItem>
+                    {canTeam && <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice</MenuItem>}
+                    {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
                     <MenuDivider />
                     {([['/security', 'Security'], ['/billing', 'Billing'], ['/privacy', 'Privacy'], ['/help', 'Help']] as const).map(([p, l]) => <MenuItem key={p} active={route === p} onClick={() => to(p)}>{l}</MenuItem>)}
                     <MenuDivider />
@@ -290,7 +308,7 @@ export function App() {
         {org && mobileOpen && (
           <nav aria-label="Small-screen menu" className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t border-white/10 bg-nav xl:hidden">
             {NAV.map((g) => {
-              const items = g.items.filter((i) => (!i.manage || canManage) && (!i.owner || role === 'owner'));
+              const items = g.items.filter(visible);
               if (!items.length) return null;
               const groupActive = items.some(isActive);
               const tone = BAR;
@@ -313,6 +331,8 @@ export function App() {
         )}
       </header>
 
+      {notice && <NoticeBar text={notice} onClose={() => setNotice('')} />}
+      {!me.emailVerified && <VerifyBar email={me.email} />}
       {org && (
         <div className="border-b border-slate-200 bg-white px-6">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
@@ -340,12 +360,48 @@ export function App() {
             {m && !org && <p className="text-sm text-slate-600">That client was not found, or you do not have access.</p>}
             {route === '/practice' && <PracticeOverview onOpen={(id) => navigate(`/o/${id}/dashboard`)} />}
             {route === '/security' && <Security me={me} onChanged={load} />}
+            {route === '/team' && <TeamPage me={me} orgs={orgs} />}
+            {route.startsWith('/invite?token=') && <InviteAccept me={me} token={route.slice('/invite?token='.length)} onDone={() => { setLoading(true); load().then(() => navigate('/clients')); }} />}
             {route === '/billing' && <Billing me={me} />}
             {route === '/privacy' && <Privacy onDeleted={() => { setMe(null); setOrgs([]); navigate('/clients'); }} />}
             {route === '/help' && <Help />}
           </ErrorBoundary>
         </div>
       </main>
+    </div>
+  );
+}
+
+const NoticeBar = ({ text, onClose }: { text: string; onClose: () => void }) => (
+  <div role="status" className="flex items-center justify-between gap-3 bg-green-50 px-6 py-2 text-sm text-green-900"><span>{text}</span><button className="font-medium underline" onClick={onClose}>Dismiss</button></div>
+);
+
+/** Shown until the email address is confirmed. Nothing is blocked; the link in the sign-up email does it. */
+function VerifyBar({ email }: { email: string }) {
+  const [msg, setMsg] = useState('');
+  const send = () => api('/auth/resend-verification', { body: {} }).then(() => setMsg(`A new link was sent to ${email}.`)).catch((e) => setMsg((e as Error).message));
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-amber-50 px-6 py-2 text-sm text-amber-900">
+      <span>Please confirm your email address. We sent a link to <b>{email}</b>.</span>
+      <button className="font-medium underline" onClick={send}>Send it again</button>{msg && <span role="status">{msg}</span>}
+    </div>
+  );
+}
+
+/** Opened from an invitation email while logged in: accept it if it was meant for this login. */
+function InviteAccept({ me, token, onDone }: { me: Me; token: string; onDone: () => void }) {
+  const [info, setInfo] = useState<{ email: string; firmName: string; orgName: string | null; roleText: string } | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => { api(`/auth/invitations/${token}`).then(setInfo).catch((e) => setError((e as Error).message)); }, [token]);
+  if (error) return <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>;
+  if (!info) return <p className="text-sm text-slate-500">Checking your invitation…</p>;
+  const mine = info.email.toLowerCase() === me.email.toLowerCase();
+  return (
+    <div className="max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h1 className="text-xl font-bold text-slate-900">You are invited to {info.firmName}</h1>
+      <p className="mt-2 text-sm text-slate-600">{info.orgName ? `For ${info.orgName}. ` : ''}Your access: <b>{info.roleText}</b>.</p>
+      {mine ? <button className="mt-4 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700" onClick={() => api('/auth/invitations/accept', { body: { token } }).then(onDone).catch((e) => setError((e as Error).message))}>Accept invitation</button>
+        : <p className="mt-3 text-sm text-amber-800">This invitation was sent to <b>{info.email}</b>, but you are logged in as {me.email}. Log out and log in with that address to accept it.</p>}
     </div>
   );
 }

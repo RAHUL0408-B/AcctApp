@@ -24,7 +24,7 @@ function saveText(name: string, text: string) {
 }
 
 /** Customers or suppliers (or both): add, edit, archive, delete, import, export, and a running-balance statement for any date range. */
-export function Contacts({ org, canPost, canManage = false, accounts = [], only, startNew = false }: { org: Org; canPost: boolean; canManage?: boolean; accounts?: Account[]; only?: 'customer' | 'supplier'; startNew?: boolean }) {
+export function Contacts({ org, canPost, canManage = false, accounts = [], only, startNew = false, restricted = false }: { org: Org; canPost: boolean; canManage?: boolean; accounts?: Account[]; only?: 'customer' | 'supplier'; startNew?: boolean; restricted?: boolean }) {
   const [list, setList] = useState<Contact[]>([]);
   const [states, setStates] = useState<{ code: string; name: string }[]>([]);
   const [show, setShow] = useState(startNew);
@@ -150,8 +150,8 @@ export function Contacts({ org, canPost, canManage = false, accounts = [], only,
                 <td><Badge text={c.kind} /></td><td>{c.gstin ?? '—'}</td><td>{c.pan ?? '—'}</td><td>{c.stateCode ?? '—'}</td>
                 <td>{c.bankAccountNo ? `${c.bankName ?? 'A/c'} ••${c.bankAccountNo.slice(-4)}` : '—'}</td><td>{acctName(c.defaultSalesAccountId)}</td><td>{acctName(c.defaultPurchaseAccountId)}</td>
                 <td className="whitespace-nowrap text-right">
-                  <Button variant="ghost" onClick={() => loadStatement(c)}>Statement</Button>
-                  {canPost && <> <Button variant="ghost" onClick={() => edit(c)}>Edit</Button> <Button variant="ghost" onClick={() => archive(c)}>{c.isArchived ? 'Restore' : 'Archive'}</Button></>}
+                  {!restricted && <Button variant="ghost" onClick={() => loadStatement(c)}>Statement</Button>}
+                  {canPost && !restricted && <> <Button variant="ghost" onClick={() => edit(c)}>Edit</Button> <Button variant="ghost" onClick={() => archive(c)}>{c.isArchived ? 'Restore' : 'Archive'}</Button></>}
                   {canManage && <> <Button variant="ghost" className="text-red-700" onClick={() => remove(c)}>Delete</Button></>}
                 </td></tr>))}</tbody></table>
         )}

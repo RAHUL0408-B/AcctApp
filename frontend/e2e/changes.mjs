@@ -251,7 +251,14 @@ step('cost centre chosen once for a whole invoice and journal, and changed on a 
 
 // ---- exports: one template for everything, set by the owner under Export templates
 const fs = await import('fs');
-const grabbed = async (click) => { const [dl] = await Promise.all([page.waitForEvent('download'), click()]); const buf = fs.readFileSync(await dl.path()); return { name: dl.suggestedFilename(), head: buf.subarray(0, 4).toString('latin1'), size: buf.length }; };
+const grabbed = async (click) => {
+  let dl;
+  try { [dl] = await Promise.all([page.waitForEvent('download'), click()]); }
+  catch (e) { // say what the page showed, so a missing download can be explained
+    console.log('NO DOWNLOAD. On screen:', JSON.stringify(await page.locator('[role=alert], .bg-red-50').allInnerTexts()), 'at', page.url());
+    throw e;
+  }
+  const buf = fs.readFileSync(await dl.path()); return { name: dl.suggestedFilename(), head: buf.subarray(0, 4).toString('latin1'), size: buf.length }; };
 await menu('Reporting', 'All reports');
 await heading('Reports');
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();

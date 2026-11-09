@@ -19,7 +19,9 @@ const TYPES = { sales: [['invoice', 'Invoice'], ['credit_note', 'Credit note']],
 
 const blankForm = { contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '', number: '', notes: '' };
 
-export function Documents({ org, kind, canPost, accounts, startNew = false }: { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean }) {
+export function Documents({ org, kind, canPost, accounts, startNew = false, restricted = false }: { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean; restricted?: boolean }) {
+  // A restricted (sales) role can create and view, but not pay, edit, delete, archive or email.
+  const full = canPost && !restricted;
   const types = TYPES[kind];
   const sales = kind === 'sales';
   const [docs, setDocs] = useState<Doc[]>([]);
@@ -189,13 +191,13 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
   const overdue = (d: Doc) => d.status === 'posted' && (d.outstanding ?? 0) > 0 && !!d.dueDate && d.dueDate < today() && (d.docType === 'invoice' || d.docType === 'bill');
   const payLabel = sales ? 'Receive payment' : 'Pay';
   const stateName = (code: string | null) => (code ? `${code} ${states.find((s) => s.code === code)?.name ?? ''}`.trim() : 'not known');
-  const canEdit = (d: Doc) => canPost && d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill' || d.docType === 'credit_note' || d.docType === 'debit_note');
+  const canEdit = (d: Doc) => full && d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill' || d.docType === 'credit_note' || d.docType === 'debit_note');
   const supplyOptions = useMemo(() => SUPPLY[kind], [kind]);
 
   return (
     <>
       <PageHeader title={title} subtitle={sales ? 'Invoices and credit notes you send to customers' : 'Bills and debit notes from your suppliers'}
-        actions={canPost && <>{sales && <Button variant="ghost" disabled={busy} onClick={remind}>Send overdue reminders</Button>}<Button onClick={() => { if (showForm) resetForm(); else { setEditing(null); setShowForm(true); } }}>{showForm ? 'Close' : `New ${sales ? 'invoice' : 'bill'}`}</Button></>} />
+        actions={canPost && <>{sales && full && <Button variant="ghost" disabled={busy} onClick={remind}>Send overdue reminders</Button>}<Button onClick={() => { if (showForm) resetForm(); else { setEditing(null); setShowForm(true); } }}>{showForm ? 'Close' : `New ${sales ? 'invoice' : 'bill'}`}</Button></>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       {showForm && canPost && (
         <Card title={editing ? `Edit ${editing.number}` : sales ? 'New sales document' : 'New purchase document'}
@@ -257,7 +259,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
         </Card>
       )}
       <Card actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}>
-        {canPost && selected.size > 0 && (
+        {full && selected.size > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-brand-50 px-3 py-2 text-sm"><b>{selected.size} selected</b>
             <Button variant="danger" disabled={busy} onClick={() => bulk('delete')}>Delete selected</Button>
             <Button variant="ghost" disabled={busy} onClick={() => downloadPdf([...selected])}>Download as one PDF</Button>
@@ -266,10 +268,10 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
         )}
         {docs.length === 0 ? <Empty text="Nothing here yet." /> : (
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500">{canPost && <th className="w-8"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(docs.map((d) => d.id)))} /></th>}<th>Number</th><th>Contact</th><th>Date</th><th>Due</th><th className="text-right">Total</th><th className="text-right">TDS</th><th className="text-right">Outstanding</th><th className="pl-4">Status</th><th /></tr></thead>
+            <thead><tr className="text-left text-slate-500">{full && <th className="w-8"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(docs.map((d) => d.id)))} /></th>}<th>Number</th><th>Contact</th><th>Date</th><th>Due</th><th className="text-right">Total</th><th className="text-right">TDS</th><th className="text-right">Outstanding</th><th className="pl-4">Status</th><th /></tr></thead>
             <tbody>{docs.map((d) => (
               <tr key={d.id} className={`border-t border-slate-100 ${d.isArchived ? 'text-slate-400' : ''}`}>
-                {canPost && <td><input type="checkbox" aria-label={`Select ${d.number}`} checked={selected.has(d.id)} onChange={() => toggle(d.id)} /></td>}
+                {full && <td><input type="checkbox" aria-label={`Select ${d.number}`} checked={selected.has(d.id)} onChange={() => toggle(d.id)} /></td>}
                 <td className="py-2 font-medium">{d.number}</td><td>{d.contactName}</td><td>{d.issueDate}</td>
                 <td className={overdue(d) ? 'font-medium text-red-700' : ''}>{d.dueDate ?? ''}</td>
                 <td className="text-right">{canEdit(d)
@@ -279,10 +281,10 @@ export function Documents({ org, kind, canPost, accounts, startNew = false }: { 
                 <td className="pl-4"><Badge text={d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && d.outstanding === 0 ? 'paid' : d.status} />{d.isArchived && <span className="ml-1 text-xs">archived</span>}</td>
                 <td className="space-x-1 whitespace-nowrap text-right">
                   <Button variant="ghost" onClick={() => { setError(''); downloadPdf([d.id], d.number); }}>PDF</Button>
-                  {canPost && sales && d.status === 'posted' && <Button variant="ghost" onClick={() => email(d)}>Email</Button>}
-                  {canPost && d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) > 0 && <Button variant="ghost" onClick={() => setPay({ id: d.id, number: d.number, amount: d.currency === 'INR' ? String((d.outstanding ?? 0) / 100) : '', accountId: '', date: today(), reference: '', currency: d.currency, foreign: '' })}>{payLabel}</Button>}
+                  {full && sales && d.status === 'posted' && <Button variant="ghost" onClick={() => email(d)}>Email</Button>}
+                  {full && d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) > 0 && <Button variant="ghost" onClick={() => setPay({ id: d.id, number: d.number, amount: d.currency === 'INR' ? String((d.outstanding ?? 0) / 100) : '', accountId: '', date: today(), reference: '', currency: d.currency, foreign: '' })}>{payLabel}</Button>}
                   {canEdit(d) && <Button variant="ghost" onClick={() => startEdit(d)}>Edit</Button>}
-                  {canPost && d.status === 'posted' && <Button variant="ghost" className="text-red-700" onClick={() => doVoid(d)}>Delete</Button>}
+                  {full && d.status === 'posted' && <Button variant="ghost" className="text-red-700" onClick={() => doVoid(d)}>Delete</Button>}
                 </td>
               </tr>))}</tbody>
           </table>

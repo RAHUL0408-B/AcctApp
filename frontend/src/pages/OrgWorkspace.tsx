@@ -29,18 +29,18 @@ export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'custo
   | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings';
 
 /** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
-export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; owner?: boolean; heading?: string; divider?: boolean; gear?: boolean }
+export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; owner?: boolean; for?: ('sales' | 'employee')[]; heading?: string; divider?: boolean; gear?: boolean }
 
 /** Top-bar menus. Entries marked manage are only shown to owners and accountants. */
 export const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Home', items: [{ key: 'dashboard', label: 'Home' }] },
   { group: 'Sales', items: [
-    { key: 'sales-overview', label: 'Sales overview' }, { key: 'invoices', label: 'Invoices' }, { key: 'quotes', label: 'Quotes' }, { key: 'recurring', label: 'Repeating invoices' },
-    { key: 'items', label: 'Products and services' }, { key: 'customers', label: 'Customers' },
+    { key: 'sales-overview', label: 'Sales overview' }, { key: 'invoices', label: 'Invoices', for: ['sales'] }, { key: 'quotes', label: 'Quotes', for: ['sales'] }, { key: 'recurring', label: 'Repeating invoices' },
+    { key: 'items', label: 'Products and services', for: ['sales'] }, { key: 'customers', label: 'Customers', for: ['sales'] },
     { key: 'sales-settings', label: 'Sales settings', divider: true, gear: true, manage: true }] },
   { group: 'Purchases', items: [
     { key: 'purchases-overview', label: 'Purchases overview' }, { key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' },
-    { key: 'expenses', label: 'Expense claims' }, { key: 'approvals', label: 'Awaiting approval' }, { key: 'suppliers', label: 'Suppliers' },
+    { key: 'expenses', label: 'Expense claims', for: ['employee'] }, { key: 'approvals', label: 'Awaiting approval' }, { key: 'suppliers', label: 'Suppliers' },
     { key: 'purchases-settings', label: 'Purchases settings', divider: true, gear: true, manage: true }] },
   { group: 'Reporting', items: [
     { key: 'reports', label: 'All reports' },
@@ -72,14 +72,18 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
   const canPost = role !== 'client';
   const canManage = role === 'owner' || role === 'accountant';
   const isNew = sub === 'new';
+  // Sales people and employees get a few pages each; everything else is closed to them.
+  const narrow = role === 'sales' || role === 'employee';
+  const mayOpen = role === 'sales' ? ['invoices', 'quotes', 'customers', 'items'] : ['expenses'];
+  if (narrow && !mayOpen.includes(page)) return <LimitedHome role={role} go={go} />;
   switch (page) {
     case 'dashboard': return <Dashboard org={org} go={go} lastLogin={lastLogin} />;
     case 'sales-overview': return <Overview org={org} side="sales" go={go} />;
     case 'purchases-overview': return <Overview org={org} side="purchases" go={go} />;
-    case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} startNew={isNew} />;
+    case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} startNew={isNew} restricted={narrow} />;
     case 'quotes': return <PreDocs org={org} kind="quote" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'recurring': return <Recurring org={org} canPost={canPost} accounts={accounts} />;
-    case 'customers': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} only="customer" startNew={isNew} />;
+    case 'customers': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} only="customer" startNew={isNew} restricted={narrow} />;
     case 'contacts': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} startNew={isNew} />;
     case 'bills': return <Documents org={org} kind="purchases" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'purchase-orders': return <PreDocs org={org} kind="purchase_order" canPost={canPost} accounts={accounts} startNew={isNew} />;
@@ -90,7 +94,7 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} /></>;
     case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Every account that transactions can post to." /><Chart org={org} accounts={accounts} canManage={canManage} reload={reloadAccounts} /></>;
     case 'assets': return <FixedAssets org={org} canManage={canManage} accounts={accounts} />;
-    case 'items': return <Items org={org} canPost={canPost} accounts={accounts} />;
+    case 'items': return <Items org={org} canPost={canPost && !narrow} accounts={accounts} />;
     case 'reports': return <><PageHeader title="Reports" subtitle="Financial statements, analytics, ageing, GST and TDS. Star a report to add it to the Reporting menu." /><Reports org={org} accounts={accounts} initial={sub} /></>;
     case 'tasks': return <><PageHeader title="Tasks and deadlines" subtitle="Filing due dates and anything else the team needs to do for this client." /><Tasks org={org} canPost={canPost} /></>;
     case 'files': return <><PageHeader title="Documents" subtitle="Files shared between the firm and the client." /><Files org={org} canManage={canManage} /></>;
@@ -108,6 +112,23 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'export-templates': return <ExportTemplates org={org} role={role} />;
     case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
   }
+}
+
+/** What a sales person or employee sees on opening a client: what they can do, and a way in. */
+function LimitedHome({ role, go }: { role: string; go: (p: string) => void }) {
+  const sales = role === 'sales';
+  return (
+    <>
+      <PageHeader title={sales ? 'Sales' : 'Expense claims'} subtitle={sales ? 'You can raise invoices and quotes and add customers for this client.' : 'Claim back money you spent for the business.'} />
+      <Card title={sales ? 'What would you like to do?' : 'Start here'}>
+        <div className="flex flex-wrap gap-3">
+          {sales ? <><Button onClick={() => go('invoices/new')}>New invoice</Button><Button variant="ghost" onClick={() => go('quotes/new')}>New quote</Button><Button variant="ghost" onClick={() => go('customers')}>Customers</Button><Button variant="ghost" onClick={() => go('invoices')}>Invoices</Button></>
+            : <Button onClick={() => go('expenses')}>Open my expense claims</Button>}
+        </div>
+        <p className="mt-4 text-sm text-slate-500">{sales ? 'Payments, bills, reports and the rest of the books are handled by the accounting team.' : 'You see only your own claims. The accounting team approves them and pays you back.'}</p>
+      </Card>
+    </>
+  );
 }
 
 function TrialBalance({ org }: { org: Org }) {

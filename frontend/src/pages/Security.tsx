@@ -1,9 +1,38 @@
 import { useState } from 'react';
-import { api } from '../api';
+import { api, setToken } from '../api';
 import type { Me } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
+/** Change the password. Every other device is signed out; this one keeps working. */
+function ChangePassword() {
+  const [f, setF] = useState({ current: '', next: '', again: '' });
+  const [ok, setOk] = useState('');
+  const { error, busy, run } = useAction();
+  const save = () => run(async () => {
+    setOk('');
+    if (f.next !== f.again) throw new Error('The two new passwords are different');
+    const r = await api('/auth/change-password', { body: { currentPassword: f.current, newPassword: f.next } });
+    setToken(r.token); setF({ current: '', next: '', again: '' });
+    setOk('Password changed. Every other device has been signed out.');
+  });
+  return (
+    <Card title="Password">
+      <div className="grid max-w-3xl gap-3 md:grid-cols-3">
+        <Field label="Current password" type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} />
+        <Field label="New password" type="password" autoComplete="new-password" value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} />
+        <Field label="New password again" type="password" autoComplete="new-password" value={f.again} onChange={(e) => setF({ ...f, again: e.target.value })} />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">At least 10 characters. Forgotten it? Use "Forgot your password?" on the log-in page.</p>
+      <div className="mt-3 flex items-center gap-3"><Button disabled={busy || !f.current || !f.next} onClick={save}>Change password</Button><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+    </Card>
+  );
+}
+
 export function Security({ me, onChanged }: { me: Me; onChanged: () => void }) {
+  return <div className="space-y-5"><ChangePassword /><TwoFactor me={me} onChanged={onChanged} /></div>;
+}
+
+function TwoFactor({ me, onChanged }: { me: Me; onChanged: () => void }) {
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [code, setCode] = useState('');
   const [recovery, setRecovery] = useState<string[]>([]);

@@ -22,7 +22,11 @@ const nav = async (name) => {
   }
   await item.click();
 };
-const ok = (re) => page.getByText(re).first().waitFor();
+// On a timeout, say what the page showed instead (a red message or the last green one), so an intermittent failure can be explained.
+const ok = async (re) => {
+  try { await page.getByText(re).first().waitFor(); }
+  catch (e) { console.log('NOT SHOWN:', String(re), '| red:', JSON.stringify(await page.locator('[role=alert], .bg-red-50').allInnerTexts()), '| green:', JSON.stringify(await page.locator('.bg-green-50').allInnerTexts()), '| at', page.url()); throw e; }
+};
 
 await page.goto(URL);
 await btn('Create an account').click();

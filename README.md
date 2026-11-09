@@ -31,7 +31,7 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 |---|---|
 | **Navigation** | Top bar with Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts and Projects menus, an organisation menu, a "+" create menu with Alt shortcuts, search, notifications, and a setup guide on Home. |
 | **Firms and clients** | One firm, many client organisations. Each client's data is isolated by PostgreSQL row-level security. |
-| **Users and security** | Owner, Accountant, Staff and Client (view-only) roles. Optional authenticator-app 2FA with recovery codes, lockout after 5 failed logins, rate limits, password rules. |
+| **Users and security** | Six access levels: Owner, Accountant, Staff, Client (view-only), Sales (invoices, quotes and customers only) and Employee (their own expense claims only). The owner invites people by email from **People and access**, changes roles and removes access. Forgot-password and reset by email link, change password (other devices are signed out), email confirmation, optional authenticator-app 2FA with recovery codes, lockout after 5 failed logins, rate limits, password rules. |
 | **Ledger** | Double entry in integer paise. Unbalanced entries are rejected by the API and by the database. Posted entries can never be edited or deleted, only reversed. Periods can be locked. |
 | **Chart of accounts** | Indian templates for trading, services and manufacturing, including GST and TDS accounts. |
 | **Contacts** | Customers and suppliers: edit, archive, delete (only if unused), import and export CSV with a blank template, bank details, default sales and purchase accounts, and statements for any date range. GSTIN is checked (format and check digit) and sets the state. |
@@ -45,10 +45,12 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 | **Journals** | Attachments, journal rules that post themselves on a schedule (for example monthly insurance), and reverse several entries at once. |
 | **Fixed assets** | Asset groups with Income Tax Act and Companies Act settings, automatic editable asset codes, edit, straight line / written down value / useful life, whole months or actual days, attachments, Excel/PDF register, and disposal with sale proceeds and gain or loss posted. |
 | **More reports** | All ledgers at once, fixed asset register, invoice-wise, bill-wise and purchase register (with archive and delete). |
-| **Accounting extras** | Products and services, inventory at weighted average cost, fixed assets with monthly depreciation, tracking categories, budgets, year-end close, organisation settings. |
-| **Reports** | Dashboard with charts, trial balance, P&L (also by month and by tracking category), budget vs actual, short-term cash flow, business snapshot with health scorecard, TDS deducted, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
+| **Accounting extras** | Products and services, inventory at weighted average cost, fixed assets with monthly depreciation, cost centres (tag invoices, bills and journals), budgets, year-end close, organisation settings. |
+| **Reports** | Dashboard with charts, trial balance, P&L (also by month and by cost centre), budget vs actual, short-term cash flow, business snapshot with health scorecard, TDS deducted, balance sheet, ledger, cash flow, aged receivables and payables, GSTR-1 and GSTR-3B summaries. PDF and Excel export. |
 | **Projects** | Time and costs per customer job, estimate vs actual, invoice unbilled work in one click. |
 | **Firm tools** | Practice overview across every client, tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
+| **Export templates** | The owner chooses how every PDF and Excel file looks: five ready-made templates or their own design (colours, typeface, heading, table style, page), one for reports and one for invoices and bills. Several reports can go into one PDF or one workbook, and several invoices into one PDF. |
+| **Landing page and mobile** | A landing page with a dashboard illustration, features, audiences and access levels. The web app can be added to a phone's home screen (web app manifest and icons); there is no offline mode and no native app. |
 | **Platform** | Encrypted daily backups with an automatic restore test. DPDP consent, data export and erasure. Subscription plans with GST invoices. Health and metrics endpoints, JSON logs, error alerts. |
 
 What is still missing compared with Xero-style software is listed in [docs/FEATURE-COMPARISON.md](docs/FEATURE-COMPARISON.md).
@@ -87,7 +89,7 @@ The browser only ever talks to the frontend's address. The frontend host forward
 │   │   ├── extras/          quotes, POs, repeating invoices, items, bank rules, fixed assets, dashboard
 │   │   ├── inventory/       stock on hand, average cost, stock adjustments
 │   │   ├── workflow/        invoice and bill approvals, expense claims
-│   │   ├── planning/        tracking categories, budgets, management reports, year-end close
+│   │   ├── planning/        cost centres, budgets, management reports, year-end close
 │   │   ├── practice/        overview across all clients
 │   │   ├── insights/        overviews, search, notifications, setup guide, cash forecast, snapshot, TDS report
 │   │   ├── banking/         spend, receive and transfer money
@@ -147,7 +149,8 @@ The backend reads environment variables (there is no `.env` loader).
 | `BACKUP_KEY` | Backup encryption passphrase. Keep a copy off the server. **Required in production.** |
 | `WEB_ORIGIN` | The frontend's address, e.g. `https://acct-app-psi.vercel.app`. **Required in production.** |
 | `DATA_DIR`, `BACKUP_DIR`, `BACKUP_KEEP_DAYS` | Where uploads and backups go, and how long backups are kept (default 30 days). |
-| `SMTP_URL`, `MAIL_FROM` | Outgoing email. Without `SMTP_URL`, mail is only logged. |
+| `SMTP_URL`, `MAIL_FROM` | Outgoing email. Without `SMTP_URL`, mail is only logged. **Needed for password reset, email confirmation and invitations to reach people.** |
+| `APP_URL` | The web app's public address (for example `https://acct-app-psi.vercel.app`). Used to build the links in those emails. Defaults to `http://localhost:5173`. |
 | `PAYMENT_PROVIDER` | `test` until a real gateway is added (see `backend/src/ops/billing.ts`). |
 | `METRICS_TOKEN`, `ALERT_WEBHOOK_URL` | Protects `/api/metrics`; the webhook receives an alert after 5+ server errors in a minute. |
 | `RATE_LIMIT_PER_MIN`, `TRUST_PROXY`, `WORKER`, `LOG_REQUESTS`, `PORT` | Tuning switches. |
@@ -155,12 +158,17 @@ The backend reads environment variables (there is no `.env` loader).
 ## Tests
 
 ```bash
-npm test                         # 192 backend tests, with worked accounting examples
+npm test                         # 265 backend tests (15 files), with worked accounting examples
 node frontend/e2e/smoke.mjs      # browser: register, journal, reversal, trial balance, 2FA
 node frontend/e2e/full.mjs       # browser: quote to invoice, GST, TDS, bank rules, assets, reports, exports, billing, privacy
-node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, tracking, budgets, year-end, practice overview
-node frontend/e2e/workspace.mjs  # browser: login page, menus, + menu and shortcuts, search, spend/transfer money, cash forecast, TDS, projects
+node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, cost centres, budgets, year-end, practice overview
+node frontend/e2e/workspace.mjs  # browser: landing page, menus, + menu and shortcuts, search, spend/transfer money, cash forecast, TDS, projects
+node frontend/e2e/changes.mjs    # browser: contacts, editing posted invoices, journal rules, bank matching, cost centres, exports, export templates
+node frontend/e2e/team.mjs       # browser: password reset and change, email confirmation, invitations, People and access, Sales and Employee views
 ```
+GitHub runs all of these on every push (`.github/workflows/ci.yml`). The browser scripts read the email outbox from the database (`DATABASE_URL`) to follow emailed links.
+
+When you add a file under `db/migrations`, run `npm run migrate`; the Docker image does it for you on start. If you run the browser tests many times in a row from one machine, start the API with `RATE_LIMIT_PER_MIN=100000` so the per-address limit does not stop them.
 The browser tests need the app running. Point them at any address with `WEB_URL=https://...`; on slow hosts add `STEP_TIMEOUT=60000`.
 
 Worked examples the tests check include:

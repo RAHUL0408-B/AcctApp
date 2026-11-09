@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { ensureAccount, insertEntry } from '../ledger/post';
 import { validateLines } from '../ledger/ledger';
 import { createDocument, docSchema, priceLines } from '../accounting/documents.controller';
@@ -19,8 +19,9 @@ export class WorkflowController {
   /** Anyone who can post may submit; nothing reaches the ledger until an owner or accountant approves it. */
   @Post('drafts')
   async submit(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(docSchema, body);
+    if (role === 'sales' && b.docType !== 'invoice') throw new ForbiddenException('You can raise invoices only');
     if (b.docType !== 'invoice' && b.docType !== 'bill') throw new BadRequestException('Only invoices and bills go through approval');
     return withOrg(orgId, async (c) => {
       const { t } = await priceLines(c, orgId, b.docType === 'invoice', b.contactId, b.issueDate, b.lines, b.placeOfSupply, b.supplyType); // validates now, not at approval
@@ -71,7 +72,7 @@ export class WorkflowController {
   /** An employee claims back money they spent. Each line goes to an expense account. */
   @Post('expense-claims')
   async claim(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    await requireAnyOrg(uid, orgId, ['post', 'expenses']);
     const b = parse(z.object({
       date, title: z.string().min(1).max(200),
       lines: z.array(z.object({ description: z.string().min(1).max(300), accountId: z.number().int().positive(), amount: z.number().int().positive() })).min(1).max(100),
@@ -90,10 +91,11 @@ export class WorkflowController {
 
   @Get('expense-claims')
   async claims(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'expenses']);
+    // Employees see their own claims only.
     return withOrg(orgId, async (c) => (await c.query(
       `SELECT e.id, e.claim_date::text AS date, e.title, e.lines, e.total, e.status, e.reason, e.claimant_id AS "claimantId", u.full_name AS claimant
-         FROM expense_claims e JOIN users u ON u.id=e.claimant_id ORDER BY e.id DESC`)).rows.map((r) => ({ ...r, id: Number(r.id), claimantId: Number(r.claimantId), total: Number(r.total) })));
+         FROM expense_claims e JOIN users u ON u.id=e.claimant_id WHERE ($1::bigint IS NULL OR e.claimant_id=$1) ORDER BY e.id DESC`, [role === 'employee' ? uid : null])).rows.map((r) => ({ ...r, id: Number(r.id), claimantId: Number(r.claimantId), total: Number(r.total) })));
   }
 
   /**
@@ -102,7 +104,7 @@ export class WorkflowController {
    */
   @Put('expense-claims/:id')
   async resubmitClaim(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    await requireAnyOrg(uid, orgId, ['post', 'expenses']);
     const b = parse(z.object({
       date, title: z.string().min(1).max(200),
       lines: z.array(z.object({ description: z.string().min(1).max(300), accountId: z.number().int().positive(), amount: z.number().int().positive() })).min(1).max(100),

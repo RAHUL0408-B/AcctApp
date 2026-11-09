@@ -9,7 +9,7 @@ import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { financialYearOf, validateLines } from '../ledger/ledger';
 import { insertEntry } from '../ledger/post';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { aged } from '../accounting/reports';
 import { deadlinesBetween, Rule } from './deadlines';
 import { buildTable, InvoiceView, renderInvoicesPdf, renderPdfMulti, renderXlsxMulti, REPORTS, ReportName } from './exporter';
@@ -264,8 +264,9 @@ export class FirmController {
 
   @Get('documents/:id/pdf')
   async invoicePdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Query() q: Record<string, string>, @Res() res: Response) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     const [v] = await this.invoiceViews(orgId, [id]);
+    if (role === 'sales' && v.type !== 'invoice') throw new NotFoundException('Document not found');
     const pdf = await renderInvoicesPdf([v], optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'document')), q));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${v.number.replace(/\//g, '-')}.pdf"`);
@@ -275,11 +276,13 @@ export class FirmController {
   /** Several invoices or bills in one PDF: ?ids=1,2,3 */
   @Get('documents-pdf')
   async invoicesPdf(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query() q: Record<string, string>, @Res() res: Response) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     const ids = [...new Set((q.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0))];
     if (!ids.length) throw new BadRequestException('Choose at least one document');
     if (ids.length > 100) throw new BadRequestException('Choose at most 100 documents at a time');
-    const pdf = await renderInvoicesPdf(await this.invoiceViews(orgId, ids), optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'document')), q));
+    const views = await this.invoiceViews(orgId, ids);
+    if (role === 'sales' && views.some((v) => v.type !== 'invoice')) throw new NotFoundException('Document not found');
+    const pdf = await renderInvoicesPdf(views, optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'document')), q));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="documents.pdf"');
     res.send(pdf);

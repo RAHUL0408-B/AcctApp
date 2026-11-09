@@ -7,7 +7,7 @@ import { COA_TEMPLATES, templateFor } from '../coa/templates';
 import { financialYearOf } from '../ledger/ledger';
 import { isValidGstin } from '../tax/gst';
 import { firmPlan } from '../ops/launch.controller';
-import { firmRole, requireOrg } from './acl';
+import { firmRole, requireOrg, requireAnyOrg } from './acl';
 
 const createOrg = z.object({
   firmId: z.number().int().positive(),
@@ -22,7 +22,7 @@ const addAccount = z.object({
 });
 const addMember = z.object({
   firmId: z.number().int().positive(), email: z.string().email().toLowerCase(),
-  role: z.enum(['owner', 'accountant', 'staff', 'client']), orgId: z.number().int().positive().optional(),
+  role: z.enum(['owner', 'accountant', 'staff', 'client', 'sales', 'employee']), orgId: z.number().int().positive().optional(),
 });
 
 @Controller()
@@ -68,9 +68,11 @@ export class OrgController {
 
   @Get('orgs/:orgId/accounts')
   async accounts(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales', 'expenses']);
+    // Sales people choose income accounts on invoices; employees choose expense accounts on claims. Neither sees the rest.
+    const only = role === 'sales' ? 'income' : role === 'employee' ? 'expense' : null;
     return withOrg(orgId, async (c) =>
-      (await c.query('SELECT id,code,name,type,group_name AS "group",is_active AS "isActive" FROM accounts ORDER BY code')).rows
+      (await c.query('SELECT id,code,name,type,group_name AS "group",is_active AS "isActive" FROM accounts WHERE ($1::text IS NULL OR type=$1) ORDER BY code', [only])).rows
         .map((r) => ({ ...r, id: Number(r.id) })));
   }
 
@@ -107,7 +109,7 @@ export class OrgController {
   async addMember(@UserId() uid: number, @Body() body: unknown, @Ip() ip: string) {
     const b = parse(addMember, body);
     if ((await firmRole(uid, b.firmId)) !== 'owner') throw new ForbiddenException('Only the firm owner can manage members');
-    if (b.role === 'client' && !b.orgId) throw new BadRequestException('Client users must be tied to one organization');
+    if (['client', 'sales', 'employee'].includes(b.role) && !b.orgId) throw new BadRequestException(`${b.role} users must be tied to one organization`);
     if (b.orgId) {
       const o = await getPool().query('SELECT 1 FROM organizations WHERE id=$1 AND firm_id=$2', [b.orgId, b.firmId]);
       if (!o.rowCount) throw new NotFoundException('Organization not found in this firm');

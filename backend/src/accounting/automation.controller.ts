@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { LedgerError, reverseLines, validateLines } from '../ledger/ledger';
 import { insertEntry } from '../ledger/post';
 import { nextDate } from '../extras/calc';
@@ -19,8 +19,8 @@ export class AutomationController {
   // ---------- saved invoice and bill templates ----------
   @Get('doc-templates')
   async templates(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query('SELECT id,name,doc_type AS "docType",payload FROM doc_templates ORDER BY name')).rows.map((r) => num(r, 'id')));
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    return withOrg(orgId, async (c) => (await c.query('SELECT id,name,doc_type AS "docType",payload FROM doc_templates WHERE ($1::boolean OR doc_type=\'invoice\') ORDER BY name', [role !== 'sales'])).rows.map((r) => num(r, 'id')));
   }
 
   /** Save what is on the form (contact, lines, terms, supply type) so the next invoice or bill can start from it. */

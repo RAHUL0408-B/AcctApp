@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { financialYearOf, validateLines, reverseLines, Line } from '../ledger/ledger';
 import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
 import { computeGst, isValidGstin, stateOfGstin, supplyRules, SupplyType, TaxLine, toRupees, totals } from '../tax/gst';
@@ -80,8 +80,10 @@ export class DocumentsController {
   // ---- contacts ----
   @Get('orgs/:orgId/contacts')
   async contacts(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('archived') archived?: string) {
-    await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query(`SELECT ${CONTACT_COLS} FROM contacts WHERE ($1::boolean OR NOT is_archived) ORDER BY name`, [archived === 'true'])).rows.map(shapeContact));
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    const rows = await withOrg(orgId, async (c) => (await c.query(`SELECT ${CONTACT_COLS} FROM contacts WHERE ($1::boolean OR NOT is_archived) ORDER BY name`, [archived === 'true'])).rows.map(shapeContact));
+    // Sales people see customers only, without bank details or purchase settings.
+    return role === 'sales' ? rows.filter((x: any) => x.kind !== 'supplier').map((x: any) => ({ ...x, bankAccountName: null, bankName: null, bankAccountNo: null, bankIfsc: null, defaultPurchaseAccountId: null })) : rows;
   }
 
   /** A default account must be an account of the right kind. */
@@ -92,8 +94,9 @@ export class DocumentsController {
 
   @Post('orgs/:orgId/contacts')
   async addContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(contactSchema, body);
+    if (role === 'sales' && b.kind !== 'customer') throw new ForbiddenException('You can add customers only');
     if (b.gstin && !isValidGstin(b.gstin)) throw new BadRequestException('Invalid GSTIN (format or check digit is wrong)');
     const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
     return withOrg(orgId, async (c) => {
@@ -162,7 +165,8 @@ export class DocumentsController {
   // ---- documents ----
   @Get('orgs/:orgId/documents')
   async list(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type?: string, @Query('contactId') contactId?: string, @Query('archived') archived?: string) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    if (role === 'sales') { if (type && type !== 'invoice') return []; type = 'invoice'; } // sales people see invoices only
     return withOrg(orgId, async (c) => {
       const rows = (await c.query(`${OUTSTANDING_SQL} WHERE ($1::text IS NULL OR d.doc_type=$1) AND ($2::bigint IS NULL OR d.contact_id=$2) AND ($3::boolean OR NOT d.is_archived) ORDER BY d.issue_date DESC, d.id DESC LIMIT 500`,
         [type ?? null, contactId ? Number(contactId) : null, archived === 'true'])).rows;
@@ -172,10 +176,10 @@ export class DocumentsController {
 
   @Get('orgs/:orgId/documents/:id')
   async one(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     return withOrg(orgId, async (c) => {
       const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [id])).rows[0];
-      if (!d) throw new NotFoundException('Document not found');
+      if (!d || (role === 'sales' && d.doc_type !== 'invoice')) throw new NotFoundException('Document not found');
       const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
         .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), accountId: Number(l.account_id), itemId: l.item_id ? Number(l.item_id) : null, trackingOptionId: l.tracking_option_id ? Number(l.tracking_option_id) : null }));
       const payments = (await c.query('SELECT id,pay_date::text AS date,amount,reference FROM payments WHERE doc_id=$1 ORDER BY id', [id])).rows.map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
@@ -185,9 +189,10 @@ export class DocumentsController {
 
   @Post('orgs/:orgId/documents')
   async create(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    const role = await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(docSchema, body);
-    if (role === 'staff' && (await getPool().query('SELECT require_approval FROM organizations WHERE id=$1', [orgId])).rows[0]?.require_approval)
+    if (role === 'sales' && b.docType !== 'invoice') throw new ForbiddenException('You can raise invoices only');
+    if ((role === 'staff' || role === 'sales') && (await getPool().query('SELECT require_approval FROM organizations WHERE id=$1', [orgId])).rows[0]?.require_approval)
       throw new ForbiddenException('This organisation needs approval for new invoices and bills: submit it for approval instead');
     return withOrg(orgId, (c) => createDocument(c, orgId, uid, b, ip));
   }
@@ -247,7 +252,7 @@ export class DocumentsController {
   /** Next number the system would give, so the form can show it and let the user change it. */
   @Get('orgs/:orgId/documents-next-number')
   async nextNumber(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type: string, @Query('date') on?: string) {
-    await requireOrg(uid, orgId, 'read');
+    await requireAnyOrg(uid, orgId, ['read', 'sales']);
     if (!(type in PREFIX)) throw new BadRequestException('Unknown document type');
     const d = on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : new Date().toISOString().slice(0, 10);
     return withOrg(orgId, async (c) => ({ number: await peekNumber(c, orgId, type as DocType, d) }));

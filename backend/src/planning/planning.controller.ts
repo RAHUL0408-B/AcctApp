@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { ensureAccount, insertEntry } from '../ledger/post';
 import { financialYearOf, naturalBalance, validateLines } from '../ledger/ledger';
 import { months, plRows } from './calc';
@@ -24,7 +24,7 @@ export class PlanningController {
   // ---------- tracking categories ----------
   @Get('tracking')
   async tracking(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
+    await requireAnyOrg(uid, orgId, ['read', 'sales']); // cost centres on invoice lines
     return withOrg(orgId, async (c) => {
       const cats = (await c.query('SELECT id,name FROM tracking_categories ORDER BY name')).rows;
       const opts = (await c.query('SELECT id,category_id,name FROM tracking_options WHERE active ORDER BY name')).rows;

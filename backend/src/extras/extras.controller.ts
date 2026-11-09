@@ -1,10 +1,10 @@
 // Features that round out the product: settings, items, quotes and POs, repeating invoices, bank rules, fixed assets, dashboard.
-import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ForbiddenException, BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
-import { requireOrg } from '../tenancy/acl';
+import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { financialYearOf, Line, validateLines } from '../ledger/ledger';
 import { ASSET_GROUPS } from './assetgroups';
 import { PoolClient } from 'pg';
@@ -65,7 +65,7 @@ export class ExtrasController {
   // ---------- organisation settings ----------
   @Get('settings')
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
+    await requireAnyOrg(uid, orgId, ['read', 'sales']); // sales people need the state code to choose CGST+SGST or IGST
     const o = (await getPool().query(`SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth",gst_scheme AS "gstScheme",
       lut_number AS "lutNumber",require_approval AS "requireApproval",invoice_due_days AS "invoiceDueDays",bill_due_days AS "billDueDays",invoice_terms AS "invoiceTerms"
       FROM organizations WHERE id=$1`, [orgId])).rows[0];
@@ -104,11 +104,12 @@ export class ExtrasController {
   // ---------- products and services ----------
   @Get('items')
   async items(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
-    await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query(
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    const rows = await withOrg(orgId, async (c) => (await c.query(
       `SELECT id,code,name,kind,hsn_sac AS "hsnSac",sale_rate AS "saleRate",purchase_rate AS "purchaseRate",gst_rate_bp AS "gstRateBp",
               sales_account_id AS "salesAccountId",purchase_account_id AS "purchaseAccountId",track_stock AS "trackStock" FROM items WHERE active ORDER BY name`)).rows
       .map((r) => num(r, 'id', 'saleRate', 'purchaseRate', 'salesAccountId', 'purchaseAccountId')));
+    return role === 'sales' ? rows.map((r: any) => ({ ...r, purchaseRate: null, purchaseAccountId: null })) : rows; // no buying prices for sales people
   }
 
   @Post('items')
@@ -159,7 +160,8 @@ export class ExtrasController {
   // ---------- quotes and purchase orders ----------
   @Get('pre-documents')
   async preDocs(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('kind') kind?: string) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    if (role === 'sales') { if (kind && kind !== 'quote') return []; kind = 'quote'; } // sales people work with quotes, not purchase orders
     return withOrg(orgId, async (c) => (await c.query(
       `SELECT p.id,p.kind,p.number,p.contact_id AS "contactId",ct.name AS "contactName",p.issue_date AS "issueDate",p.expiry_date AS "expiryDate",p.status,p.subtotal,p.tax,p.total,p.converted_doc_id AS "convertedDocId"
          FROM pre_documents p JOIN contacts ct ON ct.id=p.contact_id WHERE ($1::text IS NULL OR p.kind=$1) ORDER BY p.id DESC`, [kind ?? null])).rows
@@ -168,8 +170,9 @@ export class ExtrasController {
 
   @Post('pre-documents')
   async addPreDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(z.object({ kind: z.enum(['quote', 'purchase_order']), contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200) }), body);
+    if (role === 'sales' && b.kind !== 'quote') throw new ForbiddenException('You can create quotes only');
     return withOrg(orgId, async (c) => {
       const { t } = await priceLines(c, orgId, b.kind === 'quote', b.contactId, b.issueDate, b.lines);
       const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,'-',2)
@@ -184,11 +187,11 @@ export class ExtrasController {
 
   @Get('pre-documents/:id')
   async preDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number) {
-    await requireOrg(uid, orgId, 'read');
+    const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     return withOrg(orgId, async (c) => {
       const p = (await c.query(`SELECT p.id,p.kind,p.number,p.contact_id AS "contactId",ct.name AS "contactName",p.issue_date::text AS "issueDate",p.expiry_date::text AS "expiryDate",p.status,p.lines,p.notes,p.total
         FROM pre_documents p JOIN contacts ct ON ct.id=p.contact_id WHERE p.id=$1`, [id])).rows[0];
-      if (!p) throw new NotFoundException('Not found');
+      if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
       return num(p, 'id', 'contactId', 'total');
     });
   }
@@ -196,11 +199,11 @@ export class ExtrasController {
   /** Edit a quote or purchase order until it has been turned into an invoice or bill. */
   @Put('pre-documents/:id')
   async editPreDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(z.object({ contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200) }), body);
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT kind,status FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
-      if (!p) throw new NotFoundException('Not found');
+      if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
       if (p.status === 'converted') throw new ConflictException('This has already been turned into an invoice or bill, so it can no longer be edited');
       const { t } = await priceLines(c, orgId, p.kind === 'quote', b.contactId, b.issueDate, b.lines);
       await c.query('UPDATE pre_documents SET contact_id=$2,issue_date=$3,expiry_date=$4,lines=$5,subtotal=$6,tax=$7,total=$8,notes=$9 WHERE id=$1',
@@ -212,10 +215,10 @@ export class ExtrasController {
 
   @Post('pre-documents/:id/status')
   async preStatus(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(z.object({ status: z.enum(['sent', 'accepted', 'declined']) }), body);
     return withOrg(orgId, async (c) => {
-      const r = await c.query("UPDATE pre_documents SET status=$2 WHERE id=$1 AND status NOT IN ('converted') RETURNING id", [id, b.status]);
+      const r = await c.query("UPDATE pre_documents SET status=$2 WHERE id=$1 AND status NOT IN ('converted') AND ($3::boolean OR kind='quote') RETURNING id", [id, b.status, role !== 'sales']);
       if (!r.rowCount) throw new ConflictException('Not found, or already converted');
       return { ok: true };
     });
@@ -224,14 +227,14 @@ export class ExtrasController {
   /** Turn an accepted quote into an invoice, or a purchase order into a bill. This is where the ledger is touched. */
   @Post('pre-documents/:id/convert')
   async convert(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'post');
+    const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     // Everything after the dates is optional: the screen lets the user change the lines and details before anything is posted.
     const b = parse(z.object({ issueDate: date.default(today()), dueDate: date.optional(), contactId: z.number().int().positive().optional(), lines: z.array(lineSchema).min(1).max(200).optional(),
       notes: z.string().max(500).optional(), supplierRef: z.string().max(60).optional(), placeOfSupply: z.string().length(2).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).optional(),
       tdsSection: z.string().optional(), number: z.string().trim().min(1).max(40).optional() }), body ?? {});
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT * FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
-      if (!p) throw new NotFoundException('Not found');
+      if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
       if (p.status === 'converted') throw new ConflictException('Already converted');
       if (p.status === 'declined') throw new ConflictException('A declined document cannot be converted');
       const spec = PRE[p.kind as keyof typeof PRE];

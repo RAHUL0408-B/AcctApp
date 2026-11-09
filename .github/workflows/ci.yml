@@ -1,0 +1,102 @@
+# Continuous integration: every push and pull request type-checks, builds and tests the whole app, including the
+# browser tests that drive the real screens in Chrome.
+#
+# The browser tests and both Docker images were run locally with the same commands (see README, "Tests"). This file
+# itself has not run on GitHub yet, so if a step fails on the first run, the log will say which.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend types and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit -p backend/tsconfig.json
+      # The tests start their own temporary PostgreSQL (embedded-postgres), so no database service is needed.
+      # One file at a time: starting many temporary databases at once can fail at random.
+      - name: Tests
+        run: npm test -- --runInBand --forceExit
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Type check and build
+        run: npm run build -w frontend
+
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: acctapp }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/acctapp
+      JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-1234
+      RATE_LIMIT_PER_MIN: '100000'   # the tests sign up many users from one address
+      WORKER: 'off'
+      DATA_DIR: ${{ runner.temp }}/data
+      WEB_URL: http://localhost:5173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Create tables
+        run: npm run migrate
+      - name: Start the API and the web app
+        run: |
+          mkdir -p "$DATA_DIR"
+          nohup npm run start:dev -w backend > api.log 2>&1 &
+          nohup npm run dev -w frontend > web.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/api/health > /dev/null && curl -sf http://localhost:5173 > /dev/null && exit 0
+            sleep 2
+          done
+          echo "The app did not start"; cat api.log web.log; exit 1
+      # Google Chrome is already installed on GitHub's Ubuntu runners; the scripts use it through playwright-core.
+      - name: Browser tests
+        run: |
+          for f in smoke full more workspace changes team; do
+            echo "=== $f"
+            node frontend/e2e/$f.mjs
+          done
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "--- api.log"; tail -n 80 api.log || true
+          echo "--- web.log"; tail -n 40 web.log || true
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the API and web images
+        run: docker compose -f docker/docker-compose.yml build

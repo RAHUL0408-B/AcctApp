@@ -163,17 +163,25 @@ export function App() {
   const createItems = narrow ? (role === 'sales' ? CREATE.filter(([, k]) => ['I', 'Q', 'C'].includes(k)) : []) : CREATE;
   const visible = (i: NavItem) => (!i.manage || canManage) && (!i.owner || role === 'owner') && (!narrow || !!i.for?.includes(role as 'sales' | 'employee'));
 
+  // Opening "new invoice" (or bill, contact...) while already on that address does nothing by itself, for example right
+  // after saving one. Step to the list and back so a fresh blank form opens every time.
+  const openNew = (p: string) => {
+    if (!org) return;
+    const target = `/o/${org.id}/${p}`;
+    if (route === target && target.endsWith('/new')) { navigate(target.slice(0, -4)); setTimeout(() => navigate(target), 0); } else navigate(target);
+  };
+
   // Alt + letter shortcuts from the "+" menu.
   useEffect(() => {
     if (!org || !canPost || !createItems.length) return;
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       const hit = createItems.find(([, k]) => k === e.key.toUpperCase());
-      if (hit) { e.preventDefault(); navigate(`/o/${org.id}/${hit[2]}`); }
+      if (hit) { e.preventDefault(); openNew(hit[2]); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [org, canPost, role]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [org, canPost, role, route]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <p className="p-8 text-slate-500">Loading…</p>;
   if (!me) return <>{notice && <NoticeBar text={notice} onClose={() => setNotice('')} />}<AuthScreen onDone={() => { navigate('/clients'); setLoading(true); load(); }} /></>;
@@ -275,7 +283,7 @@ export function App() {
               <Menu label="Create new" align="right" width="w-72" trigger={<Icon d={ICONS.plus} />}>
                 {(close) => (<>
                   <MenuHeading>Create new</MenuHeading>
-                  {createItems.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); goOrg(p); }}>{l}</MenuItem>)}
+                  {createItems.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); openNew(p); }}>{l}</MenuItem>)}
                 </>)}
               </Menu>
             )}

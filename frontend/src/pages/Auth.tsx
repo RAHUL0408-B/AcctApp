@@ -1,43 +1,7 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { api, setToken } from '../api';
 import { APP_NAME, Button, ErrorMsg, Field, Logo, useAction } from '../ui';
-
-/** Each tile: a short heading, one line of what it does, and the colour of its icon badge. */
-const FEATURES: { title: string; text: string; tone: string; icon: string }[] = [
-  { title: 'Invoices and bills', text: 'CGST + SGST or IGST worked out from the place of supply. Edit, attach files and email a PDF.', tone: 'bg-emerald-100 text-emerald-700', icon: 'M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h6' },
-  { title: 'Bank reconciliation', text: 'Import statements, match a line to an invoice or bill by amount, and let rules book the routine ones.', tone: 'bg-sky-100 text-sky-700', icon: 'M3 10l9-6 9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18' },
-  { title: 'GST and TDS', text: 'GSTR-1 and GSTR-3B summaries, TDS on bills, and filing due dates created as tasks.', tone: 'bg-rose-100 text-rose-700', icon: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3' },
-  { title: 'Reports that look right', text: 'Five PDF and Excel templates. Combine several reports into one file and choose the columns.', tone: 'bg-violet-100 text-violet-700', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
-  { title: 'Cost centres', text: 'Tag any invoice, bill or journal to a branch or department and see profit for each.', tone: 'bg-amber-100 text-amber-700', icon: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5' },
-  { title: 'Fixed assets', text: 'Asset groups with Income Tax and Companies Act rates, depreciation, and a sale with gain or loss.', tone: 'bg-orange-100 text-orange-700', icon: 'M3 21h18M5 21V8l7-4 7 4v13M9 21v-6h6v6' },
-  { title: 'Every client separate', text: 'One firm, many clients. Each client has its own locked-down set of books.', tone: 'bg-teal-100 text-teal-700', icon: 'M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM4 21c0-4 4-6 8-6s8 2 8 6' },
-  { title: 'Safe by design', text: 'Posted entries are never deleted, only reversed. Every change is recorded. Daily encrypted backups.', tone: 'bg-indigo-100 text-indigo-700', icon: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4' },
-];
-
-const AUDIENCES: { title: string; text: string; points: string[] }[] = [
-  { title: 'CA and accounting firms', text: 'Run many clients from one login.', points: ['A practice overview of every client', 'Deadlines and tasks per client', 'Invite staff and clients with the right access'] },
-  { title: 'Traders and small businesses', text: 'Keep your own books without the jargon.', points: ['Invoice in a minute, with GST done for you', 'See who owes you and what you owe', 'Hand clean reports to your CA'] },
-  { title: 'Clients of a firm', text: 'See your own numbers any time.', points: ['Read-only access to your books', 'Download invoices and reports', 'No one else’s data is ever visible'] },
-];
-
-const ROLES: [string, string][] = [
-  ['Owner', 'Everything, including users, billing and settings.'],
-  ['Accountant', 'Manages the books, approves, runs reports and year-end.'],
-  ['Staff', 'Raises invoices and bills and records payments. No approvals or settings.'],
-  ['Client', 'Read-only view of their own books and reports.'],
-];
-
-const STEPS: [string, string][] = [
-  ['Create your firm account', 'Takes a minute. You get a 14-day trial, no card needed.'],
-  ['Add a client', 'Pick a chart of accounts: trading, services or manufacturing.'],
-  ['Start working', 'Raise an invoice, enter a bill or import a bank statement.'],
-];
-
-const Badge = ({ d, tone }: { d: string; tone: string }) => (
-  <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${tone}`}>
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>
-  </span>
-);
+import { LandingFooter, LandingSections, PAGE_LINKS } from './Landing';
 
 /** An illustration of the product: a dashboard with figures, a chart, an invoice list and two floating status cards. */
 function HeroArt() {
@@ -95,14 +59,6 @@ function HeroArt() {
     </svg>
   );
 }
-
-const Section = ({ id, title, lead, children }: { id: string; title: string; lead?: string; children: ReactNode }) => (
-  <section id={id} aria-labelledby={`${id}-h`} className="mx-auto max-w-7xl px-6 py-14">
-    <h2 id={`${id}-h`} className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{title}</h2>
-    {lead && <p className="mt-2 max-w-2xl text-slate-600">{lead}</p>}
-    <div className="mt-8">{children}</div>
-  </section>
-);
 
 /** Emailed links open the app with a one-time token in the address, for example #/reset?token=... */
 const emailLink = (() => {
@@ -166,8 +122,8 @@ export function AuthScreen({ onDone }: { onDone: () => void }) {
       <header className="sticky top-0 z-20 border-b border-white/10 bg-nav text-white">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-6">
           <span className="flex items-center gap-2 text-xl font-bold"><Logo size={32} />{APP_NAME}</span>
-          <nav aria-label="Page sections" className="hidden items-center gap-1 text-sm font-medium md:flex">
-            {([['features', 'Features'], ['audience', 'Who it is for'], ['roles', 'Access levels'], ['steps', 'How it works']] as const).map(([id, label]) => (
+          <nav aria-label="Page sections" className="hidden items-center gap-1 text-sm font-medium lg:flex">
+            {PAGE_LINKS.map(([id, label]) => (
               <button key={id} type="button" onClick={() => scrollTo(id)} className="rounded-md px-3 py-2 text-indigo-100 hover:bg-white/10 hover:text-white">{label}</button>))}
           </nav>
           <p className="text-sm text-indigo-100">
@@ -249,71 +205,10 @@ export function AuthScreen({ onDone }: { onDone: () => void }) {
           </div>
         </div>
 
-        {/* A strip of plain facts about the product */}
-        <div className="border-b border-slate-200 bg-slate-50">
-          <dl className="mx-auto grid max-w-7xl grid-cols-2 gap-6 px-6 py-6 text-center sm:grid-cols-4">
-            {[['14 days', 'free trial, no card'], ['3 tax types', 'CGST, SGST and IGST'], ['5 templates', 'for PDF and Excel exports'], ['4 access levels', 'owner to client']].map(([n, l]) => (
-              <div key={n}><dt className="text-2xl font-bold text-brand-700">{n}</dt><dd className="text-sm text-slate-600">{l}</dd></div>))}
-          </dl>
-        </div>
-
-        <Section id="features" title="What you can do" lead="Everything a practice needs to keep clients’ books right, without a pile of spreadsheets.">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {FEATURES.map((x) => (
-              <div key={x.title} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                <Badge d={x.icon} tone={x.tone} />
-                <p className="mt-3 font-semibold text-slate-900">{x.title}</p>
-                <p className="mt-1 text-sm text-slate-600">{x.text}</p>
-              </div>))}
-          </div>
-        </Section>
-
-        <div className="bg-slate-50">
-          <Section id="audience" title="Who it is for">
-            <div className="grid gap-4 md:grid-cols-3">
-              {AUDIENCES.map((a, i) => (
-                <div key={a.title} className={`rounded-2xl border-t-4 bg-white p-6 shadow-sm ${['border-emerald-500', 'border-orange-500', 'border-violet-500'][i]}`}>
-                  <h3 className="text-lg font-semibold text-slate-900">{a.title}</h3>
-                  <p className="text-sm text-slate-600">{a.text}</p>
-                  <ul className="mt-4 space-y-2 text-sm text-slate-700">
-                    {a.points.map((p) => <li key={p} className="flex gap-2"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden className="mt-0.5 shrink-0 text-emerald-600"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>{p}</li>)}
-                  </ul>
-                </div>))}
-            </div>
-          </Section>
-        </div>
-
-        <Section id="roles" title="The right access for everyone" lead="Give each person exactly what they need. Clients only ever see their own books.">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {ROLES.map(([role, what], i) => (
-              <div key={role} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <div className={`px-4 py-2 text-sm font-bold text-white ${['bg-brand-700', 'bg-sky-600', 'bg-emerald-600', 'bg-amber-600'][i]}`}>{role}</div>
-                <p className="p-4 text-sm text-slate-700">{what}</p>
-              </div>))}
-          </div>
-        </Section>
-
-        <div className="bg-gradient-to-br from-nav to-brand-800 text-white">
-          <section id="steps" aria-labelledby="steps-h" className="mx-auto max-w-7xl px-6 py-14">
-            <h2 id="steps-h" className="text-2xl font-bold tracking-tight sm:text-3xl">Up and running in three steps</h2>
-            <ol className="mt-8 grid gap-4 md:grid-cols-3">
-              {STEPS.map(([title, text], i) => (
-                <li key={title} className="rounded-2xl bg-white/10 p-6">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-base font-bold text-brand-800">{i + 1}</span>
-                  <p className="mt-3 text-lg font-semibold">{title}</p><p className="mt-1 text-sm text-indigo-100">{text}</p>
-                </li>))}
-            </ol>
-            <button type="button" className="mt-8 rounded-lg bg-white px-5 py-2.5 font-semibold text-brand-800 shadow hover:bg-brand-50" onClick={() => { switchTo('register'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Start your free trial</button>
-          </section>
-        </div>
+        <LandingSections onStart={() => { switchTo('register'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
       </main>
 
-      <footer className="border-t border-slate-200 bg-slate-50">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-6 py-4 text-xs text-slate-500">
-          <span className="flex items-center gap-2"><Logo size={18} />© {new Date().getFullYear()} {APP_NAME}. Cloud accounting for India.</span>
-          <span>GST · TDS · Bank reconciliation · Reports</span>
-        </div>
-      </footer>
+      <LandingFooter />
     </div>
   );
 }

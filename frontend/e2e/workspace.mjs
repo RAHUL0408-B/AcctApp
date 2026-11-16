@@ -75,7 +75,7 @@ step('Xero-style menus; setup guide at 1 of 6');
 
 // ---- organisation menu
 await page.getByRole('button', { name: 'Organisation menu' }).click();
-for (const i of ['Settings', 'Subscription and billing', '+ Add new organisation', 'Practice overview']) await top(i).waitFor();
+for (const i of ['Settings', 'Subscription and billing', '+ Add new organisation', 'Practice overview']) await page.locator('header').getByRole('button', { name: i, exact: true }).waitFor();
 await page.keyboard.press('Escape');
 step('organisation menu: settings, billing, switch, add, practice overview');
 

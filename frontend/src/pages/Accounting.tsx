@@ -5,6 +5,7 @@ import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account, Item } from './Lines';
+import { OrgDetailsMore } from './Settings';
 
 export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; accounts: Account[] }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -238,6 +239,7 @@ export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: 
           setOk(`Saved. State code is now ${r.stateCode ?? 'not set'}.`); onSaved();
         })}>Save</Button></div>}
       </Card>
+      <OrgDetailsMore org={org} canManage={canManage} />
       {canManage && (
         <Card title="Lock the books">
           <p className="mb-3 text-sm text-slate-600">After you file a return, lock the period. Nothing can then be posted on or before this date, for every user.</p>

@@ -36,6 +36,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
   const [intraOverride, setIntraOverride] = useState<boolean | null>(null);
   const [posChoice, setPosChoice] = useState('');
   const [showForm, setShowForm] = useState(startNew);
+  // Default exchange rates from Settings > Currencies, filled in when a currency is chosen.
+  const [fxDefaults, setRates] = useState<Record<string, number>>({});
   useEffect(() => { if (startNew) setShowForm(true); }, [startNew]);
   const [editing, setEditing] = useState<{ id: number; number: string; payments: { id: number; date: string; amount: number }[] } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -57,6 +59,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
     load(); loadTemplates();
     api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind === 'both' || x.kind === (sales ? 'customer' : 'supplier'))));
     api('/config/tds-sections').then(setTds); api('/config/states').then(setStates);
+    api<{ code: string; rate: number }[]>(`/orgs/${org.id}/currencies`).then((l) => setRates(Object.fromEntries(l.map((x) => [x.code, x.rate])))).catch(() => undefined);
     api(`/orgs/${org.id}/settings`).then((s) => setOrgState(s.stateCode ?? null)).catch(() => undefined);
   }, [load, loadTemplates, org.id, kind]);
   useEffect(() => { setSelected(new Set()); }, [docs]);
@@ -223,7 +226,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
             {docType === 'bill' && <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}>
               <option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>}
             <Select label="Supply type" aria-label="Supply type" value={f.supplyType} onChange={(e) => { setF({ ...f, supplyType: e.target.value }); setIntraOverride(null); }}>{supplyOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
-            <Field label="Currency" aria-label="Currency" value={f.currency} maxLength={3} onChange={(e) => setF({ ...f, currency: e.target.value.toUpperCase() })} />
+            <Field label="Currency" aria-label="Currency" list="org-currencies" value={f.currency} maxLength={3} onChange={(e) => { const c = e.target.value.toUpperCase(); setF({ ...f, currency: c, fxRate: !f.fxRate && fxDefaults[c] ? String(fxDefaults[c]) : f.fxRate }); }} />
+            {Object.keys(fxDefaults).length > 0 && <datalist id="org-currencies">{['INR', ...Object.keys(fxDefaults)].map((c) => <option key={c} value={c} />)}</datalist>}
             {foreign && <Field label={`Rupees per 1 ${f.currency}`} aria-label="Exchange rate" inputMode="decimal" value={f.fxRate} onChange={(e) => setF({ ...f, fxRate: e.target.value })} />}
             {(docType === 'credit_note' || docType === 'debit_note') && <Select label="Against" aria-label="Original document" value={f.originalDocId} onChange={(e) => setF({ ...f, originalDocId: e.target.value })}>
               <option value="">—</option>{docs.filter((d) => d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill')).map((d) => <option key={d.id} value={d.id}>{d.number} · {d.contactName}</option>)}</Select>}

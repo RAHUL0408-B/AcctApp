@@ -20,6 +20,7 @@ import { Overview } from './Overview';
 import { Journal } from './Journal';
 import { Money } from './Money';
 import { Projects } from './Projects';
+import { SettingsHub, SettingsSection } from './Settings';
 
 interface Account { id: number; code: string; name: string; type: string; group: string }
 interface Entry { id: number; date: string; narration: string; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
@@ -27,7 +28,7 @@ interface TB { accounts: { code: string; name: string; debit: number; credit: nu
 
 export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
   | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking' | 'export-templates' | 'compliance'
-  | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings';
+  | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings' | 'settings-hub' | 'setup';
 
 /** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
 export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; owner?: boolean; for?: ('sales' | 'employee')[]; heading?: string; divider?: boolean; gear?: boolean }
@@ -64,11 +65,12 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { key: 'tasks', label: 'Tasks and deadlines', divider: true }] },
   { group: 'Contacts', items: [{ key: 'contacts', label: 'All contacts' }, { key: 'customers', label: 'Customers' }, { key: 'suppliers', label: 'Suppliers' }] },
   { group: 'Projects', items: [{ key: 'projects', label: 'Projects' }] },
+  { group: 'Settings', items: [{ key: 'settings-hub', label: 'Settings' }] },
 ];
 
 const PLURAL: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 
-export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null }) {
+export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, canTeam = false }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null; canTeam?: boolean }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const reloadAccounts = () => api<Account[]>(`/orgs/${org.id}/accounts`).then(setAccounts);
   useEffect(() => { reloadAccounts(); }, [org.id]);
@@ -115,6 +117,8 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin }: {
     case 'export-templates': return <ExportTemplates org={org} role={role} />;
     case 'compliance': return <Compliance org={org} canPost={canPost} sub={sub} go={go} />;
     case 'projects': return <Projects org={org} canPost={canPost} accounts={accounts} />;
+    case 'settings-hub': return <SettingsHub org={org} role={role} canTeam={canTeam} go={go} />;
+    case 'setup': return <SettingsSection org={org} role={role} sub={sub} go={go} />;
   }
 }
 

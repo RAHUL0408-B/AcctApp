@@ -11,7 +11,7 @@ export async function buildInvoicePdf(c: PoolClient, orgId: number, id: number):
   const lines = (await c.query('SELECT description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows;
   const view: InvoiceView = {
     orgName: org.name, orgGstin: org.gstin, type: d.doc_type, number: d.number, issueDate: d.issue_date, dueDate: d.due_date, contact: d.cname, contactGstin: d.cgstin,
-    placeOfSupply: d.place_of_supply, subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
+    placeOfSupply: d.place_of_supply, subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), cess: Number(d.cess ?? 0), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
     lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), gstRateBp: l.gst_rate_bp })),
     branding: await brandingFor(c, { type: d.doc_type, number: d.number, total: Number(d.total), tdsAmount: Number(d.tds_amount), currency: d.currency }),
   };

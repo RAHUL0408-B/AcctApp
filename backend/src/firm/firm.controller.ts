@@ -256,7 +256,7 @@ export class FirmController {
         out.push({
           orgName: org.name, orgGstin: org.gstin, type: d.doc_type, number: d.number, issueDate: iso(d.issue_date)!, dueDate: iso(d.due_date), contact: d.cname, contactGstin: d.cgstin, placeOfSupply: d.place_of_supply,
           lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), gstRateBp: l.gst_rate_bp })),
-          subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
+          subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), cess: Number(d.cess ?? 0), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
           branding: await brandingFor(c, { type: d.doc_type, number: d.number, total: Number(d.total), tdsAmount: Number(d.tds_amount), currency: d.currency }),
         });
       }

@@ -20,6 +20,7 @@ import { ExportSettingsController } from './firm/exportsettings.controller';
 import { TeamController } from './tenancy/team.controller';
 import { ComplianceController } from './compliance/compliance.controller';
 import { SettingsController } from './settings/settings.controller';
+import { BatchPaymentsController } from './banking/batch.controller';
 import { log } from './ops/metrics';
 import { LedgerError } from './ledger/ledger';
 
@@ -40,5 +41,5 @@ export class AppExceptionFilter implements ExceptionFilter {
 }
 
 @Module({ controllers: [AuthController, OrgController, LedgerController, DocumentsController, BankController, ReportsController, FirmController, LaunchController, ExtrasController,
-  InventoryController, WorkflowController, PlanningController, PracticeController, InsightsController, MoneyController, ProjectsController, AutomationController, ExportSettingsController, TeamController, ComplianceController, SettingsController] })
+  InventoryController, WorkflowController, PlanningController, PracticeController, InsightsController, MoneyController, ProjectsController, AutomationController, ExportSettingsController, TeamController, ComplianceController, SettingsController, BatchPaymentsController] })
 export class AppModule {}

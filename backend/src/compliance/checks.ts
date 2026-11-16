@@ -23,6 +23,7 @@ export const fyOfDate = (iso: string) => { const y = Number(iso.slice(0, 4)), m 
 const BILL_SQL = `
   SELECT d.id, d.number, d.supplier_ref, d.issue_date::text AS date, d.subtotal, d.total, d.net_payable, d.tds_amount,
          d.cgst + d.sgst + d.igst AS gst, c.id AS contact_id, c.name AS supplier, c.gstin, c.msme_type, c.msme_agreed_days, c.udyam_no,
+         (SELECT COALESCE(SUM(l.cgst + l.sgst + l.igst),0) FROM document_lines l WHERE l.doc_id = d.id AND NOT l.itc_blocked) AS claimable,
          COALESCE(n.noted, 0) AS noted
     FROM documents d JOIN contacts c ON c.id = d.contact_id
     LEFT JOIN (SELECT original_doc_id, SUM(total) noted FROM documents WHERE status='posted' AND original_doc_id IS NOT NULL GROUP BY original_doc_id) n ON n.original_doc_id = d.id
@@ -93,14 +94,16 @@ export async function msmeReport(c: PoolClient, fyStart: string, asOf: string): 
 }
 
 // ------------------------------------------------------------------ 180-day rule
-export interface ItcRow { id: number; number: string; supplierRef: string | null; supplier: string; gstin: string | null; date: string; day180: string; daysPast: number; total: number; unpaid: number; gst: number; reverse: number; status: 'reverse' | 'soon' }
+export interface ItcRow { id: number; number: string; supplierRef: string | null; supplier: string; gstin: string | null; date: string; day180: string; daysPast: number; total: number; unpaid: number; gst: number; reverse: number; status: 'reverse' | 'soon' | 'reversed'; reversedOn: string | null }
 
 /** Credit to reverse on an unpaid bill: the bill's GST in proportion to what is still unpaid. */
 export const itcToReverse = (gst: number, total: number, unpaid: number) => (total > 0 ? Math.round((gst * Math.min(unpaid, total)) / total) : 0);
 
 export async function itc180Report(c: PoolClient, asOf: string, soonDays = 30) {
-  const bills = (await c.query(`${BILL_SQL} AND (d.cgst + d.sgst + d.igst) > 0 AND d.issue_date <= $1 ORDER BY d.issue_date, d.id`, [addDays(asOf, soonDays - 180)])).rows;
+  // Only credit actually claimed counts: blocked credits (section 17(5)) were never claimed, so there is nothing to reverse.
+  const bills = (await c.query(`${BILL_SQL} AND (d.cgst + d.sgst + d.igst) > 0 AND d.issue_date <= $1 ORDER BY d.issue_date, d.id`, [addDays(asOf, soonDays - 180)])).rows.filter((b) => Number(b.claimable) > 0);
   const pays = await paymentsFor(c, bills.map((b) => Number(b.id)), asOf);
+  const open = new Map((await c.query('SELECT doc_id, reversed_on::text AS d FROM itc_reversals WHERE reclaimed_on IS NULL')).rows.map((r) => [Number(r.doc_id), r.d as string]));
   const rows: ItcRow[] = [];
   for (const b of bills) {
     const paid = (pays.get(Number(b.id)) ?? []).reduce((s, p) => s + p.amount, 0);
@@ -109,13 +112,28 @@ export async function itc180Report(c: PoolClient, asOf: string, soonDays = 30) {
     const day180 = addDays(b.date, 180);
     const past = daysBetween(day180, asOf);
     rows.push({ id: Number(b.id), number: b.number, supplierRef: b.supplier_ref, supplier: b.supplier, gstin: b.gstin, date: b.date, day180, daysPast: past,
-      total: Number(b.total), unpaid, gst: Number(b.gst), reverse: itcToReverse(Number(b.gst), Number(b.total), unpaid), status: past >= 0 ? 'reverse' : 'soon' });
+      total: Number(b.total), unpaid, gst: Number(b.claimable), reverse: itcToReverse(Number(b.claimable), Number(b.total), unpaid),
+      status: open.has(Number(b.id)) ? 'reversed' : past >= 0 ? 'reverse' : 'soon', reversedOn: open.get(Number(b.id)) ?? null });
   }
-  return { asOf, rows, totals: { reverseNow: rows.filter((r) => r.status === 'reverse').reduce((s, r) => s + r.reverse, 0), soon: rows.filter((r) => r.status === 'soon').reduce((s, r) => s + r.reverse, 0) } };
+  return { asOf, rows, totals: { reverseNow: rows.filter((r) => r.status === 'reverse').reduce((s, r) => s + r.reverse, 0), soon: rows.filter((r) => r.status === 'soon').reduce((s, r) => s + r.reverse, 0),
+    reversed: rows.filter((r) => r.status === 'reversed').reduce((s, r) => s + r.reverse, 0) } };
+}
+
+/** The credit on one bill split by head (CGST, SGST, IGST) in proportion to what is unpaid. Blocked lines are left out. */
+export async function itcSplit(c: PoolClient, docId: number, asOf: string) {
+  const b = (await c.query(`${BILL_SQL} AND d.id=$1`, [docId])).rows[0];
+  if (!b) return null;
+  const heads = (await c.query('SELECT COALESCE(SUM(cgst),0) AS cgst, COALESCE(SUM(sgst),0) AS sgst, COALESCE(SUM(igst),0) AS igst FROM document_lines WHERE doc_id=$1 AND NOT itc_blocked', [docId])).rows[0];
+  const paid = ((await paymentsFor(c, [docId], asOf)).get(docId) ?? []).reduce((s, p) => s + p.amount, 0);
+  const unpaid = Number(b.net_payable) - Number(b.noted) - paid;
+  const part = (v: number) => itcToReverse(Number(v), Number(b.total), Math.max(0, unpaid));
+  return { bill: b, unpaid, daysPast: daysBetween(addDays(b.date, 180), asOf), cgst: part(heads.cgst), sgst: part(heads.sgst), igst: part(heads.igst) };
 }
 
 // ------------------------------------------------------------------ GSTR-2B
-export interface TwoBLine { gstin: string; supplierName: string | null; invoiceNo: string; date: string | null; taxable: number; igst: number; cgst: number; sgst: number; cess: number; itcAvailable: boolean; reverseCharge: boolean }
+export interface TwoBLine { gstin: string; supplierName: string | null; invoiceNo: string; date: string | null; taxable: number; igst: number; cgst: number; sgst: number; cess: number; itcAvailable: boolean; reverseCharge: boolean;
+  /** invoice (B2B), or a supplier's credit or debit note (CDNR). */ docKind?: 'invoice' | 'credit_note' | 'debit_note';
+  /** An amendment (B2BA, CDNRA) of an earlier document; originalNo is the number before the amendment. */ amended?: boolean; originalNo?: string | null }
 
 /** Invoice numbers are written differently in different places ("INV/0042" vs "inv-42"): compare letters and numbers only. */
 // Leading zeros are dropped from each group of digits first, then the separators: so 2026/0001 and 2026-1 match.
@@ -133,19 +151,26 @@ export function parseGstr2b(text: string): { period: string | null; lines: TwoBL
     const root = j.data ?? j;
     const rp = String(root.rtnprd ?? root.ret_period ?? '');
     const period = /^\d{6}$/.test(rp) ? `${rp.slice(2)}-${rp.slice(0, 2)}` : null;
-    const b2b = root.docdata?.b2b ?? root.b2b ?? [];
+    const dd = root.docdata ?? root;
     const lines: TwoBLine[] = [];
     let skipped = 0;
-    for (const sup of b2b) {
-      for (const inv of sup.inv ?? []) {
-        if (!sup.ctin || !inv.inum) { skipped++; continue; }
-        const items = inv.items ?? inv.itms ?? [];
-        const tot = (k: string) => items.reduce((s: number, i: any) => s + paise(i[k] ?? i.itm_det?.[k]), 0);
-        lines.push({ gstin: String(sup.ctin).toUpperCase(), supplierName: sup.trdnm ?? null, invoiceNo: String(inv.inum), date: isoDate(inv.dt ?? inv.idt),
-          taxable: tot('txval'), igst: tot('igst') || tot('iamt'), cgst: tot('cgst') || tot('camt'), sgst: tot('sgst') || tot('samt'), cess: tot('cess') || tot('csamt'),
-          itcAvailable: String(inv.itcavl ?? 'Y').toUpperCase() !== 'N', reverseCharge: String(inv.rev ?? 'N').toUpperCase() === 'Y' });
+    const read = (sections: any[], listKey: 'inv' | 'nt', amended: boolean) => {
+      for (const sup of sections ?? []) {
+        for (const inv of sup[listKey] ?? []) {
+          const no = listKey === 'inv' ? inv.inum : inv.ntnum ?? inv.nt_num;
+          if (!sup.ctin || !no) { skipped++; continue; }
+          const items = inv.items ?? inv.itms ?? [];
+          const tot = (k: string) => items.reduce((s: number, i: any) => s + paise(i[k] ?? i.itm_det?.[k]), 0);
+          const kind: TwoBLine['docKind'] = listKey === 'inv' ? 'invoice' : String(inv.typ ?? inv.ntty ?? 'C').toUpperCase() === 'D' ? 'debit_note' : 'credit_note';
+          const original = amended ? (listKey === 'inv' ? inv.oinum : inv.ontnum ?? inv.ont_num) ?? null : null;
+          lines.push({ gstin: String(sup.ctin).toUpperCase(), supplierName: sup.trdnm ?? null, invoiceNo: String(no), date: isoDate(inv.dt ?? inv.idt ?? inv.nt_dt),
+            taxable: tot('txval'), igst: tot('igst') || tot('iamt'), cgst: tot('cgst') || tot('camt'), sgst: tot('sgst') || tot('samt'), cess: tot('cess') || tot('csamt'),
+            itcAvailable: String(inv.itcavl ?? 'Y').toUpperCase() !== 'N', reverseCharge: String(inv.rev ?? 'N').toUpperCase() === 'Y',
+            docKind: kind, amended, originalNo: original ? String(original) : null });
+        }
       }
-    }
+    };
+    read(dd.b2b, 'inv', false); read(dd.b2ba, 'inv', true); read(dd.cdnr, 'nt', false); read(dd.cdnra, 'nt', true);
     return { period, lines, skipped };
   }
   // CSV, for example saved from the portal's Excel download (B2B sheet).
@@ -181,7 +206,7 @@ function splitCsv(line: string): string[] {
 }
 
 export type MatchStatus = 'matched' | 'mismatch' | 'only_2b' | 'only_books';
-export interface MatchRow { status: MatchStatus; gstin: string; supplier: string; invoiceNo: string; date: string | null; billId: number | null; billNumber: string | null;
+export interface MatchRow { status: MatchStatus; kind: 'invoice' | 'credit_note' | 'debit_note'; amended: boolean; originalNo: string | null; gstin: string; supplier: string; invoiceNo: string; date: string | null; billId: number | null; billNumber: string | null;
   books: { taxable: number; tax: number } | null; portal: { taxable: number; tax: number; itcAvailable: boolean } | null; difference: number; note: string }
 
 /** Up to Rs 1 of difference is treated as rounding. */
@@ -193,32 +218,44 @@ export async function reconcile2b(c: PoolClient, importId: number) {
   if (!imp) return null;
   const portal = (await c.query('SELECT *, invoice_date::text AS invoice_day FROM gstr2b_lines WHERE import_id=$1 ORDER BY id', [importId])).rows;
   const bills = (await c.query(`${BILL_SQL} AND c.gstin IS NOT NULL ORDER BY d.issue_date, d.id`)).rows;
-  const byKey = new Map<string, any>();
+  // A supplier's credit note is entered in the books as a debit note (purchase return); a supplier's debit note as a bill.
+  const notes = (await c.query(`${BILL_SQL.replace("d.doc_type='bill'", "d.doc_type='debit_note'")} AND c.gstin IS NOT NULL ORDER BY d.issue_date, d.id`)).rows;
+  const byKey = new Map<string, any>(), noteByKey = new Map<string, any>();
   for (const b of bills) if (b.supplier_ref) byKey.set(`${String(b.gstin).toUpperCase()}|${invoiceKey(b.supplier_ref)}`, b);
+  for (const b of notes) if (b.supplier_ref) noteByKey.set(`${String(b.gstin).toUpperCase()}|${invoiceKey(b.supplier_ref)}`, b);
   const everywhere = new Set((await c.query('SELECT gstin, invoice_key FROM gstr2b_lines')).rows.map((r) => `${r.gstin}|${r.invoice_key}`));
   const rows: MatchRow[] = [];
   const seen = new Set<number>();
   for (const p of portal) {
+    const kind: MatchRow['kind'] = p.doc_kind ?? 'invoice', isCn = kind === 'credit_note';
     const key = `${p.gstin}|${p.invoice_key}`;
-    const b = byKey.get(key);
+    // Amended documents: match on the new number, or else on the number before the amendment.
+    const pool = isCn ? noteByKey : byKey;
+    const b = pool.get(key) ?? (p.original_key ? pool.get(`${p.gstin}|${p.original_key}`) : undefined);
     const pTax = Number(p.igst) + Number(p.cgst) + Number(p.sgst) + Number(p.cess);
     const pv = { taxable: Number(p.taxable), tax: pTax, itcAvailable: p.itc_available };
     const date: string | null = p.invoice_day ?? null; // read as text: a JS Date would move it a day back in India's time zone
-    if (!b) { rows.push({ status: 'only_2b', gstin: p.gstin, supplier: p.supplier_name ?? p.gstin, invoiceNo: p.invoice_no, date, billId: null, billNumber: null, books: null, portal: pv, difference: pTax,
-      note: 'The supplier reported this, but there is no bill for it. Enter the bill if it is yours, or ask the supplier to correct their return.' }); continue; }
+    const base = { kind, amended: !!p.amended, originalNo: p.original_no ?? null };
+    const amendNote = p.amended ? ` Amended by the supplier${p.original_no ? ` (was ${p.original_no})` : ''}.` : '';
+    if (!b) { rows.push({ status: 'only_2b', ...base, gstin: p.gstin, supplier: p.supplier_name ?? p.gstin, invoiceNo: p.invoice_no, date, billId: null, billNumber: null, books: null, portal: pv, difference: isCn ? -pTax : pTax,
+      note: (isCn ? 'The supplier issued this credit note. Enter it as a debit note against their bill, so your input credit is reduced.'
+        : kind === 'debit_note' ? 'The supplier issued this debit note, but it is not in your books. Enter it as a bill if it is yours.'
+        : 'The supplier reported this, but there is no bill for it. Enter the bill if it is yours, or ask the supplier to correct their return.') + amendNote }); continue; }
     seen.add(Number(b.id));
     const bv = { taxable: Number(b.subtotal), tax: Number(b.gst) };
     const diff = bv.tax - pTax;
     const ok = Math.abs(diff) <= TOLERANCE && Math.abs(bv.taxable - pv.taxable) <= TOLERANCE;
-    rows.push({ status: ok ? 'matched' : 'mismatch', gstin: p.gstin, supplier: b.supplier, invoiceNo: p.invoice_no, date: b.date, billId: Number(b.id), billNumber: b.number, books: bv, portal: pv, difference: diff,
-      note: ok ? (pv.itcAvailable ? '' : 'Matched, but the portal says the credit is not available.') : diff > 0 ? 'The supplier reported less tax than your bill: only the lower amount can be claimed.' : 'The supplier reported more tax than your bill: check the bill.' });
+    rows.push({ status: ok ? 'matched' : 'mismatch', ...base, gstin: p.gstin, supplier: b.supplier, invoiceNo: p.invoice_no, date: b.date, billId: Number(b.id), billNumber: b.number, books: bv, portal: pv, difference: isCn ? -diff : diff,
+      note: (ok ? (pv.itcAvailable ? '' : 'Matched, but the portal says the credit is not available.')
+        : isCn ? 'The credit note amounts differ from your debit note: check both.'
+        : diff > 0 ? 'The supplier reported less tax than your bill: only the lower amount can be claimed.' : 'The supplier reported more tax than your bill: check the bill.') + amendNote });
   }
   const [y, m] = String(imp.period).split('-').map(Number);
   const start = `${imp.period}-01`, end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
   for (const b of bills) {
     if (seen.has(Number(b.id)) || b.date < start || b.date > end || Number(b.gst) === 0) continue;
     if (b.supplier_ref && everywhere.has(`${String(b.gstin).toUpperCase()}|${invoiceKey(b.supplier_ref)}`)) continue; // matched in another month's upload
-    rows.push({ status: 'only_books', gstin: String(b.gstin).toUpperCase(), supplier: b.supplier, invoiceNo: b.supplier_ref ?? '(no supplier bill number)', date: b.date, billId: Number(b.id), billNumber: b.number,
+    rows.push({ status: 'only_books', kind: 'invoice', amended: false, originalNo: null, gstin: String(b.gstin).toUpperCase(), supplier: b.supplier, invoiceNo: b.supplier_ref ?? '(no supplier bill number)', date: b.date, billId: Number(b.id), billNumber: b.number,
       books: { taxable: Number(b.subtotal), tax: Number(b.gst) }, portal: null, difference: Number(b.gst),
       note: b.supplier_ref ? 'Not in GSTR-2B: the supplier has not reported it yet. The credit is at risk until they do.' : 'Enter the supplier bill number on this bill so it can be matched.' });
   }
@@ -232,7 +269,7 @@ export async function reconcile2b(c: PoolClient, importId: number) {
   return {
     import: { id: Number(imp.id), period: imp.period, fileName: imp.file_name, uploadedAt: new Date(imp.created_at).toISOString() },
     counts: { matched: count('matched'), mismatch: count('mismatch'), only_2b: count('only_2b'), only_books: count('only_books') },
-    tax: { portal: rows.filter((r) => r.portal?.itcAvailable).reduce((a, r) => a + (r.portal?.tax ?? 0), 0), matched: sum('matched', (r) => r.books!.tax),
+    tax: { portal: rows.filter((r) => r.portal?.itcAvailable).reduce((a, r) => a + (r.kind === 'credit_note' ? -1 : 1) * (r.portal?.tax ?? 0), 0), matched: rows.filter((r) => r.status === 'matched').reduce((a, r) => a + (r.kind === 'credit_note' ? -1 : 1) * r.books!.tax, 0),
       atRisk: sum('only_books', (r) => r.difference) + rows.filter((r) => r.status === 'mismatch' && r.difference > 0).reduce((a, r) => a + r.difference, 0) },
     rows, chase: [...chase.values()].sort((a, b) => b.tax - a.tax),
   };
@@ -254,7 +291,7 @@ export async function msmeTable(c: PoolClient, from: string, asOf: string): Prom
 
 export async function itcTable(c: PoolClient, asOf: string): Promise<Table> {
   const r = await itc180Report(c, asOf);
-  const rows: (string | number)[][] = r.rows.map((x) => [x.number, x.supplierRef ?? '', x.supplier, x.date, x.day180, x.status === 'reverse' ? `${x.daysPast} days past` : `in ${-x.daysPast} days`, x.unpaid, x.gst, x.reverse]);
+  const rows: (string | number)[][] = r.rows.map((x) => [x.number, x.supplierRef ?? '', x.supplier, x.date, x.day180, x.status === 'reversed' ? `reversed ${x.reversedOn}` : x.status === 'reverse' ? `${x.daysPast} days past` : `in ${-x.daysPast} days`, x.unpaid, x.gst, x.reverse]);
   rows.push(['Reverse now', '', '', '', '', '', '', '', r.totals.reverseNow]);
   return { title: 'Input tax credit: 180-day rule', subtitle: `As at ${asOf}. Unpaid bills older than 180 days, and those reaching 180 days within 30 days. Interest under section 50 is not included.`,
     columns: [T('Bill'), T('Supplier bill no.'), T('Supplier'), T('Bill date'), T('Day 180'), T('When'), M('Unpaid'), M('GST on bill'), M('Credit to reverse')],

@@ -4,6 +4,7 @@ import { AuthGuard, UserId } from '../common/guard';
 import { financialYearOf } from '../ledger/ledger';
 import { requireOrg } from '../tenancy/acl';
 import { aged, balanceSheet, gstr1, gstr3b, ledgerStatement, profitAndLoss } from './reports';
+import { gstr1Json } from '../tax/gstr1json';
 
 const D = /^\d{4}-\d{2}-\d{2}$/;
 const dateOr = (v: string | undefined, fallback: string, name: string) => {
@@ -42,6 +43,13 @@ export class ReportsController {
   @Get('gstr1') g1(@UserId() u: number, @Param('orgId', ParseIntPipe) o: number, @Query('from') from?: string, @Query('to') to?: string) {
     const fy = financialYearOf(today());
     return this.run(u, o, (c) => gstr1(c, dateOr(from, fy.start, 'from'), dateOr(to, today(), 'to')));
+  }
+  /** GSTR-1 for one month as JSON for the GST portal's offline tool (?month=YYYY-MM). A draft to check before upload. */
+  @Get('gstr1-json') async g1json(@UserId() u: number, @Param('orgId', ParseIntPipe) o: number, @Query('month') month?: string) {
+    if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new BadRequestException('month must be YYYY-MM');
+    const [y, m] = month.split('-').map(Number);
+    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    return this.run(u, o, (c) => gstr1Json(c, `${month}-01`, end)).catch((e) => { throw e instanceof BadRequestException ? e : new BadRequestException((e as Error).message); });
   }
   @Get('gstr3b') g3(@UserId() u: number, @Param('orgId', ParseIntPipe) o: number, @Query('from') from?: string, @Query('to') to?: string) {
     const fy = financialYearOf(today());

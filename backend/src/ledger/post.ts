@@ -35,6 +35,9 @@ export async function accountIdByCode(c: PoolClient, code: string): Promise<numb
 /** System accounts added after an organisation was created. They are created the first time a feature needs them. */
 export const SYSTEM_ACCOUNTS = {
   '1200': { name: 'Inventory / Stock', type: 'asset', group: 'Current Assets' },
+  '1330': { name: 'Input Compensation Cess', type: 'asset', group: 'GST Input Credit' },
+  '1340': { name: 'Input Credit Reversed (Rule 37, reclaimable)', type: 'asset', group: 'GST Input Credit' },
+  '2160': { name: 'Output Compensation Cess', type: 'liability', group: 'GST Payable' },
   '2130': { name: 'RCM CGST Payable', type: 'liability', group: 'GST Payable' },
   '2140': { name: 'RCM SGST Payable', type: 'liability', group: 'GST Payable' },
   '2150': { name: 'RCM IGST Payable', type: 'liability', group: 'GST Payable' },

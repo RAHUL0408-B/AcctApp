@@ -99,7 +99,7 @@ export async function gstr1(c: PoolClient, from: string, to: string) {
        FROM documents d JOIN contacts ct ON ct.id=d.contact_id JOIN organizations o ON o.id=d.org_id
       WHERE d.status='posted' AND d.doc_type IN ('invoice','credit_note') AND d.issue_date BETWEEN $1 AND $2 ORDER BY d.issue_date, d.id`, [from, to])).rows;
   const shape = (d: any) => ({ number: d.number, date: new Date(d.issue_date).toISOString().slice(0, 10), party: d.party, gstin: d.party_gstin, placeOfSupply: d.place_of_supply,
-    value: n(d.total), taxable: n(d.subtotal), igst: n(d.igst), cgst: n(d.cgst), sgst: n(d.sgst) });
+    value: n(d.total), taxable: n(d.subtotal), igst: n(d.igst), cgst: n(d.cgst), sgst: n(d.sgst), cess: n(d.cess ?? 0) });
   const isExport = (d: any) => String(d.supply_type).startsWith('export');
   const inv = docs.filter((d) => d.doc_type === 'invoice' && !isExport(d)), cn = docs.filter((d) => d.doc_type === 'credit_note');
   const exp = docs.filter((d) => d.doc_type === 'invoice' && isExport(d)).map((d) => ({ ...shape(d), withPayment: d.supply_type === 'export_igst', currency: d.currency, foreignTotal: d.foreign_total == null ? null : n(d.foreign_total) }));
@@ -108,58 +108,70 @@ export async function gstr1(c: PoolClient, from: string, to: string) {
   const b2cl = unreg.filter((d) => d.place_of_supply !== d.org_state && n(d.total) > B2CL_LIMIT).map(shape);
   const b2csRows = unreg.filter((d) => !(d.place_of_supply !== d.org_state && n(d.total) > B2CL_LIMIT));
   const b2cs = (await c.query(
-    `SELECT d.place_of_supply AS pos, l.gst_rate_bp AS "rateBp", SUM(l.taxable) AS taxable, SUM(l.igst) AS igst, SUM(l.cgst) AS cgst, SUM(l.sgst) AS sgst
+    `SELECT d.place_of_supply AS pos, l.gst_rate_bp AS "rateBp", SUM(l.taxable) AS taxable, SUM(l.igst) AS igst, SUM(l.cgst) AS cgst, SUM(l.sgst) AS sgst, SUM(l.cess) AS cess
        FROM document_lines l JOIN documents d ON d.id=l.doc_id LEFT JOIN contacts ct ON ct.id=d.contact_id
       WHERE d.id = ANY($1) GROUP BY d.place_of_supply, l.gst_rate_bp ORDER BY 1,2`, [b2csRows.map((d) => d.id)])).rows
-    .map((r) => ({ pos: r.pos, rateBp: n(r.rateBp), taxable: n(r.taxable), igst: n(r.igst), cgst: n(r.cgst), sgst: n(r.sgst) }));
+    .map((r) => ({ pos: r.pos, rateBp: n(r.rateBp), taxable: n(r.taxable), igst: n(r.igst), cgst: n(r.cgst), sgst: n(r.sgst), cess: n(r.cess) }));
   const hsn = (await c.query(
     `SELECT COALESCE(l.hsn_sac,'(none)') AS hsn, l.gst_rate_bp AS "rateBp",
             SUM(CASE WHEN d.doc_type='credit_note' THEN -l.qty_milli ELSE l.qty_milli END) AS qty_milli,
             SUM(CASE WHEN d.doc_type='credit_note' THEN -l.taxable ELSE l.taxable END) AS taxable,
             SUM(CASE WHEN d.doc_type='credit_note' THEN -l.igst ELSE l.igst END) AS igst,
             SUM(CASE WHEN d.doc_type='credit_note' THEN -l.cgst ELSE l.cgst END) AS cgst,
-            SUM(CASE WHEN d.doc_type='credit_note' THEN -l.sgst ELSE l.sgst END) AS sgst
+            SUM(CASE WHEN d.doc_type='credit_note' THEN -l.sgst ELSE l.sgst END) AS sgst,
+            SUM(CASE WHEN d.doc_type='credit_note' THEN -l.cess ELSE l.cess END) AS cess
        FROM document_lines l JOIN documents d ON d.id=l.doc_id
       WHERE d.status='posted' AND d.doc_type IN ('invoice','credit_note') AND d.issue_date BETWEEN $1 AND $2 GROUP BY 1,2 ORDER BY 1,2`, [from, to])).rows
-    .map((r) => ({ hsn: r.hsn, rateBp: n(r.rateBp), quantity: n(r.qty_milli) / 1000, taxable: n(r.taxable), igst: n(r.igst), cgst: n(r.cgst), sgst: n(r.sgst) }));
+    .map((r) => ({ hsn: r.hsn, rateBp: n(r.rateBp), quantity: n(r.qty_milli) / 1000, taxable: n(r.taxable), igst: n(r.igst), cgst: n(r.cgst), sgst: n(r.sgst), cess: n(r.cess) }));
   return { from, to, b2b, b2cl, b2cs, exp, cdnr: cn.filter((d) => d.party_gstin).map(shape), cdnur: cn.filter((d) => !d.party_gstin).map(shape), hsn,
     totals: { invoices: inv.length + exp.length, taxable: inv.reduce((s, d) => s + n(d.subtotal), 0) + exp.reduce((s, d) => s + d.taxable, 0) - cn.reduce((s, d) => s + n(d.subtotal), 0) } };
 }
 
 export async function gstr3b(c: PoolClient, from: string, to: string) {
-  const sumBy = async (types: string[], zeroRate: boolean | null, zeroRated = false) => {
+  // blocked: null = all lines, false = lines whose credit can be claimed, true = blocked lines (section 17(5)).
+  const sumBy = async (types: string[], zeroRate: boolean | null, zeroRated = false, blocked: boolean | null = null) => {
     const r = (await c.query(
-      `SELECT d.doc_type, COALESCE(SUM(l.taxable),0) AS taxable, COALESCE(SUM(l.igst),0) AS igst, COALESCE(SUM(l.cgst),0) AS cgst, COALESCE(SUM(l.sgst),0) AS sgst
+      `SELECT d.doc_type, COALESCE(SUM(l.taxable),0) AS taxable, COALESCE(SUM(l.igst),0) AS igst, COALESCE(SUM(l.cgst),0) AS cgst, COALESCE(SUM(l.sgst),0) AS sgst, COALESCE(SUM(l.cess),0) AS cess
          FROM document_lines l JOIN documents d ON d.id=l.doc_id
         WHERE d.status='posted' AND d.doc_type = ANY($1) AND d.issue_date BETWEEN $2 AND $3 AND ($4::boolean IS NULL OR (l.gst_rate_bp = 0) = $4)
-          AND (d.supply_type IN ('export_lut','export_igst','sez_lut','sez_igst')) = $5
-        GROUP BY d.doc_type`, [types, from, to, zeroRated ? null : zeroRate, zeroRated])).rows;
-    const acc = { taxable: 0, igst: 0, cgst: 0, sgst: 0 };
+          AND (d.supply_type IN ('export_lut','export_igst','sez_lut','sez_igst')) = $5 AND ($6::boolean IS NULL OR l.itc_blocked = $6)
+        GROUP BY d.doc_type`, [types, from, to, zeroRated ? null : zeroRate, zeroRated, blocked])).rows;
+    const acc = { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
     for (const row of r) {
       const sign = row.doc_type === 'credit_note' || row.doc_type === 'debit_note' ? -1 : 1;
-      for (const k of ['taxable', 'igst', 'cgst', 'sgst'] as const) acc[k] += sign * n(row[k]);
+      for (const k of ['taxable', 'igst', 'cgst', 'sgst', 'cess'] as const) acc[k] += sign * n(row[k]);
     }
     return acc;
   };
   const outwardTaxable = await sumBy(['invoice', 'credit_note'], false);
   const outwardNil = await sumBy(['invoice', 'credit_note'], true);
   const zeroRated = await sumBy(['invoice', 'credit_note'], null, true);
-  const regularItc = await sumBy(['bill', 'debit_note'], false);
+  const regularItc = await sumBy(['bill', 'debit_note'], false, false, false);
+  const ineligible = await sumBy(['bill', 'debit_note'], false, false, true);
+  // Rule 37: credit reversed in the period on bills unpaid for 180 days, and credit reclaimed in the period once they were paid.
+  const rv = (await c.query(
+    `SELECT COALESCE(SUM(igst) FILTER (WHERE reversed_on BETWEEN $1 AND $2),0) AS ri, COALESCE(SUM(cgst) FILTER (WHERE reversed_on BETWEEN $1 AND $2),0) AS rc, COALESCE(SUM(sgst) FILTER (WHERE reversed_on BETWEEN $1 AND $2),0) AS rs,
+            COALESCE(SUM(igst) FILTER (WHERE reclaimed_on BETWEEN $1 AND $2),0) AS ci, COALESCE(SUM(cgst) FILTER (WHERE reclaimed_on BETWEEN $1 AND $2),0) AS cc, COALESCE(SUM(sgst) FILTER (WHERE reclaimed_on BETWEEN $1 AND $2),0) AS cs
+       FROM itc_reversals`, [from, to])).rows[0];
+  const reversed = { igst: n(rv.ri), cgst: n(rv.rc), sgst: n(rv.rs) }, reclaimed = { igst: n(rv.ci), cgst: n(rv.cc), sgst: n(rv.cs) };
   const rcmRows = (await c.query(
     `SELECT COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -subtotal ELSE subtotal END),0) AS taxable, COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_igst ELSE rcm_igst END),0) AS igst,
             COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_cgst ELSE rcm_cgst END),0) AS cgst, COALESCE(SUM(CASE WHEN doc_type='debit_note' THEN -rcm_sgst ELSE rcm_sgst END),0) AS sgst
        FROM documents WHERE status='posted' AND supply_type='reverse_charge' AND doc_type IN ('bill','debit_note') AND issue_date BETWEEN $1 AND $2`, [from, to])).rows[0];
   const rcm = { taxable: n(rcmRows.taxable), igst: n(rcmRows.igst), cgst: n(rcmRows.cgst), sgst: n(rcmRows.sgst) };
   const composition = (await c.query('SELECT gst_scheme FROM organizations WHERE id = current_org()')).rows[0]?.gst_scheme === 'composition';
-  const itc = composition ? { igst: 0, cgst: 0, sgst: 0 } : { igst: regularItc.igst + rcm.igst, cgst: regularItc.cgst + rcm.cgst, sgst: regularItc.sgst + rcm.sgst };
-  const outward = { igst: outwardTaxable.igst + zeroRated.igst + rcm.igst, cgst: outwardTaxable.cgst + rcm.cgst, sgst: outwardTaxable.sgst + rcm.sgst };
-  const payable = { igst: outward.igst - itc.igst, cgst: outward.cgst - itc.cgst, sgst: outward.sgst - itc.sgst };
+  const head = (k: 'igst' | 'cgst' | 'sgst') => regularItc[k] + rcm[k] + reclaimed[k] - reversed[k];
+  const itc = composition ? { igst: 0, cgst: 0, sgst: 0, cess: 0 } : { igst: head('igst'), cgst: head('cgst'), sgst: head('sgst'), cess: regularItc.cess };
+  const outward = { igst: outwardTaxable.igst + zeroRated.igst + rcm.igst, cgst: outwardTaxable.cgst + rcm.cgst, sgst: outwardTaxable.sgst + rcm.sgst, cess: outwardTaxable.cess + zeroRated.cess };
+  const payable = { igst: outward.igst - itc.igst, cgst: outward.cgst - itc.cgst, sgst: outward.sgst - itc.sgst, cess: outward.cess - itc.cess };
   return {
     from, to,
     section31a_outwardTaxable: outwardTaxable, section31b_zeroRated: zeroRated, section31c_nilRatedExempt: { taxable: outwardNil.taxable },
     section31d_inwardReverseCharge: rcm,
     section4_itcAvailable: itc,
+    section4b2_itcReversed: reversed, section4a5_itcReclaimed: reclaimed,
+    section4d_ineligibleItc: composition ? { igst: 0, cgst: 0, sgst: 0, cess: 0 } : { igst: ineligible.igst, cgst: ineligible.cgst, sgst: ineligible.sgst, cess: ineligible.cess },
     netTaxPayable: payable,
-    note: 'Per-head difference only. Reverse-charge tax must be paid in cash before it can be claimed as credit. Cross-head ITC set-off, blocked credits and ITC reversals are not computed; have a CA review before filing.',
+    note: 'Net credit = credit on bills (blocked credits under section 17(5) left out) + reverse charge + credit reclaimed - credit reversed under Rule 37. Per-head difference only; reverse-charge tax must be paid in cash before it can be claimed. Cross-head set-off is not computed; have a CA review before filing.',
   };
 }

@@ -9,6 +9,7 @@ import { queueMail } from '../firm/mailer';
 import { firmRole } from './acl';
 import { firmPlan } from '../ops/launch.controller';
 import { linkFor, newToken, ROLE_TEXT } from './invitations';
+import { AREAS, AREA_TEXT, forgetAccess } from './access';
 
 const APP_NAME = process.env.APP_NAME ?? 'AcctApp';
 const ROLES = ['owner', 'accountant', 'staff', 'client', 'sales', 'employee'] as const;
@@ -37,7 +38,7 @@ export class TeamController {
     if (role !== 'owner' && role !== 'accountant') throw new ForbiddenException('Only owners and accountants can see the team');
     const pool = getPool();
     const members = (await pool.query(
-      `SELECT m.id, m.user_id, u.full_name, u.email, u.email_verified_at, u.totp_enabled, m.role, m.org_id, o.name AS org_name
+      `SELECT m.id, m.user_id, u.full_name, u.email, u.email_verified_at, u.totp_enabled, m.role, m.org_id, o.name AS org_name, m.access
          FROM memberships m JOIN users u ON u.id=m.user_id LEFT JOIN organizations o ON o.id=m.org_id
         WHERE m.firm_id=$1 ORDER BY u.full_name, o.name NULLS FIRST`, [firmId])).rows;
     const invitations = (await pool.query(
@@ -46,9 +47,9 @@ export class TeamController {
         WHERE i.firm_id=$1 AND i.accepted_at IS NULL AND i.revoked_at IS NULL ORDER BY i.created_at DESC`, [firmId])).rows;
     const { plan, usage } = await firmPlan(firmId);
     return {
-      canEdit: role === 'owner', you: Number(uid), roles: ROLE_TEXT,
+      canEdit: role === 'owner', you: Number(uid), roles: ROLE_TEXT, areas: AREAS.map((a) => ({ key: a, text: AREA_TEXT[a] })),
       plan: { name: plan.name, maxMembers: plan.maxMembers, people: usage.members },
-      members: members.map((m) => ({ id: Number(m.id), userId: Number(m.user_id), name: m.full_name, email: m.email, emailVerified: !!m.email_verified_at, twoFactor: m.totp_enabled, role: m.role, orgId: m.org_id ? Number(m.org_id) : null, orgName: m.org_name })),
+      members: members.map((m) => ({ id: Number(m.id), userId: Number(m.user_id), name: m.full_name, email: m.email, emailVerified: !!m.email_verified_at, twoFactor: m.totp_enabled, role: m.role, orgId: m.org_id ? Number(m.org_id) : null, orgName: m.org_name, access: m.access ?? null })),
       invitations: invitations.map((i) => ({ id: Number(i.id), email: i.email, role: i.role, orgId: i.org_id ? Number(i.org_id) : null, orgName: i.org_name, expiresAt: new Date(i.expires_at).toISOString(), expired: new Date(i.expires_at) < new Date(), invitedBy: i.invited_by })),
     };
   }
@@ -131,6 +132,28 @@ export class TeamController {
       await writeAudit(c, { orgId: orgId ?? null, userId: uid, action: 'change_role', entity: 'membership', entityId: id, before: { role: m.role, orgId: m.org_id }, after: { role: b.role, orgId: orgId ?? null }, ip });
     });
     return { ok: true };
+  }
+
+  /**
+   * Limit what someone can do, area by area (sales, purchases, bank, ...): 'none', 'view' or 'edit'. null gives back
+   * everything their role allows. Owners cannot be limited. The role still applies: a client stays read-only even with 'edit'.
+   */
+  @Put('members/:id/access')
+  async setAccess(@UserId() uid: number, @Param('firmId', ParseIntPipe) firmId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireFirmOwner(uid, firmId);
+    const level = z.enum(['none', 'view', 'edit']);
+    const b = parse(z.object({ access: z.object(Object.fromEntries(AREAS.map((a) => [a, level.optional()])) as Record<(typeof AREAS)[number], z.ZodOptional<typeof level>>).strict().nullable() }), body);
+    const m = (await getPool().query('SELECT role, org_id, access FROM memberships WHERE id=$1 AND firm_id=$2', [id, firmId])).rows[0];
+    if (!m) throw new NotFoundException('Person not found');
+    if (m.role === 'owner') throw new BadRequestException('An owner always has full access. Change their role first.');
+    if (m.role === 'sales' || m.role === 'employee') throw new BadRequestException(`A ${m.role} person already sees only their own pages`);
+    const access = b.access && Object.values(b.access).some((v) => v && v !== 'edit') ? b.access : null; // all "edit" means no limit
+    await tx(async (c) => {
+      await c.query('UPDATE memberships SET access=$2 WHERE id=$1', [id, access ? JSON.stringify(access) : null]);
+      await writeAudit(c, { orgId: m.org_id ?? null, userId: uid, action: 'change_access', entity: 'membership', entityId: id, before: { access: m.access }, after: { access }, ip });
+    });
+    forgetAccess();
+    return { ok: true, access };
   }
 
   @Delete('members/:id')

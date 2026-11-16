@@ -4,6 +4,7 @@ import { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
 import { prefixFor } from '../settings/settings';
+import { visibleDocTypes } from '../tenancy/access';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireOrg, requireAnyOrg } from '../tenancy/acl';
@@ -62,10 +63,11 @@ export const docSchema = z.object({
     description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
     quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0),
     accountId: z.number().int().positive().optional(), itemId: z.number().int().positive().optional(), trackingOptionId: z.number().int().positive().optional(),
+    cessRateBp: z.number().int().min(0).max(30000).optional(), itcBlocked: z.boolean().optional(),
   })).min(1).max(200),
 });
 
-const OUTSTANDING_SQL = `
+export const OUTSTANDING_SQL = `
   SELECT d.*, c.name AS contact_name,
          d.net_payable - COALESCE(p.paid,0) - COALESCE(n.noted,0) AS outstanding, COALESCE(p.paid,0) AS paid
     FROM documents d JOIN contacts c ON c.id = d.contact_id
@@ -75,7 +77,7 @@ const OUTSTANDING_SQL = `
 const shapeDoc = (r: any) => ({
   id: Number(r.id), docType: r.doc_type, number: r.number, contactId: Number(r.contact_id), contactName: r.contact_name,
   issueDate: r.issue_date, dueDate: r.due_date, placeOfSupply: r.place_of_supply, subtotal: Number(r.subtotal),
-  cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount),
+  cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), cess: Number(r.cess ?? 0), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount),
   total: Number(r.total), netPayable: Number(r.net_payable), status: r.status, supplierRef: r.supplier_ref,
   originalDocId: r.original_doc_id ? Number(r.original_doc_id) : null, supplyType: r.supply_type,
   notes: r.notes ?? null, replacedBy: r.replaced_by ? Number(r.replaced_by) : null,
@@ -190,9 +192,11 @@ export class DocumentsController {
   async list(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type?: string, @Query('contactId') contactId?: string, @Query('archived') archived?: string) {
     const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     if (role === 'sales') { if (type && type !== 'invoice') return []; type = 'invoice'; } // sales people see invoices only
+    const kinds = await visibleDocTypes(uid, orgId); // access per person: e.g. no sales documents for a purchases-only person
     return withOrg(orgId, async (c) => {
-      const rows = (await c.query(`${OUTSTANDING_SQL} WHERE ($1::text IS NULL OR d.doc_type=$1) AND ($2::bigint IS NULL OR d.contact_id=$2) AND ($3::boolean OR NOT d.is_archived) ORDER BY d.issue_date DESC, d.id DESC LIMIT 500`,
-        [type ?? null, contactId ? Number(contactId) : null, archived === 'true'])).rows;
+      const rows = (await c.query(`${OUTSTANDING_SQL} WHERE ($1::text IS NULL OR d.doc_type=$1) AND ($2::bigint IS NULL OR d.contact_id=$2) AND ($3::boolean OR NOT d.is_archived)
+          AND ($4::text[] IS NULL OR d.doc_type = ANY($4)) ORDER BY d.issue_date DESC, d.id DESC LIMIT 500`,
+        [type ?? null, contactId ? Number(contactId) : null, archived === 'true', kinds])).rows;
       return rows.map(shapeDoc);
     });
   }
@@ -203,8 +207,8 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => {
       const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [id])).rows[0];
       if (!d || (role === 'sales' && d.doc_type !== 'invoice')) throw new NotFoundException('Document not found');
-      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
-        .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), accountId: Number(l.account_id), itemId: l.item_id ? Number(l.item_id) : null, trackingOptionId: l.tracking_option_id ? Number(l.tracking_option_id) : null }));
+      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp AS "cessRateBp",cess,itc_blocked AS "itcBlocked" FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
+        .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), cess: Number(l.cess), accountId: Number(l.account_id), itemId: l.item_id ? Number(l.item_id) : null, trackingOptionId: l.tracking_option_id ? Number(l.tracking_option_id) : null }));
       const payments = (await c.query('SELECT id,pay_date::text AS date,amount,reference FROM payments WHERE doc_id=$1 ORDER BY id', [id])).rows.map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
       return { ...shapeDoc(d), lines, payments };
     });
@@ -292,6 +296,7 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT p.*, d.number FROM payments p JOIN documents d ON d.id=p.doc_id WHERE p.id=$1 FOR UPDATE OF p', [paymentId])).rows[0];
       if (!p) throw new NotFoundException('Payment not found');
+      if (p.batch_id) throw new ConflictException(`This payment is part of batch payment #${p.batch_id}. Undo the whole batch from Batch payments.`);
       const ls = (await c.query('SELECT account_id,debit,credit,tracking_option_id FROM journal_lines WHERE entry_id=$1', [p.journal_entry_id])).rows
         .map((r) => ({ accountId: Number(r.account_id), debit: Number(r.debit), credit: Number(r.credit), trackingOptionId: r.tracking_option_id ? Number(r.tracking_option_id) : null }));
       const on = new Date().toISOString().slice(0, 10);
@@ -348,7 +353,7 @@ export async function recordPayment(c: PoolClient, orgId: number, uid: number, i
   return { id: Number(p.id), journalEntryId: eid, settled, fxGain, outstandingAfter: outstanding - settled };
 }
 
-export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number };
+export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number; cessRateBp?: number; itcBlocked?: boolean };
 
 /**
  * Validate lines and work out GST for a sales or purchase document. Shared by invoices/bills, quotes and purchase orders
@@ -391,7 +396,7 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
   });
   const wanted = isSales ? ['income'] : ['expense', 'asset'];
   const accIds = [...new Set(resolved.map((l) => l.accountId).filter((x): x is number => !!x))];
-  const accRows = (await c.query('SELECT id,type FROM accounts WHERE id = ANY($1) AND is_active', [accIds])).rows;
+  const accRows = (await c.query('SELECT id,type,itc_blocked FROM accounts WHERE id = ANY($1) AND is_active', [accIds])).rows;
   resolved.forEach((l, i) => {
     if (!slabs.has(l.gstRateBp)) throw new BadRequestException(`Line ${i + 1}: ${l.gstRateBp / 100}% is not a configured GST rate`);
     const row = accRows.find((r) => Number(r.id) === l.accountId);
@@ -399,9 +404,11 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
     if (!wanted.includes(row.type)) throw new BadRequestException(`Line ${i + 1}: account must be ${wanted.join(' or ')} type`);
   });
 
+  // Blocked credit (section 17(5)) comes from the line, or from its account when the line does not say.
   const input = resolved.map((l) => ({
     description: l.description, hsnSac: l.hsnSac, qtyMilli: Math.round(l.quantity * 1000), rate: l.rate, gstRateBp: l.gstRateBp, accountId: l.accountId!,
-    itemId: l.itemId ?? null, trackingOptionId: l.trackingOptionId ?? null,
+    itemId: l.itemId ?? null, trackingOptionId: l.trackingOptionId ?? null, cessRateBp: l.cessRateBp ?? 0,
+    itcBlocked: !isSales && (l.itcBlocked ?? !!accRows.find((r) => Number(r.id) === l.accountId)?.itc_blocked),
   }));
   const taxLines = computeGst(input, supplierState, pos, registered, rules.forceIgst);
   // Reverse charge: the GST the buyer must pay itself, worked out as if the supplier had charged it (buyer's state is the place of supply).
@@ -470,10 +477,10 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const priced = await priceLines(c, orgId, isSales, b.contactId, b.issueDate, b.lines, b.placeOfSupply, supplyType);
   const { contact, pos, rules } = priced;
   const conv = (l: TaxLine): TaxLine => (foreign
-    ? { ...l, rate: toRupees(l.rate, fxRate), taxable: toRupees(l.taxable, fxRate), cgst: toRupees(l.cgst, fxRate), sgst: toRupees(l.sgst, fxRate), igst: toRupees(l.igst, fxRate) }
+    ? { ...l, rate: toRupees(l.rate, fxRate), taxable: toRupees(l.taxable, fxRate), cgst: toRupees(l.cgst, fxRate), sgst: toRupees(l.sgst, fxRate), igst: toRupees(l.igst, fxRate), cess: toRupees(l.cess, fxRate) }
     : l);
   const taxLines = priced.taxLines.map(conv), t = totals(taxLines);
-  const rcm = priced.rcmLines ? totals(priced.rcmLines.map(conv)) : { cgst: 0, sgst: 0, igst: 0, total: 0, subtotal: 0 };
+  const rcm = priced.rcmLines ? totals(priced.rcmLines.map(conv)) : { cgst: 0, sgst: 0, igst: 0, cess: 0, total: 0, subtotal: 0 };
   const foreignTotal = foreign ? priced.t.total : null;
   if (original && t.total > Number(original.outstanding)) throw new BadRequestException('Note is larger than the amount still outstanding on the original');
 
@@ -506,7 +513,7 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     const state = new Map<number, { qtyMilli: number; value: number }>();
     for (const l of taxLines) {
       if (!l.itemId || !tracked.has(l.itemId)) continue;
-      if (type === 'bill') { moves.push({ itemId: l.itemId, qtyMilli: l.qtyMilli, value: l.taxable + (rules.claimInputCredit ? 0 : l.cgst + l.sgst + l.igst) }); continue; }
+      if (type === 'bill') { moves.push({ itemId: l.itemId, qtyMilli: l.qtyMilli, value: l.taxable + (rules.claimInputCredit && !l.itcBlocked ? 0 : l.cgst + l.sgst + l.igst + l.cess) }); continue; }
       const s = state.get(l.itemId) ?? await onHand(c, l.itemId);
       if (l.qtyMilli > s.qtyMilli) throw new BadRequestException(`Not enough stock for "${l.description}": ${s.qtyMilli / 1000} on hand`);
       const cost = issueCost(s, l.qtyMilli);
@@ -536,18 +543,23 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const sums = new Map<string, { accountId: number; trackingOptionId: number | null; amount: number }>();
   for (const l of taxLines) {
     const key = `${l.accountId}:${l.trackingOptionId ?? ''}`;
-    const tax = !isSales && !rules.claimInputCredit ? l.cgst + l.sgst + l.igst : 0; // composition dealers: GST paid is part of the cost
+    // Composition dealers, and blocked credits under section 17(5): the GST (and cess) paid is part of the cost.
+    const tax = !isSales && (!rules.claimInputCredit || l.itcBlocked) ? l.cgst + l.sgst + l.igst + l.cess : 0;
     const cur = sums.get(key) ?? { accountId: l.accountId, trackingOptionId: l.trackingOptionId ?? null, amount: 0 };
     cur.amount += l.taxable + tax; sums.set(key, cur);
   }
   const gstIds: number[] = [];
   for (const code of isSales ? ['2100', '2110', '2120'] : ['1300', '1310', '1320']) gstIds.push(await accountIdByCode(c, code)); // sequential: one client runs one query at a time
-  const taxAmts = [t.cgst, t.sgst, t.igst];
+  // Input credit is claimed only on lines whose credit is not blocked.
+  const claimable = (k: 'cgst' | 'sgst' | 'igst' | 'cess') => taxLines.reduce((sum, l) => sum + (l.itcBlocked ? 0 : l[k]), 0);
+  const taxAmts = isSales ? [t.cgst, t.sgst, t.igst] : [claimable('cgst'), claimable('sgst'), claimable('igst')];
+  const cessAmt = isSales ? t.cess : claimable('cess');
   const primary: Line[] = []; // the "normal" direction for an invoice (sales) or bill (purchase)
   if (isSales) {
     primary.push({ accountId: await accountIdByCode(c, '1100'), debit: t.total, credit: 0 });
     for (const v of sums.values()) primary.push({ accountId: v.accountId, debit: 0, credit: v.amount, trackingOptionId: v.trackingOptionId });
     taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: 0, credit: v }));
+    if (cessAmt) primary.push({ accountId: await ensureAccount(c, orgId, '2160'), debit: 0, credit: cessAmt });
     if (costOfSales) {
       primary.push({ accountId: await ensureAccount(c, orgId, '5050'), debit: costOfSales, credit: 0 });
       primary.push({ accountId: await ensureAccount(c, orgId, '1200'), debit: 0, credit: costOfSales });
@@ -555,6 +567,7 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   } else {
     for (const v of sums.values()) primary.push({ accountId: v.accountId, debit: v.amount, credit: 0, trackingOptionId: v.trackingOptionId });
     if (rules.claimInputCredit) taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: v, credit: 0 }));
+    if (rules.claimInputCredit && cessAmt) primary.push({ accountId: await ensureAccount(c, orgId, '1330'), debit: cessAmt, credit: 0 });
     primary.push({ accountId: await accountIdByCode(c, '2000'), debit: 0, credit: netPayable });
     if (tdsAmount) primary.push({ accountId: await accountIdByCode(c, '2200'), debit: 0, credit: tdsAmount });
     // Reverse charge: Dr input GST (or the cost, for composition dealers) / Cr RCM GST payable.
@@ -581,13 +594,13 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
 
   const doc = (await c.query(
     `INSERT INTO documents(org_id,doc_type,number,contact_id,issue_date,due_date,place_of_supply,supplier_ref,original_doc_id,subtotal,cgst,sgst,igst,
-       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING id`,
+       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total,cess)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING id`,
     [orgId, type, number, b.contactId, b.issueDate, dueDate, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
-     tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal])).rows[0];
+     tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal, t.cess])).rows[0];
   for (const l of taxLines) {
-    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
-      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null]);
+    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp,cess,itc_blocked) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)',
+      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null, l.cessRateBp ?? 0, l.cess, !!l.itcBlocked]);
   }
   for (const m of moves) await recordMove(c, orgId, { ...m, date: b.issueDate, kind: type === 'bill' ? 'purchase' : 'sale', docId: Number(doc.id), entryId: eid, note: number });
   await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'document', entityId: doc.id, after: { number, total: t.total, tdsAmount, supplyType, currency }, ip });

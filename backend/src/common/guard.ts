@@ -2,6 +2,7 @@ import { BadRequestException, CanActivate, ExecutionContext, Injectable, Unautho
 import { ZodType, ZodTypeDef } from 'zod';
 import { verifyToken } from '../security/jwt';
 import { getPool } from '../db/db';
+import { checkAccess } from '../tenancy/access';
 
 // The current token version per user, cached briefly so most requests skip the lookup. A password change in this
 // process clears the entry at once; another API instance notices within the cache time.
@@ -33,6 +34,8 @@ export class AuthGuard implements CanActivate {
     }
     if ((p.tv ?? 0) !== (await tokenVersion(Number(p.sub)))) throw new UnauthorizedException('Your password was changed. Log in again.');
     req.userId = p.sub;
+    // Access per person: the firm owner may have limited this person to some areas of the client's books.
+    await checkAccess(Number(p.sub), req.method, req.originalUrl ?? req.url, req.body, req.query);
     return true;
   }
 }

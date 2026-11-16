@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { getPool, tx, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
@@ -72,7 +72,7 @@ export class OrgController {
     // Sales people choose income accounts on invoices; employees choose expense accounts on claims. Neither sees the rest.
     const only = role === 'sales' ? 'income' : role === 'employee' ? 'expense' : null;
     return withOrg(orgId, async (c) =>
-      (await c.query('SELECT id,code,name,type,group_name AS "group",is_active AS "isActive" FROM accounts WHERE ($1::text IS NULL OR type=$1) ORDER BY code', [only])).rows
+      (await c.query('SELECT id,code,name,type,group_name AS "group",is_active AS "isActive",itc_blocked AS "itcBlocked" FROM accounts WHERE ($1::text IS NULL OR type=$1) ORDER BY code', [only])).rows
         .map((r) => ({ ...r, id: Number(r.id) })));
   }
 
@@ -86,6 +86,21 @@ export class OrgController {
       const r = (await c.query('INSERT INTO accounts(org_id,code,name,type,group_name) VALUES ($1,$2,$3,$4,$5) RETURNING id', [orgId, b.code, b.name, b.type, b.group])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'account', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
+    });
+  }
+
+  /** Mark an expense or asset account as "blocked credit" (section 17(5)): GST on bills coded to it is added to the cost instead of being claimed. */
+  @Put('orgs/:orgId/accounts/:id/itc-blocked')
+  async setBlocked(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    const b = parse(z.object({ blocked: z.boolean() }), body);
+    return withOrg(orgId, async (c) => {
+      const a = (await c.query('SELECT type, name FROM accounts WHERE id=$1', [id])).rows[0];
+      if (!a) throw new NotFoundException('Account not found');
+      if (b.blocked && a.type !== 'expense' && a.type !== 'asset') throw new BadRequestException('Only expense and asset accounts are bought on bills');
+      await c.query('UPDATE accounts SET itc_blocked=$2 WHERE id=$1', [id, b.blocked]);
+      await writeAudit(c, { orgId, userId: uid, action: 'itc_blocked', entity: 'account', entityId: id, after: b, ip });
+      return { ok: true };
     });
   }
 

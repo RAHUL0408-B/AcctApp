@@ -228,7 +228,7 @@ function addSheet(wb: ExcelJS.Workbook, sheetName: string, t: Table, orgName: st
 export interface InvoiceView {
   orgName: string; orgGstin: string | null; type: string; number: string; issueDate: string; dueDate: string | null; contact: string; contactGstin: string | null;
   placeOfSupply: string | null; lines: { description: string; hsnSac: string | null; qtyMilli: number; rate: number; taxable: number; gstRateBp: number }[];
-  subtotal: number; cgst: number; sgst: number; igst: number; total: number; tdsAmount: number; notes: string | null;
+  subtotal: number; cgst: number; sgst: number; igst: number; total: number; tdsAmount: number; notes: string | null; cess?: number;
   /** From the organisation settings: logo, address and contact lines, and payment details (bank, UPI QR). */
   branding?: Branding;
 }
@@ -332,7 +332,7 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
       doc.fillColor(colour).font(strong ? look.bold : look.font).fontSize(strong ? fs + 1 : fs).text(k, bx + 8, y + 1, { width: 110, lineBreak: false }).text(formatPaise(val), bx + 110, y + 1, { width: 112, align: 'right', lineBreak: false });
       doc.y = y + fs + 9;
     };
-    tot('Subtotal', v.subtotal); if (v.cgst) tot('CGST', v.cgst); if (v.sgst) tot('SGST', v.sgst); if (v.igst) tot('IGST', v.igst);
+    tot('Subtotal', v.subtotal); if (v.cgst) tot('CGST', v.cgst); if (v.sgst) tot('SGST', v.sgst); if (v.igst) tot('IGST', v.igst); if (v.cess) tot('Cess', v.cess);
     tot('Total (INR)', v.total, true);
     if (v.tdsAmount) { tot('Less TDS', -v.tdsAmount); tot('Net payable', v.total - v.tdsAmount, true); }
     if (v.notes) doc.moveDown().fillColor('#444444').font(look.italic).fontSize(fs - 0.5).text(`Notes: ${v.notes}`, 40, doc.y + 6, { width: W });

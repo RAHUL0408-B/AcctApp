@@ -18,8 +18,10 @@ export function isValidGstin(gstin: string): boolean {
 
 export const stateOfGstin = (gstin: string) => gstin.slice(0, 2);
 
-export interface TaxLineInput { description: string; hsnSac?: string; qtyMilli: number; rate: number; gstRateBp: number; accountId: number; itemId?: number | null; trackingOptionId?: number | null; }
-export interface TaxLine extends TaxLineInput { taxable: number; cgst: number; sgst: number; igst: number; }
+export interface TaxLineInput { description: string; hsnSac?: string; qtyMilli: number; rate: number; gstRateBp: number; accountId: number; itemId?: number | null; trackingOptionId?: number | null;
+  /** Compensation cess, in basis points of the taxable value (for example 1200 = 12%). */ cessRateBp?: number;
+  /** Section 17(5): the GST on this purchase line can never be claimed as input credit, so it is part of the cost. */ itcBlocked?: boolean; }
+export interface TaxLine extends TaxLineInput { taxable: number; cgst: number; sgst: number; igst: number; cess: number; }
 
 /** Line amount = quantity (in 1/1000 units) x rate (paise per unit), rounded to the nearest paisa. */
 export const lineAmount = (qtyMilli: number, rate: number) => Math.round((qtyMilli * rate) / 1000);
@@ -32,19 +34,21 @@ export function computeGst(lines: TaxLineInput[], supplierState: string | null, 
   const intra = !forceIgst && !!supplierState && supplierState === placeOfSupply;
   return lines.map((l) => {
     const taxable = lineAmount(l.qtyMilli, l.rate);
-    if (!registered || l.gstRateBp === 0) return { ...l, taxable, cgst: 0, sgst: 0, igst: 0 };
+    // Cess is charged on the taxable value whether the supply is within the state or not, and only by a registered supplier.
+    const cess = registered && l.cessRateBp ? percentOf(taxable, l.cessRateBp) : 0;
+    if (!registered || l.gstRateBp === 0) return { ...l, taxable, cgst: 0, sgst: 0, igst: 0, cess };
     if (intra) {
       const half = percentOf(taxable, l.gstRateBp / 2);
-      return { ...l, taxable, cgst: half, sgst: half, igst: 0 };
+      return { ...l, taxable, cgst: half, sgst: half, igst: 0, cess };
     }
-    return { ...l, taxable, cgst: 0, sgst: 0, igst: percentOf(taxable, l.gstRateBp) };
+    return { ...l, taxable, cgst: 0, sgst: 0, igst: percentOf(taxable, l.gstRateBp), cess };
   });
 }
 
 export function totals(lines: TaxLine[]) {
-  const sum = (k: 'taxable' | 'cgst' | 'sgst' | 'igst') => lines.reduce((s, l) => s + l[k], 0);
-  const subtotal = sum('taxable'), cgst = sum('cgst'), sgst = sum('sgst'), igst = sum('igst');
-  return { subtotal, cgst, sgst, igst, total: subtotal + cgst + sgst + igst };
+  const sum = (k: 'taxable' | 'cgst' | 'sgst' | 'igst' | 'cess') => lines.reduce((s, l) => s + (l[k] ?? 0), 0);
+  const subtotal = sum('taxable'), cgst = sum('cgst'), sgst = sum('sgst'), igst = sum('igst'), cess = sum('cess');
+  return { subtotal, cgst, sgst, igst, cess, total: subtotal + cgst + sgst + igst + cess };
 }
 
 export type SupplyType = 'regular' | 'export_lut' | 'export_igst' | 'sez_lut' | 'sez_igst' | 'reverse_charge';

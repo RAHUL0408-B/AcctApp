@@ -150,9 +150,10 @@ function ReportView({ rep, d, org, reload }: { rep: string; d: any; org: Org; re
         {['notDue', 'days1to30', 'days31to60', 'days61to90', 'over90', 'total'].map((k) => <td key={k} className="text-right">{fmt(c[k])}</td>)}</tr>)}</tbody></table>);
   if (rep === 'gstr1') return (
     <div className="space-y-4 text-sm">
+      <Gstr1Json org={org} />
       {(['b2b', 'b2cl', 'exp', 'cdnr', 'cdnur'] as const).map((s) => (
         <div key={s}><h3 className="font-semibold uppercase">{s} ({d[s].length})</h3>
-          {d[s].length > 0 && <table className="w-full"><tbody>{d[s].map((x: any) => <tr key={x.number} className="border-t border-slate-100"><td>{x.number}</td><td>{x.date}</td><td>{x.gstin ?? x.party}</td><td>POS {x.placeOfSupply}</td><td className="text-right">{fmt(x.taxable)}</td><td className="text-right">IGST {fmt(x.igst)} · CGST {fmt(x.cgst)} · SGST {fmt(x.sgst)}</td></tr>)}</tbody></table>}</div>))}
+          {d[s].length > 0 && <table className="w-full"><tbody>{d[s].map((x: any) => <tr key={x.number} className="border-t border-slate-100"><td>{x.number}</td><td>{x.date}</td><td>{x.gstin ?? x.party}</td><td>POS {x.placeOfSupply}</td><td className="text-right">{fmt(x.taxable)}</td><td className="text-right">IGST {fmt(x.igst)} · CGST {fmt(x.cgst)} · SGST {fmt(x.sgst)}{x.cess ? ` · Cess ${fmt(x.cess)}` : ''}</td></tr>)}</tbody></table>}</div>))}
       <div><h3 className="font-semibold">B2CS (by place of supply and rate)</h3>{d.b2cs.map((x: any, i: number) => <p key={i}>POS {x.pos} @ {x.rateBp / 100}%: taxable {fmt(x.taxable)}</p>)}</div>
       <div><h3 className="font-semibold">HSN summary</h3>{d.hsn.map((x: any, i: number) => <p key={i}>{x.hsn} @ {x.rateBp / 100}% · qty {x.quantity} · taxable {fmt(x.taxable)}</p>)}</div>
       <p className="text-xs text-slate-500">Working paper only. Review with your CA before filing on the GST portal.</p>
@@ -168,17 +169,39 @@ function ReportView({ rep, d, org, reload }: { rep: string; d: any; org: Org; re
         <tr className="border-t-2 font-semibold"><td>Profit</td><td className="text-right">{fmt(d.totals.profitBudget)}</td><td className="text-right">{fmt(d.totals.profitActual)}</td><td className="text-right">{fmt(d.totals.profitActual - d.totals.profitBudget)}</td></tr></tbody></table>);
   if (rep === 'gstr3b') {
     const o = d.section31a_outwardTaxable, itc = d.section4_itcAvailable, n = d.netTaxPayable;
+    const rv = d.section4b2_itcReversed, rc = d.section4a5_itcReclaimed, inel = d.section4d_ineligibleItc;
+    const heads = (x: any) => <><td className="text-right">{fmt(x?.igst ?? 0)}</td><td className="text-right">{fmt(x?.cgst ?? 0)}</td><td className="text-right">{fmt(x?.sgst ?? 0)}</td></>;
     return (
-      <div className="text-sm"><table className="w-full"><thead><tr className="text-left text-slate-500"><th /><th className="text-right">Taxable</th><th className="text-right">IGST</th><th className="text-right">CGST</th><th className="text-right">SGST</th></tr></thead>
+      <div className="text-sm"><table className="w-full" data-testid="gstr3b"><thead><tr className="text-left text-slate-500"><th /><th className="text-right">Taxable</th><th className="text-right">IGST</th><th className="text-right">CGST</th><th className="text-right">SGST</th><th className="text-right">Cess</th></tr></thead>
         <tbody><tr className="border-t"><td>3.1(a) Outward taxable</td><td className="text-right">{fmt(o.taxable)}</td><td className="text-right">{fmt(o.igst)}</td><td className="text-right">{fmt(o.cgst)}</td><td className="text-right">{fmt(o.sgst)}</td></tr>
           <tr className="border-t"><td>3.1(b) Zero-rated (exports, SEZ)</td><td className="text-right">{fmt(d.section31b_zeroRated.taxable)}</td><td className="text-right">{fmt(d.section31b_zeroRated.igst)}</td><td /><td /></tr>
           <tr className="border-t"><td>3.1(c) Nil / exempt</td><td className="text-right">{fmt(d.section31c_nilRatedExempt.taxable)}</td><td /><td /><td /></tr>
           <tr className="border-t"><td>3.1(d) Inward reverse charge</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.taxable)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.igst)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.cgst)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.sgst)}</td></tr>
-          <tr className="border-t"><td>4. ITC available</td><td /><td className="text-right">{fmt(itc.igst)}</td><td className="text-right">{fmt(itc.cgst)}</td><td className="text-right">{fmt(itc.sgst)}</td></tr>
-          <tr className="border-t-2 font-semibold"><td>Net payable (negative = carry forward)</td><td /><td className="text-right">{fmt(n.igst)}</td><td className="text-right">{fmt(n.cgst)}</td><td className="text-right">{fmt(n.sgst)}</td></tr></tbody></table>
+          {rc && (rc.igst + rc.cgst + rc.sgst) > 0 && <tr className="border-t"><td>4(A)(5) Credit claimed again (Rule 37, paid)</td><td />{heads(rc)}<td /></tr>}
+          {rv && (rv.igst + rv.cgst + rv.sgst) > 0 && <tr className="border-t text-red-700"><td>4(B)(2) Credit reversed (Rule 37, unpaid 180 days)</td><td />{heads(rv)}<td /></tr>}
+          <tr className="border-t"><td>4(C) Net ITC available</td><td />{heads(itc)}<td className="text-right">{fmt(itc.cess ?? 0)}</td></tr>
+          {inel && (inel.igst + inel.cgst + inel.sgst + (inel.cess ?? 0)) > 0 && <tr className="border-t text-slate-500"><td>4(D)(1) Ineligible ITC, section 17(5) (not claimed)</td><td />{heads(inel)}<td className="text-right">{fmt(inel.cess ?? 0)}</td></tr>}
+          <tr className="border-t-2 font-semibold"><td>Net payable (negative = carry forward)</td><td />{heads(n)}<td className="text-right">{fmt(n.cess ?? 0)}</td></tr></tbody></table>
         <p className="mt-2 text-xs text-amber-700">{d.note}</p></div>);
   }
   return null;
+}
+
+/** GSTR-1 for one month as a JSON file for the GST portal's offline tool. */
+function Gstr1Json({ org }: { org: Org }) {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const { error, busy, run } = useAction();
+  return (
+    <div className="rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Return month</span>
+          <input type="month" aria-label="GSTR-1 month" value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-md border border-slate-300 px-3 py-2" /></label>
+        <Button disabled={busy || !month} onClick={() => run(() => download(`/orgs/${org.id}/reports/gstr1-json?month=${month}`, `GSTR1-${month}.json`))}>Download JSON for the GST portal</Button>
+      </div>
+      <p className="mt-2 text-xs text-slate-600">B2B, B2CL, B2CS, credit notes, exports and the HSN summary in the layout the GST offline tool reads. Check it there before you upload; amendments are not included.</p>
+      <div className="mt-2"><ErrorMsg msg={error} /></div>
+    </div>
+  );
 }
 
 /** Profit and loss with several amount columns (months or tracking options). */

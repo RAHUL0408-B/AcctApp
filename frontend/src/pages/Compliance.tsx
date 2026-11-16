@@ -27,14 +27,14 @@ export function Compliance({ org, canPost, sub, go }: { org: Org; canPost: boole
       </div>
       {tab === '2b' && <TwoB org={org} canPost={canPost} />}
       {tab === 'msme' && <Msme org={org} go={go} />}
-      {tab === 'itc180' && <Itc180 org={org} />}
+      {tab === 'itc180' && <Itc180 org={org} canPost={canPost} />}
     </>
   );
 }
 
 // ------------------------------------------------------------------ GSTR-2B
 interface Upload { id: number; period: string; fileName: string; lines: number; uploadedAt: string; uploadedBy: string }
-interface Row { status: 'matched' | 'mismatch' | 'only_2b' | 'only_books'; gstin: string; supplier: string; invoiceNo: string; date: string | null; billNumber: string | null; books: { taxable: number; tax: number } | null; portal: { taxable: number; tax: number; itcAvailable: boolean } | null; difference: number; note: string }
+interface Row { status: 'matched' | 'mismatch' | 'only_2b' | 'only_books'; kind?: 'invoice' | 'credit_note' | 'debit_note'; amended?: boolean; originalNo?: string | null; gstin: string; supplier: string; invoiceNo: string; date: string | null; billNumber: string | null; books: { taxable: number; tax: number } | null; portal: { taxable: number; tax: number; itcAvailable: boolean } | null; difference: number; note: string }
 interface Match { import: { id: number; period: string; fileName: string }; counts: Record<Row['status'], number>; tax: { portal: number; matched: number; atRisk: number }; rows: Row[]; chase: { supplier: string; gstin: string; invoices: string[]; tax: number }[] }
 const LABEL: Record<Row['status'], [string, 'green' | 'amber' | 'red' | 'blue']> = { matched: ['Matched', 'green'], mismatch: ['Tax differs', 'amber'], only_2b: ['Only in GSTR-2B', 'blue'], only_books: ['Only in your books', 'red'] };
 
@@ -117,7 +117,8 @@ function TwoB({ org, canPost }: { org: Org; canPost: boolean }) {
               <div className="overflow-x-auto"><table className="w-full text-sm" data-testid="twob-rows"><thead><tr className="text-left text-slate-500"><th>Status</th><th>Supplier</th><th>Invoice no.</th><th>Date</th><th>Your bill</th><th className="text-right">Tax in books</th><th className="text-right">Tax in GSTR-2B</th><th className="text-right">Difference</th><th>What to do</th></tr></thead>
                 <tbody>{rows.map((r, i) => <tr key={i} className="border-t border-slate-100 align-top">
                   <td className="py-2"><Pill text={LABEL[r.status][0]} tone={LABEL[r.status][1]} /></td><td>{r.supplier}<span className="block font-mono text-[11px] text-slate-500">{r.gstin}</span></td>
-                  <td>{r.invoiceNo}</td><td className="whitespace-nowrap">{r.date ?? ''}</td><td>{r.billNumber ?? '—'}</td>
+                  <td>{r.invoiceNo}{r.kind && r.kind !== 'invoice' && <span className="ml-1 rounded bg-sky-100 px-1.5 text-[11px] text-sky-800">{r.kind === 'credit_note' ? 'credit note' : 'debit note'}</span>}
+                    {r.amended && <span className="ml-1 rounded bg-violet-100 px-1.5 text-[11px] text-violet-800" title={r.originalNo ? `Was ${r.originalNo}` : undefined}>amended</span>}</td><td className="whitespace-nowrap">{r.date ?? ''}</td><td>{r.billNumber ?? '—'}</td>
                   <td className="text-right">{r.books ? fmt(r.books.tax) : '—'}</td><td className="text-right">{r.portal ? fmt(r.portal.tax) : '—'}</td>
                   <td className={`text-right ${r.status === 'matched' ? '' : 'font-medium text-red-700'}`}>{r.status === 'matched' ? '' : fmt(r.difference)}</td>
                   <td className="max-w-xs text-xs text-slate-600">{r.note}</td></tr>)}</tbody></table></div>)}
@@ -183,13 +184,26 @@ function Msme({ org, go }: { org: Org; go: (p: string) => void }) {
 }
 
 // ------------------------------------------------------------------ 180 days
-interface ItcRow { id: number; number: string; supplierRef: string | null; supplier: string; date: string; day180: string; daysPast: number; unpaid: number; gst: number; reverse: number; status: 'reverse' | 'soon' }
+interface ItcRow { id: number; number: string; supplierRef: string | null; supplier: string; date: string; day180: string; daysPast: number; unpaid: number; gst: number; reverse: number; status: 'reverse' | 'soon' | 'reversed'; reversedOn: string | null }
+interface Reversal { id: number; documentId: number; number: string; supplier: string; reversedOn: string; reclaimedOn: string | null; amount: number; unpaid: number; canReclaim: boolean }
 
-function Itc180({ org }: { org: Org }) {
+function Itc180({ org, canPost }: { org: Org; canPost: boolean }) {
   const [asOf, setAsOf] = useState(today());
-  const [r, setR] = useState<{ rows: ItcRow[]; totals: { reverseNow: number; soon: number } } | null>(null);
+  const [r, setR] = useState<{ rows: ItcRow[]; totals: { reverseNow: number; soon: number; reversed?: number } } | null>(null);
+  const [revs, setRevs] = useState<Reversal[]>([]);
+  const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
-  useEffect(() => { run(async () => setR(await api(`/orgs/${org.id}/compliance/itc-180?asOf=${asOf}`))); }, [org.id, asOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = () => run(async () => { setR(await api(`/orgs/${org.id}/compliance/itc-180?asOf=${asOf}`)); setRevs(await api(`/orgs/${org.id}/compliance/itc-reversals`)); });
+  useEffect(() => { load(); }, [org.id, asOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reverse = (x: ItcRow) => run(async () => {
+    if (!window.confirm(`Reverse ₹${fmt(x.reverse)} of input credit on ${x.number}? A journal is posted today (Dr Input credit reversed, Cr input GST) and it shows in GSTR-3B table 4(B)(2).`)) return;
+    const res = await api(`/orgs/${org.id}/compliance/itc-180/${x.id}/reverse`, { body: {} });
+    setOk(`₹${fmt(res.amount)} of input credit on ${x.number} reversed.`); load();
+  });
+  const reclaim = (x: Reversal) => run(async () => {
+    const res = await api(`/orgs/${org.id}/compliance/itc-180/${x.documentId}/reclaim`, { body: {} });
+    setOk(`₹${fmt(res.amount)} of input credit on ${x.number} claimed again.`); load();
+  });
   const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/itc-180?format=${format}&asOf=${asOf}`, `itc-180-days-${asOf}.${format}`));
   return (
     <>
@@ -199,7 +213,7 @@ function Itc180({ org }: { org: Org }) {
           <Button variant="ghost" disabled={busy} onClick={() => exp('pdf')}>Export PDF</Button><Button variant="ghost" disabled={busy} onClick={() => exp('xlsx')}>Export Excel</Button>
         </div>
         <p className="mt-3 text-xs text-slate-500">If a supplier is not paid within 180 days of the invoice date, the input tax credit taken on the unpaid part must be reversed in GSTR-3B (with interest under section 50) and can be claimed again once paid. TDS deducted counts as paid.</p>
-        <div className="mt-2"><ErrorMsg msg={error} /></div>
+        <div className="mt-2 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       </Card>
       {r && (
         <>
@@ -212,7 +226,16 @@ function Itc180({ org }: { org: Org }) {
               <table className="w-full text-sm" data-testid="itc-rows"><thead><tr className="text-left text-slate-500"><th>Bill</th><th>Supplier</th><th>Bill date</th><th>Day 180</th><th className="text-right">Unpaid</th><th className="text-right">GST on bill</th><th className="text-right">Credit to reverse</th><th /></tr></thead>
                 <tbody>{r.rows.map((x) => <tr key={x.id} className="border-t border-slate-100"><td className="py-2 font-medium">{x.number}{x.supplierRef && <span className="block text-xs font-normal text-slate-500">{x.supplierRef}</span>}</td><td>{x.supplier}</td><td>{x.date}</td><td>{x.day180}</td>
                   <td className="text-right">{fmt(x.unpaid)}</td><td className="text-right">{fmt(x.gst)}</td><td className="text-right font-medium">{fmt(x.reverse)}</td>
-                  <td>{x.status === 'reverse' ? <Pill text={`${x.daysPast} day(s) past`} tone="red" /> : <Pill text={`in ${-x.daysPast} day(s)`} tone="amber" />}</td></tr>)}</tbody></table>)}
+                  <td className="whitespace-nowrap">{x.status === 'reversed' ? <Pill text={`reversed ${x.reversedOn}`} tone="slate" /> : x.status === 'reverse' ? <Pill text={`${x.daysPast} day(s) past`} tone="red" /> : <Pill text={`in ${-x.daysPast} day(s)`} tone="amber" />}
+                    {canPost && x.status === 'reverse' && <Button variant="ghost" className="ml-2" aria-label={`Reverse credit on ${x.number}`} disabled={busy} onClick={() => reverse(x)}>Reverse credit</Button>}</td></tr>)}</tbody></table>)}
+          </Card>
+          <Card title="Credit reversed under Rule 37">
+            {revs.length === 0 ? <Empty text="No credit has been reversed." /> : (
+              <table className="w-full text-sm" data-testid="itc-reversals"><thead><tr className="text-left text-slate-500"><th className="py-1">Bill</th><th>Supplier</th><th>Reversed on</th><th className="text-right">Credit</th><th>Status</th><th /></tr></thead>
+                <tbody>{revs.map((x) => <tr key={x.id} className="border-t border-slate-100"><td className="py-2 font-medium">{x.number}</td><td>{x.supplier}</td><td>{x.reversedOn}</td><td className="text-right">{fmt(x.amount)}</td>
+                  <td>{x.reclaimedOn ? <Pill text={`claimed again ${x.reclaimedOn}`} tone="green" /> : x.canReclaim ? <Pill text="paid: can be claimed again" tone="green" /> : <Pill text={`₹${fmt(x.unpaid)} still unpaid`} tone="amber" />}</td>
+                  <td className="text-right">{canPost && x.canReclaim && <Button variant="ghost" aria-label={`Reclaim credit on ${x.number}`} disabled={busy} onClick={() => reclaim(x)}>Claim again</Button>}</td></tr>)}</tbody></table>)}
+            <p className="mt-2 text-xs text-slate-500">Reversed credit is parked in "Input Credit Reversed (Rule 37, reclaimable)" until the supplier is paid. Claimed-again credit shows in GSTR-3B table 4(A)(5).</p>
           </Card>
         </>
       )}

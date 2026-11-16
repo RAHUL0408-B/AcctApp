@@ -5,7 +5,9 @@ import type { Org } from '../App';
 import { Button, ErrorMsg, Field, useAction } from '../ui';
 import type { Contact } from './Contacts';
 
-export interface Line { description: string; hsnSac: string; quantity: string; rate: string; gstRateBp: string; accountId: string; itemId?: string; trackingOptionId?: string }
+export interface Line { description: string; hsnSac: string; quantity: string; rate: string; gstRateBp: string; accountId: string; itemId?: string; trackingOptionId?: string;
+  /** Compensation cess, in percent (for example "22"). */ cess?: string;
+  /** "1" when the input credit on this purchase line is blocked under section 17(5). */ itcBlocked?: string }
 export interface Account { id: number; code: string; name: string; type: string }
 export interface Item { id: number; code: string; name: string; kind: string; hsnSac: string | null; saleRate: number; purchaseRate: number; gstRateBp: number; salesAccountId: number | null; purchaseAccountId: number | null; trackStock?: boolean }
 export interface TrackingCategory { id: number; name: string; options: { id: number; name: string }[] }
@@ -15,13 +17,15 @@ export const emptyLine = (): Line => ({ description: '', hsnSac: '', quantity: '
 export function linesToApi(lines: Line[]) {
   return lines.map((l) => ({ description: l.description, quantity: Number(l.quantity), rate: toPaise(l.rate), gstRateBp: Number(l.gstRateBp),
     ...(l.hsnSac ? { hsnSac: l.hsnSac } : {}), ...(l.accountId ? { accountId: Number(l.accountId) } : {}),
-    ...(l.itemId ? { itemId: Number(l.itemId) } : {}), ...(l.trackingOptionId ? { trackingOptionId: Number(l.trackingOptionId) } : {}) }));
+    ...(l.itemId ? { itemId: Number(l.itemId) } : {}), ...(l.trackingOptionId ? { trackingOptionId: Number(l.trackingOptionId) } : {}),
+    ...(l.cess && Number(l.cess) > 0 ? { cessRateBp: Math.round(Number(l.cess) * 100) } : {}), ...(l.itcBlocked === '1' ? { itcBlocked: true } : {}) }));
 }
 
 /** Document lines as the API returns them -> editor lines. */
-export function linesFromApi(lines: { description: string; hsnSac?: string | null; quantity?: number; qtyMilli?: number; rate: number; gstRateBp: number; accountId?: number | null; itemId?: number | null; trackingOptionId?: number | null }[]): Line[] {
+export function linesFromApi(lines: { description: string; hsnSac?: string | null; quantity?: number; qtyMilli?: number; rate: number; gstRateBp: number; accountId?: number | null; itemId?: number | null; trackingOptionId?: number | null; cessRateBp?: number; itcBlocked?: boolean }[]): Line[] {
   return lines.map((l) => ({ description: l.description, hsnSac: l.hsnSac ?? '', quantity: String(l.quantity ?? (l.qtyMilli ?? 1000) / 1000), rate: String(l.rate / 100), gstRateBp: String(l.gstRateBp),
-    accountId: l.accountId ? String(l.accountId) : '', ...(l.itemId ? { itemId: String(l.itemId) } : {}), ...(l.trackingOptionId ? { trackingOptionId: String(l.trackingOptionId) } : {}) }));
+    accountId: l.accountId ? String(l.accountId) : '', ...(l.itemId ? { itemId: String(l.itemId) } : {}), ...(l.trackingOptionId ? { trackingOptionId: String(l.trackingOptionId) } : {}),
+    ...(l.cessRateBp ? { cess: String(l.cessRateBp / 100) } : {}), ...(l.itcBlocked ? { itcBlocked: '1' } : {}) }));
 }
 
 /** Customer or supplier: type to search, or pick from the list. */
@@ -48,10 +52,11 @@ const lineAmount = (qty: string, rate: string) => { try { return Math.round(Math
 /** GST split the way the server works it out: same state = CGST + SGST (half rate each), different state = IGST. */
 export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
   const byRate = new Map<number, { taxable: number; cgst: number; sgst: number; igst: number }>();
-  let subtotal = 0;
+  let subtotal = 0, cess = 0;
   for (const l of lines) {
     const taxable = lineAmount(l.quantity, l.rate), bp = Number(l.gstRateBp) || 0;
     subtotal += taxable;
+    if (!noTax && Number(l.cess) > 0) cess += Math.round(taxable * Math.round(Number(l.cess) * 100) / 10000);
     if (noTax || !bp) continue;
     const cur = byRate.get(bp) ?? { taxable: 0, cgst: 0, sgst: 0, igst: 0 };
     cur.taxable += taxable;
@@ -60,7 +65,7 @@ export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
   }
   const rows = [...byRate.entries()].sort((a, b) => a[0] - b[0]);
   const cgst = rows.reduce((s, [, r]) => s + r.cgst, 0), sgst = rows.reduce((s, [, r]) => s + r.sgst, 0), igst = rows.reduce((s, [, r]) => s + r.igst, 0);
-  return { subtotal, rows, cgst, sgst, igst, gst: cgst + sgst + igst, total: subtotal + cgst + sgst + igst };
+  return { subtotal, rows, cgst, sgst, igst, cess, gst: cgst + sgst + igst, total: subtotal + cgst + sgst + igst + cess };
 }
 
 export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false }:
@@ -73,6 +78,9 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
   const loadItems = () => api<Item[]>(`/orgs/${org.id}/items`).then(setItems);
   useEffect(() => { api('/config/gst-rates').then(setRates); loadItems(); api<TrackingCategory[]>(`/orgs/${org.id}/tracking`).then(setTracking); }, [org.id]);
   const trackingOptions = tracking.flatMap((c) => c.options.map((o) => ({ id: o.id, label: `${c.name}: ${o.name}` })));
+  // Cess and blocked credit are rare, so their columns appear only when asked for (or when a line already uses them).
+  const [extra, setExtra] = useState(false);
+  const showExtra = extra || lines.some((l) => Number(l.cess) > 0 || l.itcBlocked === '1');
   const options = accounts.filter((a) => (sales ? a.type === 'income' : a.type === 'expense' || a.type === 'asset'));
   const set = (i: number, k: keyof Line, v: string) => setLines(lines.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const total = (l: Line) => lineAmount(l.quantity, l.rate);
@@ -134,8 +142,10 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
           <span className="text-xs text-slate-500">Sets every line below. You can still change a single line.</span>
         </div>
       )}
+      <label className="mb-2 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" aria-label="Show cess and blocked credit" checked={showExtra} disabled={showExtra && !extra}
+        onChange={(e) => setExtra(e.target.checked)} />Compensation cess{!sales && ' or blocked input credit (section 17(5))'}</label>
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-slate-500"><th>Description</th><th className="w-24">HSN/SAC</th><th className="w-20">Qty</th><th className="w-28">Rate ({currency === 'INR' ? '₹' : currency})</th><th className="w-24">GST</th><th className="w-48">Account</th>{trackingOptions.length > 0 && <th className="w-44">Cost centre</th>}<th className="w-28 text-right">Amount</th><th className="w-8" /></tr></thead>
+        <thead><tr className="text-left text-slate-500"><th>Description</th><th className="w-24">HSN/SAC</th><th className="w-20">Qty</th><th className="w-28">Rate ({currency === 'INR' ? '₹' : currency})</th><th className="w-24">GST</th><th className="w-48">Account</th>{trackingOptions.length > 0 && <th className="w-44">Cost centre</th>}{showExtra && <th className="w-20">Cess %</th>}{showExtra && !sales && <th className="w-20" title="Input credit blocked under section 17(5)">No ITC</th>}<th className="w-28 text-right">Amount</th><th className="w-8" /></tr></thead>
         <tbody>{lines.map((l, i) => {
           const bp = Number(l.gstRateBp) || 0;
           return (
@@ -152,6 +162,8 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
                 <option value="">Default</option>{options.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select></td>
               {trackingOptions.length > 0 && <td className="pr-1"><select aria-label={`Cost centre ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.trackingOptionId ?? ''} onChange={(e) => set(i, 'trackingOptionId', e.target.value)}>
                 <option value="">—</option>{trackingOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></td>}
+              {showExtra && <td className="pr-1"><input aria-label={`Cess ${i + 1}`} inputMode="decimal" placeholder="0" className="w-full rounded border border-slate-300 px-2 py-1 text-right" value={l.cess ?? ''} onChange={(e) => set(i, 'cess', e.target.value)} /></td>}
+              {showExtra && !sales && <td className="text-center"><input type="checkbox" aria-label={`Blocked credit ${i + 1}`} checked={l.itcBlocked === '1'} onChange={(e) => set(i, 'itcBlocked', e.target.checked ? '1' : '')} /></td>}
               <td className="text-right">{fmt(total(l))}</td>
               <td>{lines.length > 1 && <button type="button" aria-label={`Remove line ${i + 1}`} className="text-slate-400 hover:text-red-600" onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>}</td>
             </tr>);
@@ -166,6 +178,8 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
             {sum.rows.map(([bp, r]) => intra
               ? <tr key={bp} className="text-slate-600"><td className="py-0.5 pl-3">CGST {bp / 200}% + SGST {bp / 200}% on {cur}{fmt(r.taxable)}<span className="block text-[11px] text-slate-500">{acct(codes[0])} · {acct(codes[1])}</span></td><td className="py-0.5 text-right">{cur}{fmt(r.cgst)} + {cur}{fmt(r.sgst)}</td></tr>
               : <tr key={bp} className="text-slate-600"><td className="py-0.5 pl-3">IGST {bp / 100}% on {cur}{fmt(r.taxable)}<span className="block text-[11px] text-slate-500">{acct(codes[2])}</span></td><td className="py-0.5 text-right">{cur}{fmt(r.igst)}</td></tr>)}
+            {sum.cess > 0 && <tr className="text-slate-600"><td className="py-0.5 pl-3">Compensation cess</td><td className="py-0.5 text-right" data-testid="cess-total">{cur}{fmt(sum.cess)}</td></tr>}
+            {!sales && lines.some((l) => l.itcBlocked === '1') && <tr className="text-amber-700"><td colSpan={2} className="py-0.5 pl-3 text-xs">GST on lines marked "No ITC" is added to their cost and is not claimed.</td></tr>}
             <tr><td className="py-1 text-slate-600">Total GST</td><td className="py-1 text-right font-medium" data-testid="gst-total">{cur}{fmt(sum.gst)}</td></tr>
             <tr className="border-t-2 border-slate-300"><td className="pt-2 font-semibold">Total {sales ? 'invoice' : 'bill'} value</td><td className="pt-2 text-right text-base font-semibold" data-testid="grand-total">{cur}{fmt(sum.total)}</td></tr>
           </tbody>

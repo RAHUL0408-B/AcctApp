@@ -1,9 +1,21 @@
 import { PoolClient } from 'pg';
+import { ForbiddenException } from '@nestjs/common';
 import type { Line } from './ledger';
+import { roleOnOrg } from '../tenancy/acl';
+
+/** The lock date for everyone except owners and accountants (Lock dates in the settings). The hard lock for everyone is a database trigger. */
+export async function checkStaffLock(c: PoolClient, orgId: number, uid: number | null, date: string) {
+  const lock = (await c.query('SELECT staff_lock_through::text AS d FROM organizations WHERE id=$1', [orgId])).rows[0]?.d as string | undefined;
+  if (!lock || date > lock || !uid) return;
+  const role = await roleOnOrg(uid, orgId);
+  if (role === 'owner' || role === 'accountant') return;
+  throw new ForbiddenException(`The books are locked for staff up to ${lock}. Ask an owner or accountant to post on or before that date.`);
+}
 
 /** Insert one balanced journal entry (the database re-checks balance at commit). Closing entries are marked so profit reports can skip them. */
 export async function insertEntry(c: PoolClient, orgId: number, uid: number, date: string, narration: string,
   reference: string | null, reversesId: number | null, lines: Line[], kind: 'normal' | 'closing' = 'normal') {
+  await checkStaffLock(c, orgId, uid, date);
   const e = (await c.query('INSERT INTO journal_entries(org_id,entry_date,narration,reference,reverses_id,created_by,kind) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
     [orgId, date, narration, reference, reversesId, uid, kind])).rows[0];
   for (const l of lines) {

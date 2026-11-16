@@ -3,6 +3,7 @@ import { BadRequestException, Body, ConflictException, Controller, Delete, Forbi
 import { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
+import { prefixFor } from '../settings/settings';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireOrg, requireAnyOrg } from '../tenancy/acl';
@@ -435,13 +436,14 @@ export async function voidDocument(c: PoolClient, orgId: number, uid: number, id
   return { voided: true, reversalEntryId: vid };
 }
 
-const numberFor = (type: DocType, fyLabel: string, n: number) => `${PREFIX[type]}/${fyLabel.replace('FY ', '').slice(2)}/${String(n).padStart(4, '0')}`;
+const numberFor = (prefix: string, fyLabel: string, n: number) => `${prefix}/${fyLabel.replace('FY ', '').slice(2)}/${String(n).padStart(4, '0')}`;
 /** The next automatic number for a type and date, skipping any that were typed in by hand. Does not use it up. */
-async function peekNumber(c: PoolClient, orgId: number, type: DocType, on: string) {
+export async function peekNumber(c: PoolClient, orgId: number, type: DocType, on: string) {
   const fy = financialYearOf(on);
+  const prefix = await prefixFor(c, type);
   let n = Number((await c.query('SELECT next_no FROM doc_sequences WHERE org_id=$1 AND doc_type=$2 AND fy_label=$3', [orgId, type, fy.label])).rows[0]?.next_no ?? 1);
-  while ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, numberFor(type, fy.label, n)])).rowCount) n++;
-  return numberFor(type, fy.label, n);
+  while ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, numberFor(prefix, fy.label, n)])).rowCount) n++;
+  return numberFor(prefix, fy.label, n);
 }
 
 /** Build, validate and post a sales/purchase document with its GST, TDS, stock and journal entry. */
@@ -521,10 +523,11 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     number = b.number.trim();
     if ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, number])).rowCount) throw new ConflictException(`The number ${number} is already used by another ${type.replace('_', ' ')}`);
   } else {
+    const prefix = await prefixFor(c, type);
     do {
       const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,$3,2)
         ON CONFLICT (org_id,doc_type,fy_label) DO UPDATE SET next_no = doc_sequences.next_no + 1 RETURNING next_no - 1 AS n`, [orgId, type, fy.label])).rows[0];
-      number = numberFor(type, fy.label, Number(seq.n));
+      number = numberFor(prefix, fy.label, Number(seq.n));
     } while ((await c.query('SELECT 1 FROM documents WHERE doc_type=$1 AND number=$2', [type, number])).rowCount);
   }
 

@@ -10,7 +10,7 @@ Xero is built for other countries. These checks take hours of spreadsheet work e
 
 | Capability | Status | Notes |
 |---|---|---|
-| GSTR-2B matching against purchase bills | Done | Upload the portal JSON or a CSV. Matching uses the supplier GSTIN and the supplier bill number however it is written (INV/0042 = inv-42). Shows matched, tax differs, portal-only, books-only, credit at risk, and suppliers to chase with a reminder to send. Amended invoices (B2BA) and credit notes in GSTR-2B are not matched yet |
+| GSTR-2B matching against purchase bills | Done | Upload the portal JSON or a CSV. Matching uses the supplier GSTIN and the supplier bill number however it is written (INV/0042 = inv-42). Shows matched, tax differs, portal-only, books-only, credit at risk, and suppliers to chase with a reminder to send. Amended invoices (B2BA, CDNRA) match on their new or old number; supplier credit notes (CDNR) match your debit notes |
 | MSME payments under section 43B(h) | Done | MSME type, Udyam number and agreed days on suppliers; per bill the pay-by date (15 days, or agreed up to 45), paid on time, paid late, unpaid, and the expense not allowed for the year, including bills near 31 March. The bill date stands in for the date of acceptance |
 | Input tax credit 180-day rule (Rule 37) | Done | Credit to reverse on the unpaid part of bills older than 180 days, and bills reaching 180 days within 30 days. Interest under section 50 is not calculated |
 | Duplicate supplier bill guard | Done | The same supplier bill number from the same supplier, or from another contact with the same GSTIN, is stopped as a likely double GST credit unless confirmed |
@@ -21,11 +21,11 @@ Everything in the tables below that is marked **Not built** or **Partial**, grou
 
 | Needs an outside account or provider | Needs a large module | Needs legal or tax sign-off |
 |---|---|---|
-| Live bank feeds (a bank-feed provider) | Payroll, PF, ESI, professional tax | GST return filing from the app and filing-ready JSON |
-| Online payment links on invoices and a real subscription gateway (for example Razorpay) | Repeating bills and batch payments | e-Invoicing (IRN, QR) and e-way bills (GSTN and NIC access) |
-| Automatic exchange-rate feed and period-end revaluation (default rates per currency can be set by hand) | Native mobile app and offline mode | Cess, blocked credits (17(5)) and ITC reversals |
-| Encrypted object storage and virus scanning for uploads | Public API, API keys and an app marketplace | Terms, Privacy Policy and DPDP review |
-| An email provider for reliable delivery (SPF, DKIM) | Ad-hoc custom report builder | Pooled block depreciation under the Income Tax Act |
+| Live bank feeds (a bank-feed provider) | Payroll, PF, ESI, professional tax | GST return filing from the app (a GSTR-1 JSON for the offline tool is produced) |
+| Online payment links on invoices and a real subscription gateway (for example Razorpay) | Native mobile app and offline mode | e-Invoicing (IRN, QR) and e-way bills (GSTN and NIC access) |
+| Automatic exchange-rate feed and period-end revaluation (default rates per currency can be set by hand) | Public API, API keys and an app marketplace | A CA's review of the cess, 17(5) and Rule 37 handling before relying on it |
+| Encrypted object storage and virus scanning for uploads | Ad-hoc custom report builder | Terms, Privacy Policy and DPDP review |
+| An email provider for reliable delivery (SPF, DKIM) | | Pooled block depreciation under the Income Tax Act |
 
 The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 
@@ -51,6 +51,7 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 | Credit notes | Done | Against an invoice, capped at what is outstanding |
 | Quotes, convert to invoice | Done | A quote never touches the ledger until converted |
 | Repeating invoices | Done | Weekly, monthly, quarterly, yearly. Month-end day is kept (31 Jan, 28 Feb, 31 Mar). Optional auto-email |
+| Batch receipts | Done | Tick several invoices and record one bank deposit for them; one journal entry, so it matches the bank statement; undo the whole batch |
 | Overdue reminders | Done | One click, once per week per invoice |
 | Customer statements | Done | Running balance with opening balance |
 | Sales overview | Done | Awaiting approval / payment, overdue, due this week, 6-month chart, top customers, oldest overdue |
@@ -65,6 +66,8 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 | TDS deduction on bills | Done | Section rates and thresholds come from a table |
 | Debit notes | Done | |
 | Purchase orders, convert to bill | Done | |
+| Repeating bills | Done | Rent, maintenance contracts, subscriptions: weekly to yearly, with a TDS section worked out on each bill |
+| Batch payments | Done | Pay several bills with one bank payment, posted as one entry so it matches the statement; listed under Purchases, Batch payments, and can be undone. Rupee bills only |
 | Purchases overview and purchases settings | Done | Default payment terms for bills |
 | Expense claims | Done | Submit, approve (books the expense), reject, repay from the bank |
 | Invoice and bill approval workflow | Done | Optional per organisation: staff submit, owners and accountants approve or reject |
@@ -110,7 +113,7 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 | Invoice-only role (Sales) | Done | Raises invoices and quotes and adds customers for one client; sees customers only and no buying prices; cannot take payments, cancel, or see reports |
 | Expenses-only role (Employee) | Done | Submits and follows their own expense claims for one client and sees nothing else |
 | Email invitations and a People page | Done | The owner invites by email, resends, cancels, changes roles and removes access; the last owner cannot be removed |
-| Custom permissions per person, bank-only and payroll-admin roles | Not built | Access comes from the six fixed levels |
+| Custom permissions per person, bank-only role | Done | On top of the role, the owner sets each person's access to nine areas (sales, purchases, bank, accounting, reports, tax, contacts, projects, settings) as none, view only or full, with presets such as Bank only and Reports only. Enforced by the API and hidden from the menu. No payroll-admin role (no payroll) |
 | Client portal: books, reports, upload documents | Done | |
 | Tasks and GST/TDS due-date reminders | Done | Due dates come from a table |
 | Document storage | Done | Local disk; use object storage in production |
@@ -129,7 +132,10 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 | Reverse charge (RCM) on purchases | Done | Buyer self-assesses GST: input credit plus RCM payable; shown in GSTR-3B 3.1(d) |
 | Composition scheme | Done | No GST on sales; GST on purchases becomes part of the cost |
 | Exports and SEZ supplies | Done | Under LUT (zero-rated, no GST) or with IGST; GSTR-1 export section and GSTR-3B 3.1(b) |
-| GST return filing from the app | Not built | Working papers only |
+| GST return filing from the app | Partial | Working papers, plus a GSTR-1 JSON in the offline tool's layout (B2B, B2CL, B2CS, CDNR, CDNUR, EXP, HSN) to check and upload yourself. Not filed from the app; amendments are not included |
+| Compensation cess | Done | A cess rate per line; Output and Input Compensation Cess accounts; in GSTR-1, GSTR-3B and the invoice PDF |
+| Blocked credits, section 17(5) | Done | Mark a bill line, or an expense account, as "No ITC": the GST is added to the cost, left out of input credit, and shown in GSTR-3B table 4(D)(1) |
+| ITC reversal and reclaim, Rule 37 | Done | From the 180-day check: reverse the credit on a bill unpaid for 180 days (journal to a reclaimable account), then claim it again once paid; shown in GSTR-3B tables 4(B)(2) and 4(A)(5). Interest under section 50 is not worked out |
 | Payroll, PF, ESI, professional tax | Not built | A large separate module |
 
 ## Platform

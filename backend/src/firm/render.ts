@@ -3,6 +3,7 @@ import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
 import { formatPaise } from '../money';
 import type { Table } from './exporter';
+import type { Branding } from '../settings/settings';
 import { DEFAULT_OPTIONS, ExportOptions, Look, lookOf, onColour, tint } from './styles';
 
 const PAPER_XLSX = { A4: 9, A3: 8, LETTER: 1 } as const;
@@ -228,6 +229,8 @@ export interface InvoiceView {
   orgName: string; orgGstin: string | null; type: string; number: string; issueDate: string; dueDate: string | null; contact: string; contactGstin: string | null;
   placeOfSupply: string | null; lines: { description: string; hsnSac: string | null; qtyMilli: number; rate: number; taxable: number; gstRateBp: number }[];
   subtotal: number; cgst: number; sgst: number; igst: number; total: number; tdsAmount: number; notes: string | null;
+  /** From the organisation settings: logo, address and contact lines, and payment details (bank, UPI QR). */
+  branding?: Branding;
 }
 
 export const renderInvoicePdf = (v: InvoiceView, o: ExportOptions = DEFAULT_OPTIONS) => renderInvoicesPdf([v], o);
@@ -268,6 +271,18 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
       doc.font(look.bold).fontSize(13).text(v.orgName, 40, 40, { width: W * 0.6 });
       doc.font(look.font).fontSize(9).text(v.orgGstin ? `GSTIN: ${v.orgGstin}` : 'GSTIN: not registered');
       doc.moveDown();
+    }
+
+    // ----- the organisation's logo, address and contact lines (set in Organisation details)
+    const from = v.branding?.from;
+    if (from) {
+      const y0 = doc.y;
+      let x = 40;
+      if (from.logo) { try { doc.image(from.logo, 40, y0, { fit: [90, 40] }); x = 140; } catch { /* a broken image is skipped */ } }
+      doc.fillColor('#555555').font(look.font).fontSize(8.5);
+      let ly = y0 + (from.logo ? 2 : 0);
+      for (const l of from.lines) { doc.text(fit(doc, l, 40 + W - x), x, ly, { width: 40 + W - x, lineBreak: false }); ly += 11; }
+      doc.y = Math.max(ly, from.logo ? y0 + 44 : ly) + 8;
     }
 
     // ----- details
@@ -322,6 +337,23 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
     if (v.tdsAmount) { tot('Less TDS', -v.tdsAmount); tot('Net payable', v.total - v.tdsAmount, true); }
     if (v.notes) doc.moveDown().fillColor('#444444').font(look.italic).fontSize(fs - 0.5).text(`Notes: ${v.notes}`, 40, doc.y + 6, { width: W });
     if (o.note) doc.moveDown(0.6).fillColor('#444444').font(look.font).fontSize(fs - 0.5).text(o.note, 40, doc.y, { width: W });
+
+    // ----- how to pay: bank details and a UPI QR code (set in Payment services)
+    const pay = v.branding?.payment;
+    if (pay) {
+      const boxH = Math.max(pay.lines.length * 12 + 26, pay.qr ? 108 : 0);
+      if (doc.y + boxH > pageH - 60) { doc.addPage(); doc.y = 40; }
+      const y0 = doc.y + 10;
+      doc.roundedRect(40, y0, W, boxH, 4).lineWidth(0.6).strokeColor(tint(look.accent, 0.5)).stroke();
+      doc.fillColor(look.accent).font(look.bold).fontSize(fs - 0.5).text('PAYMENT DETAILS', 50, y0 + 8, { width: W - 140, lineBreak: false });
+      doc.fillColor('#333333').font(look.font).fontSize(fs - 0.5);
+      pay.lines.forEach((l, i) => doc.text(fit(doc, l, W - 140), 50, y0 + 22 + i * 12, { width: W - 140, lineBreak: false }));
+      if (pay.qr) {
+        doc.image(pay.qr, 40 + W - 96, y0 + 6, { width: 84, height: 84 });
+        if (pay.qrCaption) doc.fillColor('#555555').fontSize(7).text(pay.qrCaption, 40 + W - 110, y0 + 92, { width: 108, align: 'center', lineBreak: false });
+      }
+      doc.y = y0 + boxH + 6;
+    }
 
     };
     views.forEach((v, k) => { if (k > 0) doc.addPage(); drawInvoice(v); });

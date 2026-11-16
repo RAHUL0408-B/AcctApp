@@ -7,7 +7,7 @@ import { processOutbox, queueMail } from './mailer';
 import { createBackup, pruneBackups, verifyBackup } from '../ops/backup';
 import { log, metrics } from '../ops/metrics';
 import { join } from 'path';
-import { runRecurring } from '../extras/extras.controller';
+import { runAutoReminders, runRecurring } from '../extras/extras.controller';
 import { runJournalRules } from '../accounting/automation.controller';
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -59,8 +59,8 @@ export async function runScheduledReports(today = iso(new Date())) {
 }
 
 export async function tick() {
-  const r = await runReminders(), s = await runScheduledReports(), rec = await runRecurring(), jr = await runJournalRules(), m = await processOutbox();
-  return { reminders: r.queued, scheduled: s.sent, recurring: rec.created, journalRules: jr.created, ...m };
+  const r = await runReminders(), s = await runScheduledReports(), rec = await runRecurring(), jr = await runJournalRules(), ar = await runAutoReminders(), m = await processOutbox();
+  return { reminders: r.queued, scheduled: s.sent, recurring: rec.created, journalRules: jr.created, paymentReminders: ar.sent, ...m };
 }
 
 /** Daily encrypted backup; weekly restore test of the newest backup into a scratch database. */

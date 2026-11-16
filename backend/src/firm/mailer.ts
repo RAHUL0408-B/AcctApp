@@ -8,12 +8,21 @@ function getTransport(): Transporter {
   return transport;
 }
 
-export interface Mail { orgId?: number | null; to: string; subject: string; body: string; attachment?: { name: string; mime: string; data: Buffer }; }
+export interface Mail { orgId?: number | null; to: string; subject: string; body: string; attachment?: { name: string; mime: string; data: Buffer };
+  /** Replies go here (the organisation's email settings). */ replyTo?: string | null;
+  /** Shown as the sender's name; the address stays MAIL_FROM so mail is not marked as spoofed. */ fromName?: string | null; }
 
 export async function queueMail(m: Mail) {
   await getPool().query(
-    'INSERT INTO email_outbox(org_id,to_addr,subject,body,attachment_name,attachment_mime,attachment) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-    [m.orgId ?? null, m.to, m.subject, m.body, m.attachment?.name ?? null, m.attachment?.mime ?? null, m.attachment?.data ?? null]);
+    'INSERT INTO email_outbox(org_id,to_addr,subject,body,attachment_name,attachment_mime,attachment,reply_to,from_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [m.orgId ?? null, m.to, m.subject, m.body, m.attachment?.name ?? null, m.attachment?.mime ?? null, m.attachment?.data ?? null, m.replyTo ?? null, m.fromName ?? null]);
+}
+
+/** The From header: the configured MAIL_FROM address, with the organisation's sender name in front when one is set. */
+export function fromHeader(mailFrom: string, name?: string | null) {
+  if (!name) return mailFrom;
+  const addr = mailFrom.match(/<([^>]+)>/)?.[1] ?? mailFrom.trim();
+  return `"${name.replace(/["\\\r\n<>]/g, '')}" <${addr}>`;
 }
 
 /** Send pending mail; retry up to 3 times, then mark failed. Returns counts. */
@@ -24,7 +33,7 @@ export async function processOutbox(limit = 20) {
   for (const r of rows) {
     try {
       await getTransport().sendMail({
-        from: process.env.MAIL_FROM ?? 'no-reply@example.com', to: r.to_addr, subject: r.subject, text: r.body,
+        from: fromHeader(process.env.MAIL_FROM ?? 'no-reply@example.com', r.from_name), ...(r.reply_to ? { replyTo: r.reply_to } : {}), to: r.to_addr, subject: r.subject, text: r.body,
         attachments: r.attachment ? [{ filename: r.attachment_name, contentType: r.attachment_mime, content: r.attachment }] : [],
       });
       await pool.query("UPDATE email_outbox SET status='sent', sent_at=now(), attempts=attempts+1 WHERE id=$1", [r.id]); sent++;

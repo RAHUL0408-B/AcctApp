@@ -15,6 +15,7 @@ import { isValidGstin } from '../tax/gst';
 import { queueMail } from '../firm/mailer';
 import { formatPaise } from '../money';
 import { buildInvoicePdf } from './invoicepdf';
+import { fillTemplate, mailPrefs, prefixFor } from '../settings/settings';
 import { matchRule, monthEnds, monthlyDepreciation, nextDate } from './calc';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
@@ -57,6 +58,36 @@ async function planDepreciation(c: PoolClient, a: any, through: string) {
   }
   return out;
 }
+/** Queue reminder emails for overdue invoices, using the organisation's reminder template and interval. Also run daily by the worker when automatic reminders are on. */
+export async function sendOverdueReminders(orgId: number, uid: number | null, ip?: string) {
+  const mp = await mailPrefs(getPool(), orgId);
+  const mails = await withOrg(orgId, async (c) => {
+    const rows = (await c.query(
+      `SELECT d.id, d.number, d.due_date::text AS due_date, ct.name, ct.email,
+              d.net_payable - COALESCE((SELECT SUM(amount) FROM payments p WHERE p.doc_id=d.id),0)
+                            - COALESCE((SELECT SUM(total) FROM documents x WHERE x.original_doc_id=d.id AND x.status='posted'),0) AS outstanding
+         FROM documents d JOIN contacts ct ON ct.id=d.contact_id
+        WHERE d.doc_type='invoice' AND d.status='posted' AND d.due_date < CURRENT_DATE AND ct.email IS NOT NULL
+          AND (d.reminder_sent_at IS NULL OR d.reminder_sent_at < now() - make_interval(days => $1::int))`, [mp.remindEveryDays])).rows.filter((r) => Number(r.outstanding) > 0);
+    if (rows.length) await c.query('UPDATE documents SET reminder_sent_at=now() WHERE id = ANY($1)', [rows.map((r) => r.id)]);
+    if (uid || rows.length) await writeAudit(c, { orgId, userId: uid, action: uid ? 'remind_overdue' : 'auto_remind_overdue', entity: 'document', after: { count: rows.length }, ip });
+    return rows;
+  });
+  for (const m of mails) {
+    const vars = { contact: m.name, number: m.number, due: m.due_date, amount: formatPaise(Number(m.outstanding)), org: mp.orgName, type: 'invoice' };
+    await queueMail({ orgId, to: m.email, subject: fillTemplate(mp.reminderSubject, vars), body: `${fillTemplate(mp.reminderBody, vars)}\n\nRegards,\n${mp.orgName}`, replyTo: mp.replyTo, fromName: mp.fromName });
+  }
+  return { reminders: mails.length };
+}
+
+/** Automatic reminders for organisations that turned them on. The interval in the settings stops repeats. */
+export async function runAutoReminders() {
+  const orgs = (await getPool().query('SELECT id FROM organizations WHERE auto_remind')).rows;
+  let sent = 0;
+  for (const o of orgs) sent += (await sendOverdueReminders(Number(o.id), null)).reminders;
+  return { sent };
+}
+
 const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer' }, purchase_order: { prefix: 'PO', docType: 'bill', contactKinds: 'supplier' } } as const;
 
 @Controller('orgs/:orgId')
@@ -177,7 +208,7 @@ export class ExtrasController {
       const { t } = await priceLines(c, orgId, b.kind === 'quote', b.contactId, b.issueDate, b.lines);
       const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,'-',2)
         ON CONFLICT (org_id,doc_type,fy_label) DO UPDATE SET next_no = doc_sequences.next_no + 1 RETURNING next_no - 1 AS n`, [orgId, b.kind])).rows[0];
-      const number = `${PRE[b.kind].prefix}-${String(seq.n).padStart(4, '0')}`;
+      const number = `${await prefixFor(c, b.kind)}-${String(seq.n).padStart(4, '0')}`;
       const r = (await c.query('INSERT INTO pre_documents(org_id,kind,number,contact_id,issue_date,expiry_date,lines,subtotal,tax,total,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',
         [orgId, b.kind, number, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null, uid])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: b.kind, entityId: r.id, after: { number, total: t.total }, ip });
@@ -289,33 +320,18 @@ export class ExtrasController {
       await writeAudit(c, { orgId, userId: uid, action: 'email', entity: 'document', entityId: id, after: { to }, ip });
       return { x, to };
     });
-    const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
-    await queueMail({ orgId, to: r.to, subject: `${r.x.docType.replace('_', ' ')} ${r.x.number} from ${org.name}`, body: `${b.message ?? `Dear ${r.x.contactName},\n\nPlease find ${r.x.number} attached.`}\n\nRegards,\n${org.name}`,
-      attachment: { name: `${r.x.number.replace(/\//g, '-')}.pdf`, mime: 'application/pdf', data: r.x.pdf } });
+    const mp = await mailPrefs(getPool(), orgId);
+    const vars = { contact: r.x.contactName, number: r.x.number, org: mp.orgName, type: r.x.docType.replace('_', ' '), amount: formatPaise(r.x.total), due: r.x.dueDate ?? '' };
+    await queueMail({ orgId, to: r.to, subject: fillTemplate(mp.invoiceSubject, vars), body: `${b.message ?? fillTemplate(mp.invoiceBody, vars)}\n\nRegards,\n${mp.orgName}`,
+      attachment: { name: `${r.x.number.replace(/\//g, '-')}.pdf`, mime: 'application/pdf', data: r.x.pdf }, replyTo: mp.replyTo, fromName: mp.fromName });
     return { queuedTo: r.to };
   }
 
-  /** Email a polite reminder for every overdue sales invoice that has a contact email and was not reminded in the last 7 days. */
+  /** Email a polite reminder for every overdue sales invoice that has a contact email and was not reminded recently (see Invoice reminders). */
   @Post('documents/remind-overdue')
   async remindOverdue(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const mails = await withOrg(orgId, async (c) => {
-      const rows = (await c.query(
-        `SELECT d.id, d.number, d.due_date, ct.name, ct.email,
-                d.net_payable - COALESCE((SELECT SUM(amount) FROM payments p WHERE p.doc_id=d.id),0)
-                              - COALESCE((SELECT SUM(total) FROM documents x WHERE x.original_doc_id=d.id AND x.status='posted'),0) AS outstanding
-           FROM documents d JOIN contacts ct ON ct.id=d.contact_id
-          WHERE d.doc_type='invoice' AND d.status='posted' AND d.due_date < CURRENT_DATE AND ct.email IS NOT NULL
-            AND (d.reminder_sent_at IS NULL OR d.reminder_sent_at < now() - interval '7 days')`)).rows.filter((r) => Number(r.outstanding) > 0);
-      if (rows.length) await c.query('UPDATE documents SET reminder_sent_at=now() WHERE id = ANY($1)', [rows.map((r) => r.id)]);
-      await writeAudit(c, { orgId, userId: uid, action: 'remind_overdue', entity: 'document', after: { count: rows.length }, ip });
-      return rows;
-    });
-    for (const m of mails) {
-      await queueMail({ orgId, to: m.email, subject: `Reminder: invoice ${m.number} is overdue`, body: `Dear ${m.name},\n\nInvoice ${m.number} (due ${m.due_date}) has Rs ${formatPaise(Number(m.outstanding))} outstanding. Please arrange payment.\n\nRegards,\n${org.name}` });
-    }
-    return { reminders: mails.length };
+    return sendOverdueReminders(orgId, uid, ip);
   }
 
   // ---------- bank rules ----------
@@ -611,9 +627,10 @@ export async function runRecurring(today = new Date().toISOString().slice(0, 10)
         if (r.auto_email) {
           const sent = await withOrg(orgId, async (c) => buildInvoicePdf(c, orgId, made.id));
           if (sent?.contactEmail) {
-            const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
-            await queueMail({ orgId, to: sent.contactEmail, subject: `Invoice ${sent.number} from ${org.name}`, body: `Dear ${sent.contactName},\n\nPlease find invoice ${sent.number} attached.\n\nRegards,\n${org.name}`,
-              attachment: { name: `${sent.number.replace(/\//g, '-')}.pdf`, mime: 'application/pdf', data: sent.pdf } });
+            const mp = await mailPrefs(getPool(), orgId);
+            const vars = { contact: sent.contactName, number: sent.number, org: mp.orgName, type: 'invoice', amount: formatPaise(sent.total), due: sent.dueDate ?? '' };
+            await queueMail({ orgId, to: sent.contactEmail, subject: fillTemplate(mp.invoiceSubject, vars), body: `${fillTemplate(mp.invoiceBody, vars)}\n\nRegards,\n${mp.orgName}`,
+              attachment: { name: `${sent.number.replace(/\//g, '-')}.pdf`, mime: 'application/pdf', data: sent.pdf }, replyTo: mp.replyTo, fromName: mp.fromName });
             await withOrg(orgId, (c) => c.query('UPDATE documents SET sent_at=now() WHERE id=$1', [made.id]));
           }
         }

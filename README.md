@@ -29,7 +29,7 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 
 | Area | What it does |
 |---|---|
-| **Navigation** | Inside a client, a left side menu holds Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts and Projects: sections open in place, the current page is marked, the menu can shrink to icons, and on phones it slides in as a drawer. The top bar keeps the client switcher, a "+" create menu with Alt shortcuts, search, notifications, help and the account menu. A setup guide is on Home. |
+| **Navigation** | Inside a client, a left side menu holds Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts, Projects and Settings: sections open in place, the current page is marked, the menu can shrink to icons, and on phones it slides in as a drawer. The top bar keeps the client switcher, a "+" create menu with Alt shortcuts, search, notifications, help and the account menu. A setup guide is on Home. A Back button appears wherever there is a previous screen, but not on the client list or a client's Home. |
 | **Firms and clients** | One firm, many client organisations. Each client's data is isolated by PostgreSQL row-level security. |
 | **Users and security** | Six access levels: Owner, Accountant, Staff, Client (view-only), Sales (invoices, quotes and customers only) and Employee (their own expense claims only). The owner invites people by email from **People and access**, changes roles and removes access. Forgot-password and reset by email link, change password (other devices are signed out), email confirmation, optional authenticator-app 2FA with recovery codes, lockout after 5 failed logins, rate limits, password rules. |
 | **Ledger** | Double entry in integer paise. Unbalanced entries are rejected by the API and by the database. Posted entries can never be edited or deleted, only reversed. Periods can be locked. |
@@ -50,6 +50,7 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 | **Projects** | Time and costs per customer job, estimate vs actual, invoice unbilled work in one click. |
 | **Firm tools** | Practice overview across every client, tasks with GST/TDS due dates, document uploads, CSV import from other software, scheduled report emails. |
 | **Compliance checks** | Tax, Checks. **GSTR-2B match**: upload the portal file; bills are matched by supplier GSTIN and invoice number written any way; matched, tax differs, portal-only and books-only, credit at risk, and suppliers to chase with a ready-to-send reminder. **MSME payments, section 43B(h)**: MSME type and Udyam number on suppliers; pay-by date per bill, what is overdue, and the expense not allowed for the year (Form 3CD clause 22). **ITC 180-day rule**: credit to reverse on bills unpaid for 180 days, and bills about to cross. A supplier bill number used twice is stopped as a likely double GST credit. Alerts in notifications; PDF and Excel exports. |
+| **Settings** | One Settings page, like Xero's, with search: organisation details (legal name, business type, CIN, TAN, address, contact details, logo), users, financial year, time zone and two lock dates (one for staff, one for everyone), invoice settings (number prefixes and the next number for invoices, notes, bills, quotes and orders), payment services (bank details and a UPI QR code for the amount due printed on invoices), email settings (sender name, reply-to, invoice and reminder templates with a preview), automatic payment reminders, currencies with default exchange rates, tax rates (GST and TDS), and history of every change. |
 | **Export templates** | The owner chooses how every PDF and Excel file looks: five ready-made templates or their own design (colours, typeface, heading, table style, page), one for reports and one for invoices and bills. Several reports can go into one PDF or one workbook, and several invoices into one PDF. |
 | **Landing page and mobile** | A full product landing page: dashboard illustration beside the log-in form, a tabbed product tour (sales, purchases, bank, GST and TDS, reports, practice), the India compliance checks, features, audiences, all six access levels, pricing read live from the plans, security, questions and a footer. The web app can be added to a phone's home screen (web app manifest and icons); there is no offline mode and no native app. |
 | **Platform** | Encrypted daily backups with an automatic restore test. DPDP consent, data export and erasure. Subscription plans with GST invoices. Health and metrics endpoints, JSON logs, error alerts. |
@@ -159,7 +160,7 @@ The backend reads environment variables (there is no `.env` loader).
 ## Tests
 
 ```bash
-npm test                         # 285 backend tests (16 files), with worked accounting and tax examples
+npm test                         # 297 backend tests (17 files), with worked accounting and tax examples
 node frontend/e2e/smoke.mjs      # browser: register, journal, reversal, trial balance, 2FA
 node frontend/e2e/full.mjs       # browser: quote to invoice, GST, TDS, bank rules, assets, reports, exports, billing, privacy
 node frontend/e2e/more.mjs       # browser: USD export, stock, approvals, expense claims, cost centres, budgets, year-end, practice overview
@@ -168,6 +169,7 @@ node frontend/e2e/changes.mjs    # browser: contacts, editing posted invoices, j
 node frontend/e2e/team.mjs       # browser: password reset and change, email confirmation, invitations, People and access, Sales and Employee views
 node frontend/e2e/checklist.mjs  # browser: the original 29-point change list, item by item
 node frontend/e2e/compliance.mjs # browser: MSME details, duplicate bill warning, GSTR-2B upload and match, 43B(h), 180-day ITC, alerts
+node frontend/e2e/settings.mjs   # browser: Settings page, organisation details and logo, lock dates, numbering, UPI QR, email templates, reminders, currencies, history, Back button
 ```
 GitHub runs all of these on every push (`.github/workflows/ci.yml`). The browser scripts read the email outbox from the database (`DATABASE_URL`) to follow emailed links.
 

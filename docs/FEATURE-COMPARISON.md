@@ -23,7 +23,7 @@ Everything in the tables below that is marked **Not built** or **Partial**, grou
 |---|---|---|
 | Live bank feeds (a bank-feed provider) | Payroll, PF, ESI, professional tax | GST return filing from the app and filing-ready JSON |
 | Online payment links on invoices and a real subscription gateway (for example Razorpay) | Repeating bills and batch payments | e-Invoicing (IRN, QR) and e-way bills (GSTN and NIC access) |
-| Automatic exchange-rate feed and period-end revaluation | Native mobile app and offline mode | Cess, blocked credits (17(5)) and ITC reversals |
+| Automatic exchange-rate feed and period-end revaluation (default rates per currency can be set by hand) | Native mobile app and offline mode | Cess, blocked credits (17(5)) and ITC reversals |
 | Encrypted object storage and virus scanning for uploads | Public API, API keys and an app marketplace | Terms, Privacy Policy and DPDP review |
 | An email provider for reliable delivery (SPF, DKIM) | Ad-hoc custom report builder | Pooled block depreciation under the Income Tax Act |
 
@@ -81,7 +81,7 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 | Fixed assets and depreciation | Done | Asset groups with Income Tax Act rates and Companies Act lives, straight line, written down value or useful life, whole months or actual days, editable asset codes, attachments, disposal with gain or loss. Not modelled: pooled blocks of assets and the 180-day half rate |
 | Products and services catalogue | Done | Prefills lines on every document |
 | Inventory stock tracking | Done | Weighted average cost, cost of goods sold on each sale, stock adjustments, movement history, check against the Inventory account. Single location; credit/debit notes do not move stock |
-| Period locking | Done | Enforced in the database |
+| Period locking (lock dates) | Done | Two lock dates as in Xero: one stops staff (owners and accountants can still post), one stops everyone and is enforced in the database |
 | Year-end closing entries | Done | Moves the year's profit to Reserves and Surplus and locks the year; that year's P&L is unchanged |
 | Cost centres (Xero's tracking categories) | Done | Pick one for a whole invoice, bill or journal or per line; repeating journals keep it; P&L by cost centre |
 | Budgets | Done | Monthly amounts per account; budget vs actual report |
@@ -137,7 +137,8 @@ The security and launch items are in [LAUNCH-CHECKLIST.md](LAUNCH-CHECKLIST.md).
 |---|---|---|
 | Two-factor login, lockout, rate limits | Done | |
 | Forgot password, change password, email confirmation | Done | Links are emailed (set `SMTP_URL` and `APP_URL`); a password change or reset signs out every other device |
-| Audit log | Done | Append-only, with before/after values |
+| Audit log | Done | Append-only, with before/after values. Settings, History and notes shows who changed what |
+| Settings page | Done | Xero's settings in one place: organisation details and logo, users, financial settings and lock dates, invoice numbering, payment services, email settings and templates, invoice reminders, currencies, tax rates, chart of accounts, cost centres, conversion balances, history. Not built: custom domains, connected apps, check (cheque) styles, payroll settings |
 | Encrypted daily backups with restore test | Done | |
 | DPDP consent, export and erasure | Done | Needs legal review |
 | Subscription plans with GST invoices | Done | Test payment mode only |

@@ -108,7 +108,7 @@ describe('invitations and the team', () => {
     salesToken = reg.token;
     const me = (await ctx.http().get('/api/auth/me').set(auth(salesToken)).expect(200)).body;
     expect(me.emailVerified).toBe(true);
-    expect(me.memberships).toEqual([{ firmId: owner.firmId, firmName: 'Team Firm', orgId: org, role: 'sales' }]);
+    expect(me.memberships).toEqual([{ firmId: owner.firmId, firmName: 'Team Firm', orgId: org, role: 'sales', access: null }]);
     await ctx.http().get(`/api/auth/invitations/${m.token}`).expect(404);                 // used
   });
 

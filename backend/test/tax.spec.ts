@@ -19,11 +19,11 @@ describe('GST calculation', () => {
   });
   it('intra-state: Rs 1,000 @18% -> CGST 90 + SGST 90, total 1,180', () => {
     const t = totals(computeGst([line], '27', '27'));
-    expect(t).toEqual({ subtotal: 100000, cgst: 9000, sgst: 9000, igst: 0, total: 118000 });
+    expect(t).toEqual({ subtotal: 100000, cgst: 9000, sgst: 9000, igst: 0, cess: 0, total: 118000 });
   });
   it('inter-state: Rs 1,000 @18% -> IGST 180, total 1,180', () => {
     const t = totals(computeGst([line], '27', '29'));
-    expect(t).toEqual({ subtotal: 100000, cgst: 0, sgst: 0, igst: 18000, total: 118000 });
+    expect(t).toEqual({ subtotal: 100000, cgst: 0, sgst: 0, igst: 18000, cess: 0, total: 118000 });
   });
   it('0.25% slab intra-state keeps CGST = SGST (Rs 100 -> 12.5 paise each rounds to 13)', () => {
     const [l] = computeGst([{ ...line, qtyMilli: 1000, rate: 10000, gstRateBp: 25 }], '27', '27');

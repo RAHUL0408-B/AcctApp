@@ -125,7 +125,7 @@ describe('composition scheme', () => {
     await put(org, '/settings', { lutNumber: 'AD2704260099999' }).expect(200);
     await post(org, '/documents', { docType: 'invoice', contactId: us, issueDate: today, supplyType: 'export_lut', lines: [line(10000)] }).expect(400);
     const g = (await get(org, `/reports/gstr3b?from=${fy.start}&to=${today}`).expect(200)).body;
-    expect(g.section4_itcAvailable).toEqual({ igst: 0, cgst: 0, sgst: 0 });
+    expect(g.section4_itcAvailable).toEqual({ igst: 0, cgst: 0, sgst: 0, cess: 0 });
   });
 });
 

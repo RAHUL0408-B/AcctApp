@@ -6,6 +6,7 @@ import { Clients } from './pages/Clients';
 import { NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
 import { Security } from './pages/Security';
 import { TeamPage } from './pages/Team';
+import { SETUP_SECTIONS } from './pages/Settings';
 import { Billing, Help, Privacy } from './pages/Account';
 import { PracticeOverview } from './pages/PracticeOverview';
 import { favouriteReports } from './pages/Reports';
@@ -21,10 +22,14 @@ export interface Org { id: number; name: string; gstin: string | null; firmId: n
 function useRoute() {
   const read = () => location.hash.replace(/^#/, '') || '/clients';
   const [route, setRoute] = useState(read());
-  useEffect(() => { const f = () => setRoute(read()); window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f); }, []);
+  useEffect(() => { const f = () => { const r = read(); visited(r); setRoute(r); }; window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f); }, []);
   return route;
 }
 const navigate = (path: string) => { location.hash = path; };
+/** Screens visited in this tab, so Back knows whether there is an earlier screen of the app to return to. */
+const trail: string[] = [location.hash.replace(/^#/, '') || '/clients'];
+const visited = (r: string) => { if (trail.length > 1 && trail[trail.length - 2] === r) trail.pop(); else if (trail[trail.length - 1] !== r) trail.push(r); };
+const inAppSteps = { get current() { return trail.length - 1; } };
 
 /** The bar uses one accent colour (the brand violet): a soft light tab for the current section, and the same violet tint inside every menu. */
 interface Tone { pill: string; on: string; bar: string; item: string; itemOn: string; head: string }
@@ -188,8 +193,22 @@ export function App() {
   const crumb: [string, string?] | null = (() => {
     if (!org) return null;
     const hit = (strict: boolean) => { for (const g of NAV) for (const i of g.items) if (i.key === page && (strict ? !i.sub || i.sub === sub : true)) return [g.group, g.items.length === 1 ? undefined : i.label] as [string, string?]; return null; };
+    if (page === 'setup') return ['Settings', SETUP_SECTIONS[sub ?? '']] as [string, string?];
     return hit(true) ?? hit(false);
   })();
+
+  // Back button: not on the start pages (client list, a client's dashboard), where there is nothing to go back to.
+  // Elsewhere it returns to the previous screen; opened straight from a link, it goes to the page above this one.
+  const back: string | null = (() => {
+    if (route === '/clients' || route === '/' || route === '') return null;
+    if (!m) return '/clients';
+    if (!org || page === 'dashboard') return null;
+    const base = `/o/${org.id}`;
+    if (sub === 'new') return `${base}/${page}`;
+    if (page === 'setup' || page === 'settings' || page === 'sales-settings' || page === 'purchases-settings') return `${base}/settings-hub`;
+    return `${base}/dashboard`;
+  })();
+  const backLabel = !back ? '' : back === '/clients' ? 'Clients' : back.endsWith('/settings-hub') ? 'Settings' : back.endsWith('/dashboard') ? 'Home' : 'the list';
 
   const content = (
     <>
@@ -210,15 +229,15 @@ export function App() {
 
       <main className="px-6 py-6">
         <div className="mx-auto max-w-7xl space-y-5">
-          {route !== '/clients' && (
-            <button onClick={() => (history.length > 1 ? history.back() : navigate(org ? `/o/${org.id}/dashboard` : '/clients'))} aria-label="Go back"
+          {back && (
+            <button onClick={() => (inAppSteps.current > 0 ? history.back() : navigate(back))} aria-label="Go back" title={`Back to ${backLabel}`}
               className="flex items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-slate-600 hover:bg-slate-200/60 hover:text-slate-900">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M15 18l-6-6 6-6" /></svg>Back
             </button>
           )}
           <ErrorBoundary key={route}>
             {route === '/clients' && <Clients me={me} orgs={orgs} firmRole={firmRole?.role} onOpen={(id) => navigate(`/o/${id}/dashboard`)} onChanged={load} />}
-            {m && org && <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} />}
+            {m && org && <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} canTeam={canTeam} />}
             {m && !org && <p className="text-sm text-slate-600">That client was not found, or you do not have access.</p>}
             {route === '/practice' && <PracticeOverview onOpen={(id) => navigate(`/o/${id}/dashboard`)} />}
             {route === '/security' && <Security me={me} onChanged={load} />}
@@ -248,7 +267,7 @@ export function App() {
               return (<>
                 {org && <>
                   <div className="flex items-center gap-3 px-5 py-2"><span className="flex h-9 w-9 items-center justify-center rounded bg-brand-100 text-xs font-bold text-brand-800">{initialsOf(org.name)}</span><span className="font-semibold">{org.name}</span></div>
-                  {!narrow && <MenuItem onClick={() => to(`/o/${org.id}/settings`)}>Settings</MenuItem>}
+                  {!narrow && <MenuItem onClick={() => to(`/o/${org.id}/settings-hub`)}>Settings</MenuItem>}
                   {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
                   {!narrow && <MenuItem onClick={() => to('/billing')}>Subscription and billing</MenuItem>}
                   <MenuDivider />

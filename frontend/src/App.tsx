@@ -9,6 +9,7 @@ import { TeamPage } from './pages/Team';
 import { Billing, Help, Privacy } from './pages/Account';
 import { PracticeOverview } from './pages/PracticeOverview';
 import { favouriteReports } from './pages/Reports';
+import { Sidebar } from './Sidebar';
 
 export interface Me {
   id: number; email: string; fullName: string; twoFactorEnabled: boolean; emailVerified: boolean; lastLogin: { at: string; ip: string | null } | null;
@@ -110,26 +111,17 @@ const MenuItem = ({ active, onClick, children, right, shortcut }: { active?: boo
 const MenuHeading = ({ children }: { children: ReactNode }) => { const tone = useContext(ToneCtx); return <p className={`px-5 pb-1 pt-2 text-xs font-bold uppercase tracking-wide ${tone.head}`}>{children}</p>; };
 const MenuDivider = () => <hr className="my-2 border-slate-200" />;
 
-type Section = { heading?: string; items: NavItem[] };
-/** Split a menu's entries into sections: a new one starts at every heading or divider. */
-const sectionsOf = (items: NavItem[]): Section[] => {
-  const out: Section[] = [];
-  for (const i of items) { if (!out.length || i.heading || i.divider) out.push({ heading: i.heading, items: [i] }); else out[out.length - 1].items.push(i); }
-  return out;
-};
-/** A menu with three or more headed sections is laid out in columns instead of one long list. */
-const isWide = (items: NavItem[]) => sectionsOf(items).filter((x) => x.heading).length >= 3;
-const hrefOf = (i: NavItem) => (i.sub ? `${i.key}/${i.sub}` : i.key);
 
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(!!getToken());
-  const [openGroup, setOpenGroup] = useState<string | null>(null); // which top-bar section menu is open
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [mobileGroup, setMobileGroup] = useState<string | null>(null);
+  // The side menu can shrink to icons; remembered in this browser.
+  const [collapsed, setCollapsedState] = useState(() => { try { return localStorage.getItem('sidebar-collapsed') === '1'; } catch { return false; } });
+  const setCollapsed = (v: boolean) => { setCollapsedState(v); try { localStorage.setItem('sidebar-collapsed', v ? '1' : '0'); } catch { /* storage may be off */ } };
   const route = useRoute();
-  useEffect(() => { setOpenGroup(null); setMobileOpen(false); }, [route]);
+  useEffect(() => { setMobileOpen(false); }, [route]);
 
   const load = useCallback(async () => {
     const token = getToken(); // if the user logs out (or in as someone else) while this runs, drop the stale result
@@ -171,6 +163,8 @@ export function App() {
     if (route === target && target.endsWith('/new')) { navigate(target.slice(0, -4)); setTimeout(() => navigate(target), 0); } else navigate(target);
   };
 
+  const sideGroups = NAV.map((g) => ({ group: g.group, items: g.items.filter(visible) })).filter((g) => g.items.length > 0);
+
   // Alt + letter shortcuts from the "+" menu.
   useEffect(() => {
     if (!org || !canPost || !createItems.length) return;
@@ -197,148 +191,8 @@ export function App() {
     return hit(true) ?? hit(false);
   })();
 
-  return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-30 bg-nav text-white shadow-md">
-        <div className="flex h-14 items-center gap-1 px-3">
-          {org && <button className="mr-1 flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 xl:hidden" aria-label={mobileOpen ? 'Close menu' : 'Open menu'} aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d={mobileOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} /></svg></button>}
-          <button className="mr-1 flex items-center gap-2 rounded-md px-2 py-1 text-lg font-bold tracking-tight hover:bg-white/10" onClick={() => navigate('/clients')} aria-label={`${APP_NAME} home`}><Logo /><span className="hidden 2xl:inline">{APP_NAME}</span></button>
-
-          <Menu label="Organisation menu" width="w-80" trigger={
-            <span className="flex max-w-24 items-center gap-2 text-sm font-semibold sm:max-w-56"><span className="truncate">{org?.name ?? 'All clients'}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></span>}>
-            {(close) => {
-              const to = (p: string) => { close(); navigate(p); };
-              return (<>
-                {org && <>
-                  <div className="flex items-center gap-3 px-5 py-2"><span className="flex h-9 w-9 items-center justify-center rounded bg-brand-100 text-xs font-bold text-brand-800">{initialsOf(org.name)}</span><span className="font-semibold">{org.name}</span></div>
-                  {!narrow && <MenuItem onClick={() => to(`/o/${org.id}/settings`)}>Settings</MenuItem>}
-                  {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
-                  {!narrow && <MenuItem onClick={() => to('/billing')}>Subscription and billing</MenuItem>}
-                  <MenuDivider />
-                </>}
-                <MenuHeading>Switch organisation</MenuHeading>
-                <div className="max-h-64 overflow-y-auto">
-                  {orgs.length === 0 && <p className="px-5 py-2 text-sm text-slate-500">No clients yet.</p>}
-                  {orgs.map((o) => <MenuItem key={o.id} active={o.id === org?.id} onClick={() => to(`/o/${o.id}/dashboard`)}>
-                    <span className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded bg-slate-100 text-[10px] font-bold text-slate-600">{initialsOf(o.name)}</span>{o.name}</span></MenuItem>)}
-                </div>
-                <MenuItem onClick={() => to('/clients')}>+ Add new organisation</MenuItem>
-                <MenuDivider />
-                <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice overview</MenuItem>
-                <MenuItem active={route === '/clients'} onClick={() => to('/clients')}>All clients</MenuItem>
-              </>);
-            }}
-          </Menu>
-
-          {org && (
-            <nav className="hidden items-center xl:flex" aria-label="Client sections">
-              {NAV.map((g) => {
-                const items = g.items.filter(visible);
-                if (!items.length) return null;
-                const groupActive = items.some(isActive);
-                if (items.length === 1) {
-                  const i = items[0];
-                  return <button key={g.group} aria-current={groupActive ? 'page' : undefined} onClick={() => goOrg(hrefOf(i))} onMouseEnter={() => setOpenGroup(null)}
-                    className={`relative mx-0.5 flex h-9 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-white ${groupActive ? `${BAR.on} after:absolute after:inset-x-2 after:-bottom-[10px] after:h-0.5 after:rounded after:bg-white` : BAR.pill}`}>{i.label}</button>;
-                }
-                const wide = isWide(items);
-                return (
-                  <Menu key={g.group} label={g.group} tone={BAR} active={groupActive} width={wide ? 'w-[46rem]' : 'min-w-60'}
-                    open={openGroup === g.group} onOpenChange={(v) => setOpenGroup(v ? g.group : null)} onHover={() => openGroup && openGroup !== g.group && setOpenGroup(g.group)}>
-                    {(close) => {
-                      const to = (p: string) => { close(); goOrg(p); };
-                      const entry = (i: NavItem, n: number) => <MenuItem key={`${i.key}-${i.sub ?? ''}-${n}`} active={isActive(i)} onClick={() => to(hrefOf(i))} right={i.gear ? <Icon d={ICONS.gear} size={16} /> : undefined}>{i.label}</MenuItem>;
-                      if (wide) {
-                        // Columns: one per heading, so a long list stays on one screen and is easy to scan.
-                        return (
-                          <div className="grid grid-cols-3 divide-x divide-slate-100">
-                            {sectionsOf(items).map((sec, n) => (
-                              <div key={n}>{sec.heading && <MenuHeading>{sec.heading}</MenuHeading>}{sec.items.map(entry)}</div>))}
-                          </div>);
-                      }
-                      const favs = g.group === 'Reporting' ? favouriteReports() : [];
-                      return (<>
-                        {items.map((i, n) => (
-                          <div key={`${i.key}-${i.sub ?? ''}-${n}`}>
-                            {i.divider && <MenuDivider />}
-                            {i.heading && <MenuHeading>{i.heading}</MenuHeading>}
-                            {entry(i, n)}
-                          </div>))}
-                        {g.group === 'Reporting' && <>
-                          <MenuDivider /><MenuHeading>Favourite reports ★</MenuHeading>
-                          {favs.length === 0 ? <p className="px-5 py-1 text-xs text-slate-500">Star a report to add it here.</p>
-                            : favs.map((f) => <MenuItem key={f.key} active={page === 'reports' && sub === f.key} onClick={() => to(`reports/${f.key}`)}>{f.label}</MenuItem>)}
-                        </>}
-                      </>);
-                    }}
-                  </Menu>
-                );
-              })}
-            </nav>
-          )}
-
-          <div className="ml-auto flex items-center gap-1">
-            {org && canPost && createItems.length > 0 && (
-              <Menu label="Create new" align="right" width="w-72" trigger={<Icon d={ICONS.plus} />}>
-                {(close) => (<>
-                  <MenuHeading>Create new</MenuHeading>
-                  {createItems.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); openNew(p); }}>{l}</MenuItem>)}
-                </>)}
-              </Menu>
-            )}
-            {org && !narrow && (
-              <Menu label="Search" align="right" width="w-[28rem]" trigger={<Icon d={ICONS.search} />}>
-                {(close) => <SearchPanel org={org} onPick={(p) => { close(); goOrg(p); }} />}
-              </Menu>
-            )}
-            <button aria-label="Help" title="Help" onClick={() => navigate('/help')} className="hidden h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 sm:flex"><Icon d={ICONS.help} /></button>
-            {org && !narrow && <Notifications org={org} onPick={(p) => goOrg(p)} />}
-            <nav aria-label="Account" className="ml-1">
-              <Menu label="Account menu" align="right" width="w-64" trigger={<span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-xs font-bold ring-2 ring-white/30">{initialsOf(me.fullName)}</span>}>
-                {(close) => {
-                  const to = (p: string) => { close(); navigate(p); };
-                  return (<>
-                    <div className="border-b border-slate-100 px-5 pb-2"><p className="text-sm font-semibold">{me.fullName}</p><p className="text-xs text-slate-500">{me.email}</p></div>
-                    <MenuItem active={route === '/clients'} onClick={() => to('/clients')}>Clients</MenuItem>
-                    {canTeam && <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice</MenuItem>}
-                    {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
-                    <MenuDivider />
-                    {([['/security', 'Security'], ['/billing', 'Billing'], ['/privacy', 'Privacy'], ['/help', 'Help']] as const).map(([p, l]) => <MenuItem key={p} active={route === p} onClick={() => to(p)}>{l}</MenuItem>)}
-                    <MenuDivider />
-                    <MenuItem onClick={() => { close(); logout(); }}>Log out</MenuItem>
-                  </>);
-                }}
-              </Menu>
-            </nav>
-          </div>
-        </div>
-        {org && mobileOpen && (
-          <nav aria-label="Small-screen menu" className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t border-white/10 bg-nav xl:hidden">
-            {NAV.map((g) => {
-              const items = g.items.filter(visible);
-              if (!items.length) return null;
-              const groupActive = items.some(isActive);
-              const tone = BAR;
-              if (items.length === 1) return <button key={g.group} onClick={() => goOrg(hrefOf(items[0]))} aria-current={groupActive ? 'page' : undefined}
-                className={`flex w-full items-center px-5 py-3 text-left text-sm font-medium ${groupActive ? tone.on : tone.pill}`}>{items[0].label}</button>;
-              const opened = mobileGroup === g.group;
-              return (
-                <div key={g.group}>
-                  <button aria-expanded={opened} onClick={() => setMobileGroup(opened ? null : g.group)}
-                    className={`flex w-full items-center justify-between px-5 py-3 text-left text-sm font-medium ${groupActive || opened ? tone.on : tone.pill}`}>{g.group}
-                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className={`transition-transform ${opened ? 'rotate-180' : ''}`}><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></button>
-                  {opened && <ToneCtx.Provider value={tone}><div className="bg-white py-1 text-slate-800">
-                    {sectionsOf(items).map((sec, n) => (
-                      <div key={n}>{sec.heading && <MenuHeading>{sec.heading}</MenuHeading>}
-                        {sec.items.map((i, k) => <MenuItem key={`${i.key}-${i.sub ?? ''}-${k}`} active={isActive(i)} onClick={() => goOrg(hrefOf(i))} right={i.gear ? <Icon d={ICONS.gear} size={16} /> : undefined}>{i.label}</MenuItem>)}</div>))}
-                  </div></ToneCtx.Provider>}
-                </div>);
-            })}
-          </nav>
-        )}
-      </header>
-
+  const content = (
+    <>
       {notice && <NoticeBar text={notice} onClose={() => setNotice('')} />}
       {!me.emailVerified && <VerifyBar email={me.email} />}
       {org && (
@@ -376,6 +230,97 @@ export function App() {
           </ErrorBoundary>
         </div>
       </main>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-30 bg-nav text-white shadow-md">
+        <div className="flex h-14 items-center gap-1 px-3">
+          {org && <button className="mr-1 flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 lg:hidden" aria-label={mobileOpen ? 'Close menu' : 'Open menu'} aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d={mobileOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} /></svg></button>}
+          <button className="mr-1 flex items-center gap-2 rounded-md px-2 py-1 text-lg font-bold tracking-tight hover:bg-white/10" onClick={() => navigate('/clients')} aria-label={`${APP_NAME} home`}><Logo /><span className="hidden 2xl:inline">{APP_NAME}</span></button>
+
+          <Menu label="Organisation menu" width="w-80" trigger={
+            <span className="flex max-w-24 items-center gap-2 text-sm font-semibold sm:max-w-56"><span className="truncate">{org?.name ?? 'All clients'}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></span>}>
+            {(close) => {
+              const to = (p: string) => { close(); navigate(p); };
+              return (<>
+                {org && <>
+                  <div className="flex items-center gap-3 px-5 py-2"><span className="flex h-9 w-9 items-center justify-center rounded bg-brand-100 text-xs font-bold text-brand-800">{initialsOf(org.name)}</span><span className="font-semibold">{org.name}</span></div>
+                  {!narrow && <MenuItem onClick={() => to(`/o/${org.id}/settings`)}>Settings</MenuItem>}
+                  {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
+                  {!narrow && <MenuItem onClick={() => to('/billing')}>Subscription and billing</MenuItem>}
+                  <MenuDivider />
+                </>}
+                <MenuHeading>Switch organisation</MenuHeading>
+                <div className="max-h-64 overflow-y-auto">
+                  {orgs.length === 0 && <p className="px-5 py-2 text-sm text-slate-500">No clients yet.</p>}
+                  {orgs.map((o) => <MenuItem key={o.id} active={o.id === org?.id} onClick={() => to(`/o/${o.id}/dashboard`)}>
+                    <span className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded bg-slate-100 text-[10px] font-bold text-slate-600">{initialsOf(o.name)}</span>{o.name}</span></MenuItem>)}
+                </div>
+                <MenuItem onClick={() => to('/clients')}>+ Add new organisation</MenuItem>
+                <MenuDivider />
+                <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice overview</MenuItem>
+                <MenuItem active={route === '/clients'} onClick={() => to('/clients')}>All clients</MenuItem>
+              </>);
+            }}
+          </Menu>
+
+          <div className="ml-auto flex items-center gap-1">
+            {org && canPost && createItems.length > 0 && (
+              <Menu label="Create new" align="right" width="w-72" trigger={<Icon d={ICONS.plus} />}>
+                {(close) => (<>
+                  <MenuHeading>Create new</MenuHeading>
+                  {createItems.map(([l, k, p]) => <MenuItem key={l} shortcut={k} onClick={() => { close(); openNew(p); }}>{l}</MenuItem>)}
+                </>)}
+              </Menu>
+            )}
+            {org && !narrow && (
+              <Menu label="Search" align="right" width="w-[28rem]" trigger={<Icon d={ICONS.search} />}>
+                {(close) => <SearchPanel org={org} onPick={(p) => { close(); goOrg(p); }} />}
+              </Menu>
+            )}
+            <button aria-label="Help" title="Help" onClick={() => navigate('/help')} className="hidden h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 sm:flex"><Icon d={ICONS.help} /></button>
+            {org && !narrow && <Notifications org={org} onPick={(p) => goOrg(p)} />}
+            <nav aria-label="Account" className="ml-1">
+              <Menu label="Account menu" align="right" width="w-64" trigger={<span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-xs font-bold ring-2 ring-white/30">{initialsOf(me.fullName)}</span>}>
+                {(close) => {
+                  const to = (p: string) => { close(); navigate(p); };
+                  return (<>
+                    <div className="border-b border-slate-100 px-5 pb-2"><p className="text-sm font-semibold">{me.fullName}</p><p className="text-xs text-slate-500">{me.email}</p></div>
+                    <MenuItem active={route === '/clients'} onClick={() => to('/clients')}>Clients</MenuItem>
+                    {canTeam && <MenuItem active={route === '/practice'} onClick={() => to('/practice')}>Practice</MenuItem>}
+                    {canTeam && <MenuItem active={route === '/team'} onClick={() => to('/team')}>People and access</MenuItem>}
+                    <MenuDivider />
+                    {([['/security', 'Security'], ['/billing', 'Billing'], ['/privacy', 'Privacy'], ['/help', 'Help']] as const).map(([p, l]) => <MenuItem key={p} active={route === p} onClick={() => to(p)}>{l}</MenuItem>)}
+                    <MenuDivider />
+                    <MenuItem onClick={() => { close(); logout(); }}>Log out</MenuItem>
+                  </>);
+                }}
+              </Menu>
+            </nav>
+          </div>
+        </div>
+      </header>
+
+      {org ? (
+        <div className="flex">
+          {/* Left side menu (wide screens); on small screens the same menu opens as a drawer */}
+          <aside className={`sticky top-14 hidden h-[calc(100vh-3.5rem)] shrink-0 border-r border-slate-200 bg-white transition-[width] duration-200 lg:block ${collapsed ? 'w-16' : 'w-64'}`}>
+            <Sidebar org={org} groups={sideGroups} isActive={isActive} onGo={goOrg} favourites={favouriteReports()} collapsed={collapsed}
+              onExpand={() => setCollapsed(false)} onToggleCollapse={() => setCollapsed(!collapsed)} />
+          </aside>
+          {mobileOpen && (
+            <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+              <button aria-label="Close menu" className="absolute inset-0 h-full w-full cursor-default bg-slate-900/40" onClick={() => setMobileOpen(false)} />
+              <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] overflow-hidden bg-white shadow-2xl">
+                <Sidebar org={org} groups={sideGroups} isActive={isActive} onGo={(p) => { setMobileOpen(false); goOrg(p); }} favourites={favouriteReports()} showCollapse={false} />
+              </aside>
+            </div>)}
+          <div className="min-w-0 flex-1">{content}</div>
+        </div>
+      ) : content}
     </div>
   );
 }

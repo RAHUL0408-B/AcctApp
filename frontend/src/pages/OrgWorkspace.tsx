@@ -21,14 +21,15 @@ import { Journal } from './Journal';
 import { Money } from './Money';
 import { Projects } from './Projects';
 import { SettingsHub, SettingsSection } from './Settings';
+import { BatchPayments } from './Batches';
 
-interface Account { id: number; code: string; name: string; type: string; group: string }
+interface Account { id: number; code: string; name: string; type: string; group: string; itcBlocked?: boolean }
 interface Entry { id: number; date: string; narration: string; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface TB { accounts: { code: string; name: string; debit: number; credit: number }[]; totalDebit: number; totalCredit: number; balanced: boolean }
 
 export type PageKey = 'dashboard' | 'invoices' | 'quotes' | 'recurring' | 'customers' | 'bills' | 'purchase-orders' | 'suppliers' | 'bank' | 'journal' | 'coa' | 'assets' | 'items' | 'reports' | 'tasks' | 'files' | 'import' | 'schedules' | 'settings'
   | 'approvals' | 'expenses' | 'inventory' | 'budgets' | 'year-end' | 'tracking' | 'export-templates' | 'compliance'
-  | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings' | 'settings-hub' | 'setup';
+  | 'sales-overview' | 'purchases-overview' | 'contacts' | 'bank-rules' | 'money' | 'projects' | 'sales-settings' | 'purchases-settings' | 'settings-hub' | 'setup' | 'recurring-bills' | 'batch-payments';
 
 /** One menu entry. `sub` opens a page at a particular tab or report; heading, divider and gear only change how the menu looks. */
 export interface NavItem { key: PageKey; label: string; sub?: string; manage?: boolean; owner?: boolean; for?: ('sales' | 'employee')[]; heading?: string; divider?: boolean; gear?: boolean }
@@ -41,7 +42,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { key: 'items', label: 'Products and services', for: ['sales'] }, { key: 'customers', label: 'Customers', for: ['sales'] },
     { key: 'sales-settings', label: 'Sales settings', divider: true, gear: true, manage: true }] },
   { group: 'Purchases', items: [
-    { key: 'purchases-overview', label: 'Purchases overview' }, { key: 'bills', label: 'Bills' }, { key: 'purchase-orders', label: 'Purchase orders' },
+    { key: 'purchases-overview', label: 'Purchases overview' }, { key: 'bills', label: 'Bills' }, { key: 'recurring-bills', label: 'Repeating bills' }, { key: 'batch-payments', label: 'Batch payments' }, { key: 'purchase-orders', label: 'Purchase orders' },
     { key: 'expenses', label: 'Expense claims', for: ['employee'] }, { key: 'approvals', label: 'Awaiting approval' }, { key: 'suppliers', label: 'Suppliers' },
     { key: 'purchases-settings', label: 'Purchases settings', divider: true, gear: true, manage: true }] },
   { group: 'Reporting', items: [
@@ -68,6 +69,20 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Settings', items: [{ key: 'settings-hub', label: 'Settings' }] },
 ];
 
+/** Which access area (see People and access) a menu entry belongs to; null = always shown. */
+export function areaOfPage(i: { key: PageKey; sub?: string }): string | null {
+  if (i.key === 'reports' && ['gstr1', 'gstr3b', 'tds'].includes(i.sub ?? '')) return 'tax';
+  const map: Partial<Record<PageKey, string>> = {
+    'sales-overview': 'sales', invoices: 'sales', quotes: 'sales', recurring: 'sales', items: 'sales',
+    'purchases-overview': 'purchases', bills: 'purchases', 'recurring-bills': 'purchases', 'batch-payments': 'purchases', 'purchase-orders': 'purchases', expenses: 'purchases', approvals: 'purchases',
+    reports: 'reports', compliance: 'tax', bank: 'bank', 'bank-rules': 'bank', money: 'bank',
+    coa: 'accounting', journal: 'accounting', assets: 'accounting', inventory: 'accounting', budgets: 'accounting', tracking: 'accounting', 'year-end': 'accounting',
+    contacts: 'contacts', customers: 'contacts', suppliers: 'contacts', projects: 'projects',
+    import: 'settings', schedules: 'settings', 'export-templates': 'settings', settings: 'settings', 'sales-settings': 'settings', 'purchases-settings': 'settings',
+  };
+  return map[i.key] ?? null;
+}
+
 const PLURAL: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 
 export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, canTeam = false }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null; canTeam?: boolean }) {
@@ -88,6 +103,8 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, can
     case 'invoices': return <Documents org={org} kind="sales" canPost={canPost} accounts={accounts} startNew={isNew} restricted={narrow} />;
     case 'quotes': return <PreDocs org={org} kind="quote" canPost={canPost} accounts={accounts} startNew={isNew} />;
     case 'recurring': return <Recurring org={org} canPost={canPost} accounts={accounts} />;
+    case 'recurring-bills': return <Recurring key="bill" org={org} canPost={canPost} accounts={accounts} kind="bill" />;
+    case 'batch-payments': return <BatchPayments org={org} canPost={canPost} go={go} />;
     case 'customers': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} only="customer" startNew={isNew} restricted={narrow} />;
     case 'contacts': return <Contacts org={org} canPost={canPost} canManage={canManage} accounts={accounts} startNew={isNew} />;
     case 'bills': return <Documents org={org} kind="purchases" canPost={canPost} accounts={accounts} startNew={isNew} />;
@@ -173,9 +190,12 @@ export function Chart({ org, accounts, canManage, reload }: { org: Org; accounts
           <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Button disabled={busy} onClick={() => run(async () => { await api(`/orgs/${org.id}/accounts`, { body: f }); setF({ ...f, code: '', name: '' }); reload(); })}>Add</Button></div>
         </Card>
       )}
+      {canManage && <p className="text-xs text-slate-500">Tick <b>17(5)</b> on an expense account (motor car, food, club fees, personal use…) and the GST on bills coded to it is added to the cost, not claimed as input credit.</p>}
       {['asset', 'liability', 'equity', 'income', 'expense'].map((t) => (
         <Card key={t} title={PLURAL[t]}>
-          <ul className="grid gap-x-8 text-sm md:grid-cols-2">{(groups[t] ?? []).map((a) => <li key={a.id} className="flex justify-between border-b border-slate-100 py-1"><span>{a.code} · {a.name}</span><span className="text-slate-400">{a.group}</span></li>)}</ul>
+          <ul className="grid gap-x-8 text-sm md:grid-cols-2">{(groups[t] ?? []).map((a) => <li key={a.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-1"><span>{a.code} · {a.name}{a.itcBlocked && <span className="ml-2 rounded bg-amber-100 px-1.5 text-[11px] text-amber-800" title="GST on bills coded here is not claimed (section 17(5))">no ITC</span>}</span>
+            <span className="flex items-center gap-3 text-slate-400">{a.group}{canManage && t === 'expense' && <label className="flex items-center gap-1 text-[11px] text-slate-500" title="Section 17(5): GST on bills coded to this account is added to the cost instead of being claimed">
+              <input type="checkbox" aria-label={`Blocked credit ${a.code}`} checked={!!a.itcBlocked} onChange={(e) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/itc-blocked`, { method: 'PUT', body: { blocked: e.target.checked } }); reload(); })} />17(5)</label>}</span></li>)}</ul>
         </Card>
       ))}
     </>

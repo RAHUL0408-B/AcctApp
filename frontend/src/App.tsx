@@ -3,7 +3,7 @@ import { api, getToken, setToken } from './api';
 import { APP_NAME, ErrorBoundary, Logo } from './ui';
 import { AuthScreen } from './pages/Auth';
 import { Clients } from './pages/Clients';
-import { NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
+import { areaOfPage, NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
 import { Security } from './pages/Security';
 import { TeamPage } from './pages/Team';
 import { SETUP_SECTIONS } from './pages/Settings';
@@ -14,7 +14,7 @@ import { Sidebar } from './Sidebar';
 
 export interface Me {
   id: number; email: string; fullName: string; twoFactorEnabled: boolean; emailVerified: boolean; lastLogin: { at: string; ip: string | null } | null;
-  memberships: { firmId: number; firmName: string; orgId: number | null; role: string }[];
+  memberships: { firmId: number; firmName: string; orgId: number | null; role: string; access?: Record<string, string> | null }[];
 }
 export interface Org { id: number; name: string; gstin: string | null; firmId: number }
 
@@ -158,7 +158,10 @@ export function App() {
   // Sales people and employees see a few pages only, so their "+" menu, search and notifications are narrower or absent.
   const narrow = role === 'sales' || role === 'employee';
   const createItems = narrow ? (role === 'sales' ? CREATE.filter(([, k]) => ['I', 'Q', 'C'].includes(k)) : []) : CREATE;
-  const visible = (i: NavItem) => (!i.manage || canManage) && (!i.owner || role === 'owner') && (!narrow || !!i.for?.includes(role as 'sales' | 'employee'));
+  // Access per person: sections the firm owner closed for this person are left out of the menu.
+  const access = org ? (me?.memberships.find((x) => x.orgId === org.id) ?? me?.memberships.find((x) => x.orgId === null && x.firmId === org.firmId))?.access ?? null : null;
+  const allowed = (i: NavItem) => { const a = areaOfPage(i); return !access || !a || access[a] !== 'none'; };
+  const visible = (i: NavItem) => (!i.manage || canManage) && (!i.owner || role === 'owner') && (!narrow || !!i.for?.includes(role as 'sales' | 'employee')) && allowed(i);
 
   // Opening "new invoice" (or bill, contact...) while already on that address does nothing by itself, for example right
   // after saving one. Step to the list and back so a fresh blank form opens every time.
@@ -237,7 +240,9 @@ export function App() {
           )}
           <ErrorBoundary key={route}>
             {route === '/clients' && <Clients me={me} orgs={orgs} firmRole={firmRole?.role} onOpen={(id) => navigate(`/o/${id}/dashboard`)} onChanged={load} />}
-            {m && org && <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} canTeam={canTeam} />}
+            {m && org && (allowed({ key: page, sub, label: '' })
+              ? <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} canTeam={canTeam} />
+              : <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900"><p className="font-semibold">You do not have access to this part of {org.name}'s books.</p><p className="mt-1">The firm owner has limited what you can open here. Ask them if you need it.</p></div>)}
             {m && !org && <p className="text-sm text-slate-600">That client was not found, or you do not have access.</p>}
             {route === '/practice' && <PracticeOverview onOpen={(id) => navigate(`/o/${id}/dashboard`)} />}
             {route === '/security' && <Security me={me} onChanged={load} />}

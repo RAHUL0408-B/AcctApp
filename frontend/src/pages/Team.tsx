@@ -6,14 +6,32 @@ import type { Me, Org } from '../App';
 import { Badge, Empty, PageHeader } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
-interface Member { id: number; userId: number; name: string; email: string; emailVerified: boolean; twoFactor: boolean; role: string; orgId: number | null; orgName: string | null }
+type Level = 'none' | 'view' | 'edit';
+interface Member { id: number; userId: number; name: string; email: string; emailVerified: boolean; twoFactor: boolean; role: string; orgId: number | null; orgName: string | null; access: Record<string, Level> | null }
 interface Invitation { id: number; email: string; role: string; orgId: number | null; orgName: string | null; expiresAt: string; expired: boolean; invitedBy: string }
-interface Team { canEdit: boolean; you: number; roles: Record<string, string>; plan: { name: string; maxMembers: number; people: number }; members: Member[]; invitations: Invitation[] }
+interface Team { canEdit: boolean; you: number; roles: Record<string, string>; areas: { key: string; text: string }[]; plan: { name: string; maxMembers: number; people: number }; members: Member[]; invitations: Invitation[] }
 
 const ROLE_ORDER = ['owner', 'accountant', 'staff', 'sales', 'employee', 'client'];
 const LABEL: Record<string, string> = { owner: 'Owner', accountant: 'Accountant', staff: 'Staff', client: 'Client', sales: 'Sales', employee: 'Employee' };
 /** These roles always belong to one client; the others can cover the whole firm. */
 const ONE_CLIENT = new Set(['client', 'sales', 'employee']);
+/** Roles that can be limited area by area (owners always have everything; sales and employee already see a few pages). */
+const LIMITABLE = new Set(['accountant', 'staff', 'client']);
+const AREA_NAME: Record<string, string> = { sales: 'Sales', purchases: 'Purchases', bank: 'Bank', accounting: 'Accounting', reports: 'Reports', tax: 'Tax and compliance', contacts: 'Contacts', projects: 'Projects', settings: 'Settings' };
+/** Ready-made access sets, like Xero's "bank only" and "read only" users. */
+const PRESETS: [string, (a: string) => Level][] = [
+  ['Full access', () => 'edit'],
+  ['Bank only', (a) => (a === 'bank' ? 'edit' : a === 'contacts' ? 'view' : 'none')],
+  ['Sales and contacts', (a) => (a === 'sales' || a === 'contacts' ? 'edit' : 'none')],
+  ['Purchases and bank', (a) => (a === 'purchases' || a === 'bank' ? 'edit' : a === 'contacts' ? 'view' : 'none')],
+  ['Reports only', (a) => (a === 'reports' || a === 'tax' ? 'view' : 'none')],
+  ['Look at everything', () => 'view'],
+];
+const summary = (a: Record<string, Level> | null) => {
+  if (!a) return 'Everything their role allows';
+  const none = Object.entries(a).filter(([, v]) => v === 'none').map(([k]) => AREA_NAME[k]), view = Object.entries(a).filter(([, v]) => v === 'view').map(([k]) => AREA_NAME[k]);
+  return [none.length ? `No ${none.join(', ')}` : '', view.length ? `View only: ${view.join(', ')}` : ''].filter(Boolean).join(' · ');
+};
 
 export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
   const firms = me.memberships.filter((m) => m.orgId === null && (m.role === 'owner' || m.role === 'accountant'));
@@ -22,6 +40,7 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
   const [f, setF] = useState({ email: '', role: 'staff', orgId: '' });
   const [link, setLink] = useState('');
   const [ok, setOk] = useState('');
+  const [limit, setLimit] = useState<{ m: Member; a: Record<string, Level> } | null>(null);
   const { error, busy, run } = useAction();
   const load = useCallback(() => { if (firmId) api<Team>(`/firms/${firmId}/team`).then(setTeam); }, [firmId]);
   useEffect(() => { load(); }, [load]);
@@ -41,6 +60,12 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
   const setRole = (m: Member, role: string) => run(async () => {
     const orgId = ONE_CLIENT.has(role) ? (m.orgId ?? Number(clients[0]?.id)) : null;
     await api(`/firms/${firmId}/members/${m.id}`, { method: 'PUT', body: { role, orgId } }); setOk(`${m.name} is now ${LABEL[role]}${orgId && ONE_CLIENT.has(role) ? ` for ${clients.find((c) => c.id === orgId)?.name ?? 'the client'}` : ''}.`); load();
+  });
+  const openLimit = (m: Member) => setLimit({ m, a: Object.fromEntries(team.areas.map((x) => [x.key, m.access?.[x.key] ?? 'edit'])) });
+  const saveLimit = () => run(async () => {
+    if (!limit) return;
+    const r = await api(`/firms/${firmId}/members/${limit.m.id}/access`, { method: 'PUT', body: { access: limit.a } });
+    setOk(r.access ? `${limit.m.name}'s access is limited: ${summary(r.access)}.` : `${limit.m.name} has everything their role allows again.`); setLimit(null); load();
   });
   const remove = (m: Member) => run(async () => {
     if (!window.confirm(`Remove ${m.name}'s access${m.orgName ? ` to ${m.orgName}` : ''}? They can no longer open these books.`)) return;
@@ -74,7 +99,7 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
       )}
 
       <Card title={`People (${team.members.length})`}>
-        <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Name</th><th>Email</th><th>Access</th><th>Client</th><th>Sign-in</th><th /></tr></thead>
+        <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Name</th><th>Email</th><th>Access</th><th>Client</th><th>Areas</th><th>Sign-in</th><th /></tr></thead>
           <tbody>{team.members.map((m) => (
             <tr key={m.id} className="border-t border-slate-100">
               <td className="py-2 font-medium">{m.name}{m.userId === team.you && <span className="ml-2 rounded bg-brand-50 px-1.5 text-xs text-brand-700">you</span>}</td>
@@ -83,10 +108,25 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
                 <select aria-label={`Role for ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} className="rounded border border-slate-300 bg-white px-2 py-1" value={m.role} disabled={busy} onChange={(e) => setRole(m, e.target.value)}>
                   {ROLE_ORDER.map((r) => <option key={r} value={r}>{LABEL[r]}</option>)}</select>) : <Badge text={m.role} />}</td>
               <td>{m.orgName ?? <span className="text-slate-500">All clients</span>}</td>
+              <td className="max-w-xs text-xs text-slate-600" data-testid={`areas-${m.email}`}>{m.role === 'owner' ? 'Everything' : LIMITABLE.has(m.role) ? summary(m.access) : 'Their own pages'}
+                {edit && LIMITABLE.has(m.role) && <button className="ml-1 text-brand-700 underline" aria-label={`Limit access for ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} onClick={() => openLimit(m)}>Change</button>}</td>
               <td className="whitespace-nowrap text-xs text-slate-600">{m.emailVerified ? 'Email confirmed' : 'Email not confirmed'}{m.twoFactor ? ' · 2-step on' : ''}</td>
               <td className="text-right">{edit && <Button variant="ghost" className="text-red-700" aria-label={`Remove ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} onClick={() => remove(m)}>Remove</Button>}</td>
             </tr>))}</tbody></table>
       </Card>
+
+      {limit && (
+        <Card title={`What can ${limit.m.name} do${limit.m.orgName ? ` at ${limit.m.orgName}` : ''}?`}>
+          <div className="mb-3 flex flex-wrap gap-2">{PRESETS.map(([name, f]) => <Button key={name} variant="ghost" onClick={() => setLimit({ ...limit, a: Object.fromEntries(team.areas.map((x) => [x.key, f(x.key)])) })}>{name}</Button>)}</div>
+          <table className="w-full max-w-3xl text-sm" data-testid="access-editor"><tbody>{team.areas.map((x) => (
+            <tr key={x.key} className="border-t border-slate-100"><td className="py-2 pr-3"><b>{AREA_NAME[x.key]}</b><span className="block text-xs text-slate-500">{x.text.replace(/^[^:]*:\s*/, '')}</span></td>
+              <td className="whitespace-nowrap">{(['none', 'view', 'edit'] as Level[]).map((lv) => (
+                <label key={lv} className="mr-3 inline-flex items-center gap-1"><input type="radio" name={`area-${x.key}`} aria-label={`${AREA_NAME[x.key]}: ${lv === 'none' ? 'no access' : lv === 'view' ? 'view only' : 'full'}`} checked={limit.a[x.key] === lv}
+                  onChange={() => setLimit({ ...limit, a: { ...limit.a, [x.key]: lv } })} />{lv === 'none' ? 'No access' : lv === 'view' ? 'View only' : 'Full'}</label>))}</td></tr>))}</tbody></table>
+          <div className="mt-3 flex flex-wrap items-center gap-3"><Button disabled={busy} onClick={saveLimit}>Save access</Button><Button variant="ghost" onClick={() => setLimit(null)}>Cancel</Button>
+            <p className="text-xs text-slate-500">This works on top of their role: a client stays read-only even with "Full". Lists that forms need (accounts, contacts, products) still load.</p></div>
+        </Card>
+      )}
 
       <Card title={`Waiting to join (${team.invitations.length})`}>
         {team.invitations.length === 0 ? <Empty text="No invitations waiting." /> : (

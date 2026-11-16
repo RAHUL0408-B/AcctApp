@@ -29,7 +29,7 @@ Cloud accounting for Indian CA firms and their small-business clients. One firm 
 
 | Area | What it does |
 |---|---|
-| **Navigation** | Top bar with Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts and Projects menus, an organisation menu, a "+" create menu with Alt shortcuts, search, notifications, and a setup guide on Home. |
+| **Navigation** | Inside a client, a left side menu holds Home, Sales, Purchases, Reporting, Accounting, Tax, Contacts and Projects: sections open in place, the current page is marked, the menu can shrink to icons, and on phones it slides in as a drawer. The top bar keeps the client switcher, a "+" create menu with Alt shortcuts, search, notifications, help and the account menu. A setup guide is on Home. |
 | **Firms and clients** | One firm, many client organisations. Each client's data is isolated by PostgreSQL row-level security. |
 | **Users and security** | Six access levels: Owner, Accountant, Staff, Client (view-only), Sales (invoices, quotes and customers only) and Employee (their own expense claims only). The owner invites people by email from **People and access**, changes roles and removes access. Forgot-password and reset by email link, change password (other devices are signed out), email confirmation, optional authenticator-app 2FA with recovery codes, lockout after 5 failed logins, rate limits, password rules. |
 | **Ledger** | Double entry in integer paise. Unbalanced entries are rejected by the API and by the database. Posted entries can never be edited or deleted, only reversed. Periods can be locked. |

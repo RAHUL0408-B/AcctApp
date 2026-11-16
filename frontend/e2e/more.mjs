@@ -11,14 +11,16 @@ const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 page.on('dialog', (d) => { errors.push('unexpected dialog: ' + d.message()); d.dismiss(); });
 const step = (s) => console.log('✓', s);
-const btn = (name) => page.getByRole('button', { name, exact: true });
+const btn = (name) => page.locator('main, header, [role=dialog]').getByRole('button', { name, exact: true }); // anywhere except the side menu
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const nav = async (name) => {
   const bar = page.getByRole('navigation', { name: 'Client sections' });
-  const item = bar.getByRole('button', { name, exact: true });
-  if (!(await item.isVisible())) {
-    const groups = bar.locator('button[aria-haspopup]');
-    for (let i = 0; i < await groups.count() && !(await item.isVisible()); i++) await groups.nth(i).click();
+  const item = bar.getByRole('button', { name, exact: true }).first();
+  // Side menu: open closed sections one by one until the page shows (opening one never closes another).
+  while (!(await item.isVisible())) {
+    const closed = bar.locator('button[aria-expanded="false"]');
+    if ((await closed.count()) === 0) break;
+    await closed.first().click();
   }
   await item.click();
 };

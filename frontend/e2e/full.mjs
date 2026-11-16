@@ -15,10 +15,12 @@ const step = (s) => console.log('✓', s);
 // Top-bar menus: open each dropdown in turn until the wanted item is visible, then click it.
 const nav = async (name) => {
   const bar = page.getByRole('navigation', { name: 'Client sections' });
-  const item = bar.getByRole('button', { name, exact: true });
-  if (!(await item.isVisible())) {
-    const groups = bar.locator('button[aria-haspopup]');
-    for (let i = 0; i < await groups.count() && !(await item.isVisible()); i++) await groups.nth(i).click();
+  const item = bar.getByRole('button', { name, exact: true }).first();
+  // Side menu: open closed sections one by one until the page shows (opening one never closes another).
+  while (!(await item.isVisible())) {
+    const closed = bar.locator('button[aria-expanded="false"]');
+    if ((await closed.count()) === 0) break;
+    await closed.first().click();
   }
   await item.click();
 };

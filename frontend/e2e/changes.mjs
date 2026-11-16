@@ -13,12 +13,22 @@ const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 let dialogs = [];
 page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); }); // confirmations (delete, unlink) are accepted and recorded
+// Open a side-menu section unless it is already open (clicking an open one closes it).
+const openSection = async (g, root = page) => { const b = root.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: g, exact: true }); if ((await b.getAttribute('aria-expanded')) !== 'true') await b.click(); };
 const step = (s) => console.log('✓', s);
 const btn = (name) => page.getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const bar = () => page.getByRole('navigation', { name: 'Client sections' });
-const top = (name) => page.locator('header').getByRole('button', { name, exact: true });
-const menu = async (group, item) => { await bar().getByRole('button', { name: group, exact: true }).click(); await top(item).click(); };
+const top = (name) => page.locator('header, aside').getByRole('button', { name, exact: true }); // top bar menus and the side menu
+// Side menu: open the section if it is closed, then choose the page inside that section.
+const menu = async (group, item, root = page) => {
+  const nav = root.getByRole('navigation', { name: 'Client sections' });
+  const box = nav.getByRole('group', { name: group, exact: true });
+  if ((await box.count()) === 0) return nav.getByRole('button', { name: item, exact: true }).click(); // a section with one page
+  const head = box.getByRole('button', { name: group, exact: true });
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  await box.getByRole('button', { name: item, exact: true }).click();
+};
 const ok = (re) => page.getByText(re).first().waitFor();
 const contactsLoaded = () => page.locator('datalist option').first().waitFor({ state: 'attached' });
 const today = new Date().toISOString().slice(0, 10);
@@ -38,30 +48,32 @@ await btn('Add client').click();
 await btn('Open books').click();
 await heading('Dashboard');
 
-// ---- top bar: columns, hover switch, breadcrumb
-await bar().getByRole('button', { name: 'Accounting', exact: true }).click();
-for (const h of ['Banking', 'Ledger', 'Records and setup']) await page.locator('header').getByText(h, { exact: true }).waitFor();
-const a = await top('Bank accounts').boundingBox(), b = await top('Chart of accounts').boundingBox(), c = await top('Documents').boundingBox();
-assert(a.x < b.x && b.x < c.x, 'Accounting menu is laid out in three columns');
-await bar().getByRole('button', { name: 'Sales', exact: true }).hover();
-await top('Quotes').waitFor();
-assert(!(await top('Chart of accounts').isVisible()), 'hovering another section switches the open menu');
-await page.keyboard.press('Escape');
+// ---- side menu: on the left, sections open in place, current page highlighted, collapses to icons
+assert((await bar().boundingBox()).x < 20, 'the section menu is on the left');
+await openSection('Accounting');
+for (const h of ['Banking', 'Ledger', 'Records and setup']) await bar().getByText(h, { exact: true }).waitFor();
 await menu('Purchases', 'Bills');
 await heading('Bills');
+assert.strictEqual(await bar().getByRole('button', { name: 'Bills', exact: true }).getAttribute('aria-current'), 'page', 'the current page is marked');
+await bar().getByRole('button', { name: 'Chart of accounts', exact: true }).waitFor();          // Accounting stays open too
 await page.getByRole('navigation', { name: 'Breadcrumb' }).getByText('Purchases', { exact: true }).waitFor();
 await page.getByRole('navigation', { name: 'Breadcrumb' }).getByText('Bills', { exact: true }).waitFor();
-step('top bar: Accounting in three columns, hover switches menus, breadcrumb reads Purchases > Bills');
+await bar().getByRole('button', { name: 'Collapse the side menu' }).click();
+await page.waitForFunction(() => document.querySelector('aside')?.getBoundingClientRect().width < 80);
+assert.strictEqual(await bar().getByText('Chart of accounts').count(), 0, 'only icons when collapsed');
+await bar().getByRole('button', { name: 'Expand the side menu' }).click();
+await page.waitForFunction(() => document.querySelector('aside')?.getBoundingClientRect().width > 200);
+step('side menu: on the left, sections open in place, current page marked, collapses to icons; breadcrumb reads Purchases > Bills');
 
 await page.setViewportSize({ width: 900, height: 800 });
 await page.getByRole('button', { name: 'Account menu' }).waitFor();   // avatar is not clipped off-screen
 await page.getByRole('button', { name: 'Open menu' }).click();
-await page.getByRole('navigation', { name: 'Small-screen menu' }).getByRole('button', { name: 'Sales' }).click();
-await page.getByRole('navigation', { name: 'Small-screen menu' }).getByRole('button', { name: 'Invoices', exact: true }).click();
+const drawer = page.getByRole('dialog', { name: 'Menu' });
+await menu('Sales', 'Invoices', drawer);
 await heading('Invoices');
-assert(!(await page.getByRole('navigation', { name: 'Small-screen menu' }).isVisible().catch(() => false)), 'small-screen menu closes after choosing');
+assert.strictEqual(await drawer.count(), 0, 'the drawer closes after choosing');
 await page.setViewportSize({ width: 1440, height: 1000 });
-step('small screen: hamburger menu opens a section and navigates');
+step('small screen: the same menu slides in as a drawer and navigates');
 
 // ---- contact with bank details and default account
 await menu('Contacts', 'All contacts');
@@ -347,9 +359,9 @@ await staffPage.getByText('Only the owner can change export templates').waitFor(
 assert.strictEqual(await staffPage.getByRole('button', { name: 'New template' }).count(), 0, 'staff cannot design templates');
 assert.strictEqual(await staffPage.getByRole('button', { name: 'Save choice' }).count(), 0, 'staff cannot change the choice');
 assert(await staffPage.getByLabel('Template for reports').isDisabled(), 'the choice is read-only for staff');
-await staffPage.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }).click();
-await staffPage.locator('header').getByRole('button', { name: 'Chart of accounts', exact: true }).waitFor();
-assert.strictEqual(await staffPage.locator('header').getByRole('button', { name: 'Export templates', exact: true }).count(), 0, 'the menu hides Export templates from staff');
+{ const acc = staffPage.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }); if ((await acc.getAttribute('aria-expanded')) !== 'true') await acc.click(); }
+await staffPage.locator('aside').getByRole('button', { name: 'Chart of accounts', exact: true }).waitFor();
+assert.strictEqual(await staffPage.locator('aside').getByRole('button', { name: 'Export templates', exact: true }).count(), 0, 'the menu hides Export templates from staff');
 await staffPage.close();
 step('a staff login sees the choices read-only and the menu hides Export templates');
 

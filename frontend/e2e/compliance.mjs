@@ -17,8 +17,16 @@ const step = (s) => console.log('✓', s);
 const btn = (name) => page.getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const bar = () => page.getByRole('navigation', { name: 'Client sections' });
-const top = (name) => page.locator('header').getByRole('button', { name, exact: true });
-const menu = async (group, entry) => { await bar().getByRole('button', { name: group, exact: true }).click(); await top(entry).click(); };
+const top = (name) => page.locator('header, aside').getByRole('button', { name, exact: true }); // top bar menus and the side menu
+// Side menu: open the section if it is closed, then choose the page inside that section.
+const menu = async (group, item, root = page) => {
+  const nav = root.getByRole('navigation', { name: 'Client sections' });
+  const box = nav.getByRole('group', { name: group, exact: true });
+  if ((await box.count()) === 0) return nav.getByRole('button', { name: item, exact: true }).click(); // a section with one page
+  const head = box.getByRole('button', { name: group, exact: true });
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  await box.getByRole('button', { name: item, exact: true }).click();
+};
 const ok = (re) => page.getByText(re).first().waitFor();
 const CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const gstin = (f) => { let s = 0; for (let i = 0; i < 14; i++) { const v = CH.indexOf(f[i]) * (i % 2 ? 2 : 1); s += Math.floor(v / 36) + (v % 36); } return f + CH[(36 - (s % 36)) % 36]; };

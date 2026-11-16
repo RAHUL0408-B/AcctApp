@@ -20,6 +20,8 @@ const page = await browser.newPage();
 page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000)); // raise on slow hosts, e.g. STEP_TIMEOUT=90000 for a free-tier server
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+// Open a side-menu section unless it is already open (clicking an open one closes it).
+const openSection = async (g, root = page) => { const b = root.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: g, exact: true }); if ((await b.getAttribute('aria-expanded')) !== 'true') await b.click(); };
 const step = (s) => console.log('✓', s);
 
 await page.goto(URL);
@@ -43,7 +45,7 @@ await page.getByLabel('GSTIN (optional)').fill('27AAPFU0939F1ZV');
 await page.getByRole('button', { name: 'Add client' }).click();
 await page.getByRole('listitem').getByText('Sharma Traders').waitFor();
 await page.getByRole('button', { name: 'Open books' }).click();
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }).click();
+{ const acc = page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }); if ((await acc.getAttribute('aria-expanded')) !== 'true') await acc.click(); } // open the section only if it is closed
 await page.getByRole('button', { name: 'Manual journals', exact: true }).click();
 await page.getByText('New journal entry').waitFor();
 step('client created, books opened');
@@ -65,7 +67,7 @@ await page.getByRole('button', { name: 'Post entry' }).click();
 await page.getByRole('alert').getByText(/unbalanced/).waitFor();
 step('unbalanced entry rejected');
 
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reporting', exact: true }).click();
+await openSection('Reporting');
 await page.getByRole('button', { name: 'All reports', exact: true }).click();
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
 await page.getByTestId('tb-debit').waitFor();
@@ -73,11 +75,11 @@ assert.equal(await page.getByTestId('tb-debit').innerText(), '5,000.50');
 assert.equal(await page.getByTestId('tb-credit').innerText(), '5,000.50');
 step('trial balance shows 5,000.50 on both sides');
 
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }).click();
+{ const acc = page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }); if ((await acc.getAttribute('aria-expanded')) !== 'true') await acc.click(); } // open the section only if it is closed
 await page.getByRole('button', { name: 'Manual journals', exact: true }).click();
 await page.getByRole('button', { name: 'Reverse' }).first().click();
 await page.getByText('Reversal posted.').waitFor();
-await page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Reporting', exact: true }).click();
+await openSection('Reporting');
 await page.getByRole('button', { name: 'All reports', exact: true }).click();
 await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
 await page.getByText('✓').first().waitFor();

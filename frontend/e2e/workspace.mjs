@@ -12,12 +12,22 @@ page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000));
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 page.on('dialog', (d) => { errors.push('unexpected dialog: ' + d.message()); d.dismiss(); });
+// Open a side-menu section unless it is already open (clicking an open one closes it).
+const openSection = async (g, root = page) => { const b = root.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: g, exact: true }); if ((await b.getAttribute('aria-expanded')) !== 'true') await b.click(); };
 const step = (s) => console.log('✓', s);
-const btn = (name) => page.getByRole('button', { name, exact: true });
+const btn = (name) => page.locator('main, header, [role=dialog]').getByRole('button', { name, exact: true }); // anywhere except the side menu
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const bar = () => page.getByRole('navigation', { name: 'Client sections' });
-const top = (name) => page.locator('header').getByRole('button', { name, exact: true });
-const menu = async (group, item) => { await bar().getByRole('button', { name: group, exact: true }).click(); await top(item).click(); };
+const top = (name) => page.locator('header, aside').getByRole('button', { name, exact: true }); // top bar menus and the side menu
+// Side menu: open the section if it is closed, then choose the page inside that section.
+const menu = async (group, item, root = page) => {
+  const nav = root.getByRole('navigation', { name: 'Client sections' });
+  const box = nav.getByRole('group', { name: group, exact: true });
+  if ((await box.count()) === 0) return nav.getByRole('button', { name: item, exact: true }).click(); // a section with one page
+  const head = box.getByRole('button', { name: group, exact: true });
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  await box.getByRole('button', { name: item, exact: true }).click();
+};
 const ok = (re) => page.getByText(re).first().waitFor();
 const email = `ws${Date.now()}@example.com`, password = 'Passphrase-1234';
 const today = new Date().toISOString().slice(0, 10);
@@ -57,7 +67,7 @@ await heading('Dashboard');
 
 // ---- menus and setup guide
 for (const g of ['Home', 'Sales', 'Purchases', 'Reporting', 'Accounting', 'Tax', 'Contacts', 'Projects']) await bar().getByRole('button', { name: g, exact: true }).waitFor();
-await bar().getByRole('button', { name: 'Sales', exact: true }).click();
+await openSection('Sales');
 for (const i of ['Sales overview', 'Invoices', 'Quotes', 'Products and services', 'Customers', 'Sales settings']) await top(i).waitFor();
 await page.keyboard.press('Escape');
 await page.getByTestId('guide-progress').getByText('1 of 6 completed').waitFor();
@@ -150,7 +160,7 @@ await heading('Reports');
 await page.getByTestId('stcf-projected').getByText('₹49,800.00').waitFor(); // 38,000 cash + 11,800 due in 15 days
 await btn('☆ Add to favourites').click();
 await btn('★ Favourite').waitFor();
-await bar().getByRole('button', { name: 'Reporting', exact: true }).click();
+await openSection('Reporting');
 await page.getByText('Favourite reports ★').waitFor();
 await page.keyboard.press('Escape');
 await menu('Reporting', 'Business snapshot');

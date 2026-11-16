@@ -21,7 +21,7 @@ const step = (s) => console.log('✓', s);
 const btn = (p, name) => p.getByRole('button', { name, exact: true });
 const heading = (p, name) => p.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const bar = (p) => p.getByRole('navigation', { name: 'Client sections' });
-const top = (p, name) => p.locator('header').getByRole('button', { name, exact: true });
+const top = (p, name) => p.locator('header, aside').getByRole('button', { name, exact: true }); // top bar menus and the side menu
 
 /** The newest email to this address, read straight from the outbox: [subject, token]. */
 const db = new pg.Client({ connectionString: DB }); await db.connect();

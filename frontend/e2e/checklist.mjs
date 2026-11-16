@@ -18,8 +18,16 @@ const item = (n, s) => console.log(`✓ ${String(n).padStart(2)}. ${s}`);
 const btn = (name) => page.getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 const bar = () => page.getByRole('navigation', { name: 'Client sections' });
-const top = (name) => page.locator('header').getByRole('button', { name, exact: true });
-const menu = async (group, entry) => { await bar().getByRole('button', { name: group, exact: true }).click(); await top(entry).click(); };
+const top = (name) => page.locator('header, aside').getByRole('button', { name, exact: true }); // top bar menus and the side menu
+// Side menu: open the section if it is closed, then choose the page inside that section.
+const menu = async (group, item, root = page) => {
+  const nav = root.getByRole('navigation', { name: 'Client sections' });
+  const box = nav.getByRole('group', { name: group, exact: true });
+  if ((await box.count()) === 0) return nav.getByRole('button', { name: item, exact: true }).click(); // a section with one page
+  const head = box.getByRole('button', { name: group, exact: true });
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  await box.getByRole('button', { name: item, exact: true }).click();
+};
 const ok = (re) => page.getByText(re).first().waitFor();
 const contactsLoaded = () => page.locator('datalist option').first().waitFor({ state: 'attached' });
 const download = async (click) => { const [dl] = await Promise.all([page.waitForEvent('download'), click()]); return { name: dl.suggestedFilename(), text: fs.readFileSync(await dl.path()).toString('latin1') }; };

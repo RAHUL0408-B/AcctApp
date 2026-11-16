@@ -106,45 +106,59 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
   );
 }
 
-interface Rec { id: number; contactName: string; frequency: string; nextDate: string; endDate: string | null; autoEmail: boolean; active: boolean }
+interface Rec { id: number; contactName: string; frequency: string; nextDate: string; endDate: string | null; autoEmail: boolean; active: boolean; tdsSection?: string | null; made?: number; postedTotal?: number }
 
-export function Recurring({ org, canPost, accounts }: { org: Org; canPost: boolean; accounts: Account[] }) {
+/** Repeating invoices, or (kind="bill") repeating bills such as rent, maintenance contracts and subscriptions. */
+export function Recurring({ org, canPost, accounts, kind = 'invoice' }: { org: Org; canPost: boolean; accounts: Account[]; kind?: 'invoice' | 'bill' }) {
+  const bill = kind === 'bill';
   const [list, setList] = useState<Rec[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [tds, setTds] = useState<{ code: string; description: string }[]>([]);
   const [show, setShow] = useState(false);
-  const [f, setF] = useState({ contactId: '', frequency: 'monthly', nextDate: today(), endDate: '', dueDays: '15', autoEmail: false });
+  const [ok, setOk] = useState('');
+  const [f, setF] = useState({ contactId: '', frequency: 'monthly', nextDate: today(), endDate: '', dueDays: '15', autoEmail: false, tdsSection: '', notes: '' });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { error, busy, run } = useAction();
-  const load = useCallback(() => api<Rec[]>(`/orgs/${org.id}/recurring`).then(setList), [org.id]);
-  useEffect(() => { load(); api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind !== 'supplier'))); }, [load, org.id]);
+  const load = useCallback(() => api<Rec[]>(`/orgs/${org.id}/recurring${bill ? '?type=bill' : ''}`).then(setList), [org.id, bill]);
+  useEffect(() => {
+    load();
+    api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind !== (bill ? 'customer' : 'supplier'))));
+    if (bill) api('/config/tds-sections').then(setTds);
+  }, [load, org.id, bill]);
   const create = () => run(async () => {
-    await api(`/orgs/${org.id}/recurring`, { body: { contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays), autoEmail: f.autoEmail, lines: linesToApi(lines) } });
-    setLines([emptyLine()]); setShow(false); load();
+    await api(`/orgs/${org.id}/recurring`, { body: { docType: kind, contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays),
+      autoEmail: !bill && f.autoEmail, ...(bill && f.tdsSection ? { tdsSection: f.tdsSection } : {}), ...(f.notes ? { notes: f.notes } : {}), lines: linesToApi(lines) } });
+    setLines([emptyLine()]); setShow(false); setOk(`Saved. The first ${bill ? 'bill' : 'invoice'} is created on ${f.nextDate}.`); load();
   });
+  const noun = bill ? 'bill' : 'invoice';
   return (
     <>
-      <PageHeader title="Repeating invoices" subtitle="Invoices created automatically on a schedule, and optionally emailed to the customer."
-        actions={canPost && <Button onClick={() => setShow(!show)}>{show ? 'Close' : 'New repeating invoice'}</Button>} />
-      <div className="mb-3"><ErrorMsg msg={error} /></div>
+      <PageHeader title={bill ? 'Repeating bills' : 'Repeating invoices'} subtitle={bill ? 'Bills posted automatically on a schedule: rent, maintenance contracts, subscriptions. TDS is worked out on each one.' : 'Invoices created automatically on a schedule, and optionally emailed to the customer.'}
+        actions={canPost && <Button onClick={() => setShow(!show)}>{show ? 'Close' : `New repeating ${noun}`}</Button>} />
+      <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       {show && (
-        <Card title="New repeating invoice">
+        <Card title={`New repeating ${noun}`}>
           <div className="grid gap-3 md:grid-cols-3">
-            <ContactPicker label="Customer" contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
+            <ContactPicker label={bill ? 'Supplier' : 'Customer'} contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
             <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x}>{x}</option>)}</Select>
-            <Field label="First invoice date" type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
+            <Field label={`First ${noun} date`} type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
             <Field label="Stop after (optional)" type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
             <Field label="Payment due (days)" value={f.dueDays} onChange={(e) => setF({ ...f, dueDays: e.target.value })} />
-            <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={f.autoEmail} onChange={(e) => setF({ ...f, autoEmail: e.target.checked })} /> Email each invoice automatically</label>
+            {bill
+              ? <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>
+              : <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={f.autoEmail} onChange={(e) => setF({ ...f, autoEmail: e.target.checked })} /> Email each invoice automatically</label>}
+            {bill && <Field label="Note on each bill (optional)" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="e.g. Office rent, Andheri" />}
           </div>
-          <LinesEditor org={org} lines={lines} setLines={setLines} sales accounts={accounts} />
+          <LinesEditor org={org} lines={lines} setLines={setLines} sales={!bill} accounts={accounts} />
           <div className="mt-4"><Button disabled={busy} onClick={create}>Save schedule</Button></div>
         </Card>
       )}
       <Card>
-        {list.length === 0 ? <Empty text="No repeating invoices yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Customer</th><th>Repeats</th><th>Next invoice</th><th>Ends</th><th>Email</th><th>Status</th><th /></tr></thead>
+        {list.length === 0 ? <Empty text={`No repeating ${noun}s yet.`} /> : (
+          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>{bill ? 'Supplier' : 'Customer'}</th><th>Repeats</th><th>Next {noun}</th><th>Ends</th><th>{bill ? 'TDS' : 'Email'}</th>{bill && <th className="text-right">Made</th>}<th>Status</th><th /></tr></thead>
             <tbody>{list.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100"><td className="py-2">{r.contactName}</td><td>{r.frequency}</td><td>{r.nextDate}</td><td>{r.endDate ?? '—'}</td><td>{r.autoEmail ? 'Yes' : 'No'}</td><td><Badge text={r.active ? 'active' : 'done'} /></td>
+              <tr key={r.id} className="border-t border-slate-100"><td className="py-2">{r.contactName}</td><td>{r.frequency}</td><td>{r.nextDate}</td><td>{r.endDate ?? '—'}</td><td>{bill ? r.tdsSection ?? 'No' : r.autoEmail ? 'Yes' : 'No'}</td>
+                {bill && <td className="text-right">{r.made ?? 0} · ₹{fmt(r.postedTotal ?? 0)}</td>}<td><Badge text={r.active ? 'active' : 'done'} /></td>
                 <td className="text-right">{canPost && r.active && <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/recurring/${r.id}/stop`, { method: 'POST', body: {} }); load(); })}>Stop</Button>}</td></tr>))}</tbody></table>
         )}
       </Card>

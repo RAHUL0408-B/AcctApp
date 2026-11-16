@@ -51,6 +51,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
     : download(`/orgs/${org.id}/documents-pdf?ids=${ids.join(',')}`, 'documents.pdf'));
   const [ok, setOk] = useState('');
   const [pay, setPay] = useState<{ id: number; number: string; amount: string; accountId: string; date: string; reference: string; currency: string; foreign: string } | null>(null);
+  // Batch payment: several selected invoices or bills settled with one bank payment.
+  const [batch, setBatch] = useState<{ accountId: string; date: string; reference: string; amounts: Record<number, string> } | null>(null);
   const { error, busy, run, setError } = useAction();
 
   const load = useCallback(() => api<Doc[]>(`/orgs/${org.id}/documents?archived=${showArchived}`).then((d) => setDocs(d.filter((x) => types.some(([t]) => t === x.docType) && (showArchived || !x.isArchived)))), [org.id, kind, showArchived]);
@@ -191,6 +193,17 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
     }
     load();
   });
+  const payable = (d: Doc) => d.status === 'posted' && (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) > 0 && d.currency === 'INR';
+  const batchDocs = docs.filter((d) => selected.has(d.id) && payable(d));
+  const openBatch = () => setBatch({ accountId: '', date: today(), reference: '', amounts: Object.fromEntries(batchDocs.map((d) => [d.id, String((d.outstanding ?? 0) / 100)])) });
+  const batchTotal = batch ? batchDocs.reduce((sum, d) => { try { return sum + toPaise(batch.amounts[d.id] || '0'); } catch { return sum; } }, 0) : 0;
+  const doBatch = () => run(async () => {
+    if (!batch) return;
+    const items = batchDocs.map((d) => ({ documentId: d.id, amount: toPaise(batch.amounts[d.id] || '0') })).filter((i) => i.amount > 0);
+    const r = await api(`/orgs/${org.id}/payment-batches`, { body: { date: batch.date, accountId: Number(batch.accountId), ...(batch.reference ? { reference: batch.reference } : {}), items } });
+    setBatch(null); setSelected(new Set());
+    setOk(`Batch ${sales ? 'receipt' : 'payment'} of ₹${fmt(r.total)} recorded for ${r.count} ${sales ? 'invoice' : 'bill'}(s), as one bank entry.`); load();
+  });
   const email = (d: Doc) => run(async () => { const r = await api(`/orgs/${org.id}/documents/${d.id}/send`, { body: {} }); setOk(`${d.number} queued to ${r.queuedTo}.`); });
   const remind = () => run(async () => { const r = await api(`/orgs/${org.id}/documents/remind-overdue`, { method: 'POST', body: {} }); setOk(`${r.reminders} overdue reminder(s) queued.`); });
   const toggle = (id: number) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -274,6 +287,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
             <Button variant="danger" disabled={busy} onClick={() => bulk('delete')}>Delete selected</Button>
             <Button variant="ghost" disabled={busy} onClick={() => downloadPdf([...selected])}>Download as one PDF</Button>
             <Button variant="ghost" disabled={busy} onClick={() => bulk(showArchived ? 'restore' : 'archive')}>{showArchived ? 'Restore selected' : 'Archive selected'}</Button>
+            {batchDocs.length > 0 && <Button disabled={busy} onClick={openBatch}>{sales ? `Receive payment for ${batchDocs.length}` : `Pay ${batchDocs.length} bill(s) together`}</Button>}
             <Button variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button></div>
         )}
         {docs.length === 0 ? <Empty text="Nothing here yet." /> : (
@@ -298,6 +312,24 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, rest
                 </td>
               </tr>))}</tbody>
           </table>
+        )}
+        {batch && batchDocs.length > 0 && (
+          <div className="mt-4 rounded-lg border border-brand-200 bg-brand-50/40 p-3" data-testid="batch-panel">
+            <p className="mb-2 text-sm font-semibold">{sales ? 'Batch receipt' : 'Batch payment'}: one bank {sales ? 'deposit' : 'payment'} for {batchDocs.length} {sales ? 'invoice' : 'bill'}(s)</p>
+            <table className="mb-3 w-full max-w-2xl text-sm"><thead><tr className="text-left text-slate-500"><th>Number</th><th>Contact</th><th className="text-right">Outstanding</th><th className="w-36 text-right">Amount (₹)</th></tr></thead>
+              <tbody>{batchDocs.map((d) => <tr key={d.id} className="border-t border-slate-100"><td className="py-1">{d.number}</td><td>{d.contactName}</td><td className="text-right">{fmt(d.outstanding ?? 0)}</td>
+                <td className="text-right"><input aria-label={`Batch amount ${d.number}`} inputMode="decimal" className="w-32 rounded border border-slate-300 px-2 py-1 text-right" value={batch.amounts[d.id] ?? ''} onChange={(e) => setBatch({ ...batch, amounts: { ...batch.amounts, [d.id]: e.target.value } })} /></td></tr>)}</tbody>
+              <tfoot><tr className="border-t-2 border-slate-300 font-semibold"><td colSpan={3} className="pt-1">Total</td><td className="pt-1 text-right" data-testid="batch-total">₹{fmt(batchTotal)}</td></tr></tfoot></table>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Date" aria-label="Batch date" type="date" value={batch.date} onChange={(e) => setBatch({ ...batch, date: e.target.value })} />
+              <Select label="Bank / cash account" aria-label="Batch account" value={batch.accountId} onChange={(e) => setBatch({ ...batch, accountId: e.target.value })}>
+                <option value="">Select…</option>{bankOptions.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>
+              <Field label="Reference (optional)" aria-label="Batch reference" placeholder="e.g. NEFT UTR" value={batch.reference} onChange={(e) => setBatch({ ...batch, reference: e.target.value })} />
+              <Button disabled={busy || !batch.accountId || batchTotal <= 0} onClick={doBatch}>{sales ? 'Record receipt' : 'Record batch payment'}</Button>
+              <Button variant="ghost" onClick={() => setBatch(null)}>Cancel</Button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Posted as one bank entry, so it matches the single line on your bank statement. Undo it from Purchases, Batch payments. Foreign-currency documents are paid one at a time.</p>
+          </div>
         )}
         {pay && (
           <div className="mt-4 flex flex-wrap items-end gap-3 rounded bg-slate-50 p-3">

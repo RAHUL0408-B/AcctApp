@@ -9,12 +9,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // The host puts the server to sleep after about 15 idle minutes. lastOk is when it last answered.
 let lastOk = 0;
 let waking: Promise<void> | null = null;
+/** Ask the server whether it is up. The answer is read to the end, so the browser does not keep the connection open. */
+const ping = async () => { const r = await fetch('/api/health'); await r.text().catch(() => ''); return r.ok; };
 /** Resolve once /health answers, polling for up to about 3 minutes (a cold start has been seen to take 2.5). Shared, so many callers make one wake-up. */
 export function wakeServer(): Promise<void> {
   if (Date.now() - lastOk < 60_000) return Promise.resolve();
   return (waking ??= (async () => {
     for (let i = 0; i < 60; i++) {
-      try { if ((await fetch('/api/health')).ok) { lastOk = Date.now(); return; } } catch { /* network blip: try again */ }
+      try { if (await ping()) { lastOk = Date.now(); return; } } catch { /* network blip: try again */ }
       await sleep(3000);
     }
   })().finally(() => { waking = null; }));
@@ -22,7 +24,7 @@ export function wakeServer(): Promise<void> {
 // Start waking the server as soon as the page opens, and keep it awake while the tab is open.
 if (typeof window !== 'undefined') {
   wakeServer();
-  setInterval(() => { if (document.visibilityState === 'visible') fetch('/api/health').then((r) => { if (r.ok) lastOk = Date.now(); }, () => {}); }, 10 * 60_000);
+  setInterval(() => { if (document.visibilityState === 'visible') ping().then((ok) => { if (ok) lastOk = Date.now(); }, () => {}); }, 10 * 60_000);
 }
 
 /** The server said the login is no longer valid (expired after 8 hours, or the password was changed). */

@@ -294,7 +294,7 @@ export function App() {
         <div className="flex h-14 items-center gap-1 px-3">
           {org && <button className="mr-1 flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/15 lg:hidden" aria-label={mobileOpen ? 'Close menu' : 'Open menu'} aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d={mobileOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} /></svg></button>}
-          <button className="mr-1 flex items-center gap-2 rounded-md px-2 py-1 text-lg font-bold tracking-tight hover:bg-white/10" onClick={() => navigate('/clients')} aria-label={`${APP_NAME} home`}><Logo /><span className="hidden 2xl:inline">{APP_NAME}</span></button>
+          <button className={`mr-1 items-center gap-2 rounded-md px-2 py-1 text-lg font-bold tracking-tight hover:bg-white/10 ${org ? 'hidden sm:flex' : 'flex'}`} onClick={() => navigate('/clients')} aria-label={`${APP_NAME} home`}><Logo /><span className="hidden 2xl:inline">{APP_NAME}</span></button>
 
           <Menu label="Organisation menu" width="w-80" trigger={
             <span className="flex max-w-24 items-center gap-2 text-sm font-semibold sm:max-w-56"><span className="truncate">{org?.name ?? 'All clients'}</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M1 3l4 4 4-4" fill="currentColor" /></svg></span>}>

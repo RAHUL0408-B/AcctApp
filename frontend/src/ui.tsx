@@ -23,9 +23,11 @@ export function Button({ variant = 'primary', ...p }: React.ButtonHTMLAttributes
 
 export function Card({ title, children, actions }: { title?: string; children: ReactNode; actions?: ReactNode }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
-      {(title || actions) && <div className="mb-4 flex items-center justify-between"><h2 className="text-base font-semibold text-slate-900">{title}</h2>{actions}</div>}
-      {children}
+    <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+      {(title || actions) && <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h2 className="text-base font-semibold text-slate-900">{title}</h2>{actions}</div>}
+      {/* A wide table scrolls sideways inside its card instead of making the whole page wider than the screen.
+          The small negative margin and padding leave room for focus outlines at the edges. */}
+      <div className="-m-1 overflow-x-auto p-1">{children}</div>
     </section>
   );
 }

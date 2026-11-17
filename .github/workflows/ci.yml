@@ -60,6 +60,7 @@ jobs:
       JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-1234
       RATE_LIMIT_PER_MIN: '100000'   # the tests sign up many users from one address
       WORKER: 'off'
+      TRUST_PROXY: '1'               # the login test sends each call from a different pretend address
       DATA_DIR: ${{ runner.temp }}/data
       WEB_URL: http://localhost:5173
     steps:
@@ -82,7 +83,7 @@ jobs:
       # Google Chrome is already installed on GitHub's Ubuntu runners; the scripts use it through playwright-core.
       - name: Browser tests
         run: |
-          for f in smoke full more workspace changes team checklist compliance settings billsgst; do
+          for f in smoke full more workspace changes team checklist compliance settings billsgst logins; do
             echo "=== $f"
             node frontend/e2e/$f.mjs
           done

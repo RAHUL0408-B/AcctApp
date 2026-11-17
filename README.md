@@ -169,6 +169,7 @@ node frontend/e2e/changes.mjs    # browser: contacts, editing posted invoices, j
 node frontend/e2e/team.mjs       # browser: password reset and change, email confirmation, invitations, People and access, Sales and Employee views
 node frontend/e2e/checklist.mjs  # browser: the original 29-point change list, item by item
 node frontend/e2e/compliance.mjs # browser: MSME details, duplicate bill warning, GSTR-2B upload and match, 43B(h), 180-day ITC, alerts
+node frontend/e2e/logins.mjs     # 47 login checks: every sign-in API, all six access levels, and the login screen with a slow or unreachable server (start the API with TRUST_PROXY=1)
 node frontend/e2e/billsgst.mjs   # browser: repeating bills, batch payments, cess, blocked credit, Rule 37, GSTR-1 JSON, access per person
 node frontend/e2e/settings.mjs   # browser: Settings page, organisation details and logo, lock dates, numbering, UPI QR, email templates, reminders, currencies, history, Back button
 ```

@@ -91,7 +91,10 @@ export function AuthScreen({ onDone }: { onDone: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    const form = f;
     run(async () => {
+      // Phone keyboards and autofill often add a space after the address.
+      const f = { ...form, email: form.email.trim() };
       if (mode === 'forgot') { const r = await api('/auth/forgot-password', { body: { email: f.email } }); setNote(r.message); return; }
       if (mode === 'reset') {
         if (f.password !== again) throw new Error('The two passwords are different');

@@ -25,24 +25,43 @@ if (typeof window !== 'undefined') {
   setInterval(() => { if (document.visibilityState === 'visible') fetch('/api/health').then((r) => { if (r.ok) lastOk = Date.now(); }, () => {}); }, 10 * 60_000);
 }
 
+/** The server said the login is no longer valid (expired after 8 hours, or the password was changed). */
+export class SessionEnded extends Error {}
+const SESSION_MESSAGES = new Set(['Missing token', 'Invalid or expired token', 'Your password was changed. Log in again.']);
+/** The server could not be reached or is still starting: not a reason to log anyone out. */
+export class ServerBusy extends Error {}
+
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const method = opts.method ?? (opts.body ? 'POST' : 'GET');
   // A save is never retried, so make sure the server is awake before sending it.
   if (method !== 'GET' && Date.now() - lastOk > 5 * 60_000) await wakeServer();
-  let res: Response;
+  let res!: Response;
+  const sent = getToken();
   for (let attempt = 0; ; attempt++) {
-    res = await fetch('/api' + path, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    try {
+      res = await fetch('/api' + path, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...(sent ? { Authorization: `Bearer ${sent}` } : {}) },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch {
+      // No answer at all (offline, or the connection dropped). A read is safe to try again.
+      if (method === 'GET' && attempt < 4) { await sleep(2000 * (attempt + 1)); continue; }
+      throw new ServerBusy('Could not reach the server. Check your internet connection and try again.');
+    }
     // Only reads are retried: a save may already have reached the server, and repeating it could post it twice.
     if (!WAKING.has(res.status) || method !== 'GET' || attempt >= 4) break;
     await sleep(5000 * (attempt + 1));
   }
   if (!WAKING.has(res.status)) lastOk = Date.now();
   const data = await res.json().catch(() => ({}));
-  if (WAKING.has(res.status)) throw new Error('The server is still starting up. This can take up to 3 minutes after a quiet spell. Check whether your change appears, then try again shortly.');
+  if (WAKING.has(res.status)) throw new ServerBusy('The server is still starting up. This can take up to 3 minutes after a quiet spell. Check whether your change appears, then try again shortly.');
+  if (res.status === 401 && sent && SESSION_MESSAGES.has(data.message)) {
+    // Tell the app once, so it shows the login page with a reason instead of an error on every screen.
+    if (getToken() === sent) { setToken(null); window.dispatchEvent(new CustomEvent('session-ended', { detail: data.message })); }
+    throw new SessionEnded(data.message === 'Your password was changed. Log in again.' ? data.message : 'You were logged out because the session ended. Log in again.');
+  }
+  if (res.status === 429) throw new ServerBusy(data.message ?? 'Too many requests. Wait a minute and try again.');
   if (!res.ok) throw new Error(Array.isArray(data.message) ? data.message.join('; ') : data.message ?? `Error ${res.status}`);
   return data;
 }

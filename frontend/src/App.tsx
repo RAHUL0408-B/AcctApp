@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, getToken, setToken } from './api';
+import { api, getToken, setToken, SessionEnded, wakeServer } from './api';
 import { APP_NAME, ErrorBoundary, Logo } from './ui';
 import { AuthScreen } from './pages/Auth';
 import { Clients } from './pages/Clients';
@@ -121,6 +121,8 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(!!getToken());
+  const [waiting, setWaiting] = useState(false);
+  const [startError, setStartError] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   // The side menu can shrink to icons; remembered in this browser.
   const [collapsed, setCollapsedState] = useState(() => { try { return localStorage.getItem('sidebar-collapsed') === '1'; } catch { return false; } });
@@ -130,13 +132,34 @@ export function App() {
 
   const load = useCallback(async () => {
     const token = getToken(); // if the user logs out (or in as someone else) while this runs, drop the stale result
-    try {
-      const nextMe = await api<Me>('/auth/me'), nextOrgs = await api<Org[]>('/orgs');
-      if (getToken() === token) { setMe(nextMe); setOrgs(nextOrgs); }
-    } catch { if (getToken() === token) { setToken(null); setMe(null); } }
+    setStartError('');
+    // Only a refused login logs the person out. A server that is slow, starting up or unreachable is waited for,
+    // otherwise opening the page after a quiet spell threw away a perfectly good login.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const nextMe = await api<Me>('/auth/me'), nextOrgs = await api<Org[]>('/orgs');
+        if (getToken() === token) { setMe(nextMe); setOrgs(nextOrgs); }
+        break;
+      } catch (e) {
+        if (getToken() !== token || e instanceof SessionEnded) { if (!getToken()) setMe(null); break; }
+        if (attempt < 3) { setWaiting(true); await new Promise((r) => setTimeout(r, 3000)); await wakeServer(); continue; }
+        setStartError((e as Error).message || 'Could not load your account.');
+        break;
+      }
+    }
+    setWaiting(false);
     setLoading(false);
   }, []);
   useEffect(() => { if (getToken()) load(); }, [load]);
+  // A login that ends while the app is open (8 hours, or the password was changed elsewhere) goes back to the login page with the reason.
+  useEffect(() => {
+    const ended = (e: Event) => {
+      setMe(null); setOrgs([]);
+      setNotice((e as CustomEvent).detail === 'Your password was changed. Log in again.' ? 'Your password was changed. Log in again.' : 'You were logged out because the session ended. Log in again.');
+    };
+    window.addEventListener('session-ended', ended);
+    return () => window.removeEventListener('session-ended', ended);
+  }, []);
 
   const m = /^\/o\/(\d+)\/([\w-]+)(?:\/([\w-]+))?$/.exec(route);
   const org = m && me ? orgs.find((o) => o.id === Number(m[1])) ?? null : null;
@@ -185,7 +208,15 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [org, canPost, role, route]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) return <p className="p-8 text-slate-500">Loading…</p>;
+  if (loading) return <p className="p-8 text-slate-500" role="status">{waiting ? 'The server is starting up. This can take up to 3 minutes after a quiet spell. You are still logged in…' : 'Loading…'}</p>;
+  if (startError && !me && getToken()) return (
+    <div className="p-8" role="alert">
+      <p className="mb-3 text-slate-700">{startError}</p>
+      <p className="mb-4 text-sm text-slate-500">You are still logged in. Nothing was lost.</p>
+      <button type="button" className="mr-3 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white" onClick={() => { setLoading(true); load(); }}>Try again</button>
+      <button type="button" className="text-sm text-slate-600 underline" onClick={() => { setToken(null); setStartError(''); setMe(null); }}>Log out</button>
+    </div>
+  );
   if (!me) return <>{notice && <NoticeBar text={notice} onClose={() => setNotice('')} />}<AuthScreen onDone={() => { navigate('/clients'); setLoading(true); load(); }} /></>;
 
   const firmRole = me.memberships.find((x) => x.orgId === null);

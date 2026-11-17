@@ -58,7 +58,7 @@ export class TeamController {
   @Post('invitations')
   async invite(@UserId() uid: number, @Param('firmId', ParseIntPipe) firmId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireFirmOwner(uid, firmId);
-    const b = parse(z.object({ email: z.string().email().toLowerCase(), role: z.enum(ROLES), orgId: z.number().int().positive().optional() }), body);
+    const b = parse(z.object({ email: z.string().trim().toLowerCase().email(), role: z.enum(ROLES), orgId: z.number().int().positive().optional() }), body);
     await checkOrg(firmId, b.role, b.orgId);
     const pool = getPool();
     const existing = (await pool.query('SELECT u.id FROM users u WHERE u.email=$1', [b.email])).rows[0];

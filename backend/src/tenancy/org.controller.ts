@@ -21,7 +21,7 @@ const addAccount = z.object({
   type: z.enum(['asset', 'liability', 'equity', 'income', 'expense']), group: z.string().min(1).max(100),
 });
 const addMember = z.object({
-  firmId: z.number().int().positive(), email: z.string().email().toLowerCase(),
+  firmId: z.number().int().positive(), email: z.string().trim().toLowerCase().email(),
   role: z.enum(['owner', 'accountant', 'staff', 'client', 'sales', 'employee']), orgId: z.number().int().positive().optional(),
 });
 

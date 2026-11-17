@@ -16,7 +16,7 @@ const APP_NAME = process.env.APP_NAME ?? 'AcctApp';
 const limiter = new RateLimiter(10, 60_000); // 10 attempts per minute per key
 
 const registerSchema = z.object({
-  email: z.string().email().toLowerCase(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(10, 'Use at least 10 characters').max(200),
   fullName: z.string().min(1).max(120),
   // Not needed when joining someone else's firm through an invitation.
@@ -24,7 +24,7 @@ const registerSchema = z.object({
   inviteToken: z.string().max(200).optional(),
   acceptTerms: z.literal(true, { errorMap: () => ({ message: 'You must accept the Terms and Privacy Policy' }) }),
 });
-const loginSchema = z.object({ email: z.string().email().toLowerCase(), password: z.string().min(1) });
+const loginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1) });
 
 @Controller('auth')
 export class AuthController {
@@ -89,7 +89,7 @@ export class AuthController {
   @Post('forgot-password')
   @HttpCode(200)
   async forgot(@Body() body: unknown, @Ip() ip: string) {
-    const b = parse(z.object({ email: z.string().email().toLowerCase() }), body);
+    const b = parse(z.object({ email: z.string().trim().toLowerCase().email() }), body);
     limiter.hit(`forgot:${ip}`);
     limiter.hit(`forgot:${b.email}`);
     const u = (await getPool().query('SELECT id FROM users WHERE email=$1', [b.email])).rows[0];

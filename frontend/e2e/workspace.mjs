@@ -121,11 +121,11 @@ await page.getByLabel('Bank ledger account').selectOption({ label: '1010 Bank Ac
 await btn('Add').click();
 await page.getByRole('heading', { name: 'Reconcile' }).waitFor();
 await menu('Accounting', 'Chart of accounts');
-await page.getByLabel('Code').fill('1020');
+await page.getByLabel('Statement line').selectOption({ label: 'Current Assets' });
+await page.getByLabel('Group', { exact: true }).selectOption({ label: 'Cash and Bank Balances (1000–1099)' });
 await page.getByLabel('Name').fill('ICICI Bank');
-await page.locator('select').filter({ hasText: 'liability' }).selectOption('asset');
-await page.getByLabel('Group').fill('Cash and Bank');
-await btn('Add').click();
+await page.waitForFunction(() => document.querySelector('input[aria-label="Code"]')?.value === '1020'); // the next number after 1010, suggested
+await btn('Add ledger').click();
 await page.getByText('1020 · ICICI Bank').waitFor();
 await menu('Accounting', 'Bank accounts');
 await page.getByLabel('Bank name').fill('ICICI');

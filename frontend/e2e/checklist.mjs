@@ -213,9 +213,9 @@ item(7, 'posted invoice edited by clicking its amount, then deleted (bulk delete
 // 9. Manual journal with a rule, 8 (journal attachment)
 await menu('Accounting', 'Manual journals');
 await page.getByLabel('Narration', { exact: true }).fill('Prepaid insurance');
-await page.getByLabel('Account 1').selectOption({ index: 1 });
+await page.getByLabel('Account 1').fill('1000 · Cash in Hand');
 await page.getByLabel('Debit 1').fill('100');
-await page.getByLabel('Account 2').selectOption({ label: '1010 · Bank Account' });
+await page.getByLabel('Account 2').fill('1010 · Bank Account');
 await page.getByLabel('Credit 2').fill('100');
 await page.getByLabel('Repeat automatically').check();
 await page.getByLabel('Rule name').fill('Insurance');
@@ -263,9 +263,9 @@ item(18, 'rejected expense claim edited and resubmitted by the submitter');
 
 // 22. Chart of accounts headings
 await menu('Accounting', 'Chart of accounts');
-for (const h of ['Liabilities', 'Equity', 'Assets', 'Income', 'Expenses']) await page.getByText(h, { exact: true }).first().waitFor();
+for (const h of ['Capital and Reserves & Surplus', 'Current Liabilities', 'Current Assets', 'Direct Incomes', 'Indirect Expenses']) await page.getByTestId('coa-tree').getByText(h, { exact: true }).first().waitFor();
 assert.strictEqual(await page.getByText('Liabilitys').count(), 0);
-item(22, 'chart of accounts reads Liabilities and Equity (not Liabilitys / Equitys)');
+item(22, 'chart of accounts grouped by statement line (Capital and Reserves & Surplus, Current Liabilities, ...)');
 
 // 23. Blank template on Import data
 await menu('Accounting', 'Import data');

@@ -4,6 +4,7 @@ import type { Org } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import { Documents } from './Documents';
 import { Contacts } from './Contacts';
+import { ChartOfAccounts } from './ChartOfAccounts';
 import { Bank } from './Bank';
 import { Reports } from './Reports';
 import { Files, Import, Schedules, Tasks } from './Practice';
@@ -83,11 +84,11 @@ export function areaOfPage(i: { key: PageKey; sub?: string }): string | null {
   return map[i.key] ?? null;
 }
 
-const PLURAL: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 
 export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, canTeam = false }: { org: Org; role: string; page: PageKey; sub?: string; go: (p: string) => void; onOrgChanged: () => void; lastLogin?: string | null; canTeam?: boolean }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const reloadAccounts = () => api<Account[]>(`/orgs/${org.id}/accounts`).then(setAccounts);
+  // Archived ledgers are kept out of the pickers on new entries.
+  const reloadAccounts = () => api<(Account & { isActive?: boolean })[]>(`/orgs/${org.id}/accounts`).then((l) => setAccounts(l.filter((a) => a.isActive !== false)));
   useEffect(() => { reloadAccounts(); }, [org.id]);
   const canPost = role !== 'client';
   const canManage = role === 'owner' || role === 'accountant';
@@ -113,8 +114,8 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, can
     case 'bank': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="reconcile" />;
     case 'bank-rules': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="rules" />;
     case 'money': return <Money org={org} canPost={canPost} accounts={accounts} tab={sub === 'receive' || sub === 'transfer' ? sub : 'spend'} go={go} />;
-    case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} /></>;
-    case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Every account that transactions can post to." /><Chart org={org} accounts={accounts} canManage={canManage} reload={reloadAccounts} /></>;
+    case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} role={role} go={go} /></>;
+    case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Financial statement line item › group › sub-group › ledger. Every account that transactions can post to." /><ChartOfAccounts org={org} canManage={canManage} reload={reloadAccounts} /></>;
     case 'assets': return <FixedAssets org={org} canManage={canManage} accounts={accounts} />;
     case 'items': return <Items org={org} canPost={canPost && !narrow} accounts={accounts} />;
     case 'reports': return <><PageHeader title="Reports" subtitle="Financial statements, analytics, ageing, GST and TDS. Star a report to add it to the Reporting menu." /><Reports org={org} accounts={accounts} initial={sub} /></>;
@@ -171,33 +172,3 @@ function TrialBalance({ org }: { org: Org }) {
   );
 }
 
-export function Chart({ org, accounts, canManage, reload }: { org: Org; accounts: Account[]; canManage: boolean; reload: () => void }) {
-  const [f, setF] = useState({ code: '', name: '', type: 'expense', group: '' });
-  const { error, busy, run } = useAction();
-  const groups = accounts.reduce<Record<string, Account[]>>((m, a) => ((m[a.type] ??= []).push(a), m), {});
-  return (
-    <>
-      {canManage && (
-        <Card title="Add account">
-          <div className="grid gap-3 md:grid-cols-4">
-            <Field label="Code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
-            <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-            <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Type</span>
-              <select className="w-full rounded-md border border-slate-300 bg-white px-3 py-2" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
-                {['asset', 'liability', 'equity', 'income', 'expense'].map((t) => <option key={t}>{t}</option>)}</select></label>
-            <Field label="Group" value={f.group} onChange={(e) => setF({ ...f, group: e.target.value })} />
-          </div>
-          <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Button disabled={busy} onClick={() => run(async () => { await api(`/orgs/${org.id}/accounts`, { body: f }); setF({ ...f, code: '', name: '' }); reload(); })}>Add</Button></div>
-        </Card>
-      )}
-      {canManage && <p className="text-xs text-slate-500">Tick <b>17(5)</b> on an expense account (motor car, food, club fees, personal use…) and the GST on bills coded to it is added to the cost, not claimed as input credit.</p>}
-      {['asset', 'liability', 'equity', 'income', 'expense'].map((t) => (
-        <Card key={t} title={PLURAL[t]}>
-          <ul className="grid gap-x-8 text-sm md:grid-cols-2">{(groups[t] ?? []).map((a) => <li key={a.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-1"><span>{a.code} · {a.name}{a.itcBlocked && <span className="ml-2 rounded bg-amber-100 px-1.5 text-[11px] text-amber-800" title="GST on bills coded here is not claimed (section 17(5))">no ITC</span>}</span>
-            <span className="flex items-center gap-3 text-slate-400">{a.group}{canManage && t === 'expense' && <label className="flex items-center gap-1 text-[11px] text-slate-500" title="Section 17(5): GST on bills coded to this account is added to the cost instead of being claimed">
-              <input type="checkbox" aria-label={`Blocked credit ${a.code}`} checked={!!a.itcBlocked} onChange={(e) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/itc-blocked`, { method: 'PUT', body: { blocked: e.target.checked } }); reload(); })} />17(5)</label>}</span></li>)}</ul>
-        </Card>
-      ))}
-    </>
-  );
-}

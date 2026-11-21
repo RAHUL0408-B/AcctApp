@@ -1,6 +1,7 @@
 // Features that round out the product: settings, items, quotes and POs, repeating invoices, bank rules, fixed assets, dashboard.
 import { ForbiddenException, BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { UQC } from '../tax/gst';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
@@ -59,7 +60,7 @@ async function planDepreciation(c: PoolClient, a: any, through: string) {
   return out;
 }
 /** Queue reminder emails for overdue invoices, using the organisation's reminder template and interval. Also run daily by the worker when automatic reminders are on. */
-export async function sendOverdueReminders(orgId: number, uid: number | null, ip?: string) {
+export async function sendOverdueReminders(orgId: number, uid: number | null, ip?: string, ids?: number[]) {
   const mp = await mailPrefs(getPool(), orgId);
   const mails = await withOrg(orgId, async (c) => {
     const rows = (await c.query(
@@ -67,8 +68,9 @@ export async function sendOverdueReminders(orgId: number, uid: number | null, ip
               d.net_payable - COALESCE((SELECT SUM(amount) FROM payments p WHERE p.doc_id=d.id),0)
                             - COALESCE((SELECT SUM(total) FROM documents x WHERE x.original_doc_id=d.id AND x.status='posted'),0) AS outstanding
          FROM documents d JOIN contacts ct ON ct.id=d.contact_id
-        WHERE d.doc_type='invoice' AND d.status='posted' AND d.due_date < CURRENT_DATE AND ct.email IS NOT NULL
-          AND (d.reminder_sent_at IS NULL OR d.reminder_sent_at < now() - make_interval(days => $1::int))`, [mp.remindEveryDays])).rows.filter((r) => Number(r.outstanding) > 0);
+        WHERE d.doc_type='invoice' AND d.status='posted' AND ct.email IS NOT NULL
+          AND (CASE WHEN $2::bigint[] IS NULL THEN d.due_date < CURRENT_DATE AND (d.reminder_sent_at IS NULL OR d.reminder_sent_at < now() - make_interval(days => $1::int))
+                    ELSE d.id = ANY($2) END)`, [mp.remindEveryDays, ids ?? null])).rows.filter((r) => Number(r.outstanding) > 0);
     if (rows.length) await c.query('UPDATE documents SET reminder_sent_at=now() WHERE id = ANY($1)', [rows.map((r) => r.id)]);
     if (uid || rows.length) await writeAudit(c, { orgId, userId: uid, action: uid ? 'remind_overdue' : 'auto_remind_overdue', entity: 'document', after: { count: rows.length }, ip });
     return rows;
@@ -88,6 +90,9 @@ export async function runAutoReminders() {
   return { sent };
 }
 
+/** GST unit quantity code (UQC) such as NOS, KGS, MTR, HRS. */
+const UNIT = z.string().trim().toUpperCase().refine((u) => (UQC as readonly string[]).includes(u), 'Unit must be a GST unit quantity code (UQC) such as NOS, PCS, KGS, LTR or OTH');
+
 const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer' }, purchase_order: { prefix: 'PO', docType: 'bill', contactKinds: 'supplier' } } as const;
 
 @Controller('orgs/:orgId')
@@ -98,7 +103,8 @@ export class ExtrasController {
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireAnyOrg(uid, orgId, ['read', 'sales']); // sales people need the state code to choose CGST+SGST or IGST
     const o = (await getPool().query(`SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth",gst_scheme AS "gstScheme",
-      lut_number AS "lutNumber",require_approval AS "requireApproval",invoice_due_days AS "invoiceDueDays",bill_due_days AS "billDueDays",invoice_terms AS "invoiceTerms"
+      lut_number AS "lutNumber",lut_from::text AS "lutFrom",lut_to::text AS "lutTo",tan,
+      require_approval AS "requireApproval",invoice_due_days AS "invoiceDueDays",bill_due_days AS "billDueDays",invoice_terms AS "invoiceTerms"
       FROM organizations WHERE id=$1`, [orgId])).rows[0];
     return num(o, 'id');
   }
@@ -112,21 +118,25 @@ export class ExtrasController {
       pan: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/, 'Invalid PAN').nullable().optional(),
       gstScheme: z.enum(['regular', 'composition']).optional(),
       lutNumber: z.string().min(5).max(40).nullable().optional(),
+      lutFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), lutTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      tan: z.string().trim().toUpperCase().regex(/^[A-Z]{4}\d{5}[A-Z]$/, 'TAN looks like PNEA12345B').nullable().optional(),
       requireApproval: z.boolean().optional(),
       invoiceDueDays: z.number().int().min(0).max(365).nullable().optional(),
       billDueDays: z.number().int().min(0).max(365).nullable().optional(),
       invoiceTerms: z.string().max(500).nullable().optional(),
     }), body);
-    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,require_approval,invoice_due_days,bill_due_days,invoice_terms FROM organizations WHERE id=$1', [orgId])).rows[0];
+    if (b.lutFrom && b.lutTo && b.lutTo < b.lutFrom) throw new BadRequestException('The LUT end date is before its start date');
+    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,lut_from::text AS lut_from,lut_to::text AS lut_to,tan,require_approval,invoice_due_days,bill_due_days,invoice_terms FROM organizations WHERE id=$1', [orgId])).rows[0];
     const keep = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
     const next = { name: b.name ?? before.name, gstin: keep(b.gstin, before.gstin), pan: keep(b.pan, before.pan),
       gstScheme: b.gstScheme ?? before.gst_scheme, lutNumber: keep(b.lutNumber, before.lut_number), requireApproval: b.requireApproval ?? before.require_approval,
-      invoiceDueDays: keep(b.invoiceDueDays, before.invoice_due_days), billDueDays: keep(b.billDueDays, before.bill_due_days), invoiceTerms: keep(b.invoiceTerms, before.invoice_terms) || null };
+      invoiceDueDays: keep(b.invoiceDueDays, before.invoice_due_days), billDueDays: keep(b.billDueDays, before.bill_due_days), invoiceTerms: keep(b.invoiceTerms, before.invoice_terms) || null,
+      lutFrom: keep(b.lutFrom, before.lut_from), lutTo: keep(b.lutTo, before.lut_to), tan: keep(b.tan, before.tan) };
     const state = next.gstin ? next.gstin.slice(0, 2) : before.state_code;
     return withOrg(orgId, async (c) => {
       await c.query(`UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5, gst_scheme=$6, lut_number=$7, require_approval=$8,
-                       invoice_due_days=$9, bill_due_days=$10, invoice_terms=$11 WHERE id=$1`,
-        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval, next.invoiceDueDays, next.billDueDays, next.invoiceTerms]);
+                       invoice_due_days=$9, bill_due_days=$10, invoice_terms=$11, lut_from=$12, lut_to=$13, tan=$14 WHERE id=$1`,
+        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval, next.invoiceDueDays, next.billDueDays, next.invoiceTerms, next.lutFrom, next.lutTo, next.tan]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'organization', entityId: orgId, before, after: next, ip });
       return { ok: true, stateCode: state };
     });
@@ -137,7 +147,7 @@ export class ExtrasController {
   async items(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     const rows = await withOrg(orgId, async (c) => (await c.query(
-      `SELECT id,code,name,kind,hsn_sac AS "hsnSac",sale_rate AS "saleRate",purchase_rate AS "purchaseRate",gst_rate_bp AS "gstRateBp",
+      `SELECT id,code,name,kind,hsn_sac AS "hsnSac",unit,sale_rate AS "saleRate",purchase_rate AS "purchaseRate",gst_rate_bp AS "gstRateBp",
               sales_account_id AS "salesAccountId",purchase_account_id AS "purchaseAccountId",track_stock AS "trackStock" FROM items WHERE active ORDER BY name`)).rows
       .map((r) => num(r, 'id', 'saleRate', 'purchaseRate', 'salesAccountId', 'purchaseAccountId')));
     return role === 'sales' ? rows.map((r: any) => ({ ...r, purchaseRate: null, purchaseAccountId: null })) : rows; // no buying prices for sales people
@@ -150,14 +160,14 @@ export class ExtrasController {
       code: z.string().min(1).max(40), name: z.string().min(1).max(200), kind: z.enum(['goods', 'service']),
       hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(), saleRate: z.number().int().min(0).default(0), purchaseRate: z.number().int().min(0).default(0),
       gstRateBp: z.number().int().min(0).max(5000).default(1800), salesAccountId: z.number().int().positive().optional(), purchaseAccountId: z.number().int().positive().optional(),
-      trackStock: z.boolean().default(false),
+      trackStock: z.boolean().default(false), unit: UNIT.optional(),
     }), body);
     if (b.trackStock && b.kind !== 'goods') throw new BadRequestException('Only goods can have stock tracked');
     return withOrg(orgId, async (c) => {
       if ((await c.query('SELECT 1 FROM items WHERE code=$1', [b.code])).rowCount) throw new ConflictException(`Item code ${b.code} already exists`);
       if (!(await c.query('SELECT 1 FROM gst_rates WHERE rate_bp=$1 AND valid_to IS NULL', [b.gstRateBp])).rowCount) throw new BadRequestException('Not a configured GST rate');
-      const r = (await c.query('INSERT INTO items(org_id,code,name,kind,hsn_sac,sale_rate,purchase_rate,gst_rate_bp,sales_account_id,purchase_account_id,track_stock) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
-        [orgId, b.code, b.name, b.kind, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null, b.trackStock])).rows[0];
+      const r = (await c.query('INSERT INTO items(org_id,code,name,kind,hsn_sac,sale_rate,purchase_rate,gst_rate_bp,sales_account_id,purchase_account_id,track_stock,unit) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',
+        [orgId, b.code, b.name, b.kind, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null, b.trackStock, b.unit ?? null])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'item', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
@@ -170,12 +180,14 @@ export class ExtrasController {
     const b = parse(z.object({
       name: z.string().min(1).max(200), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').nullable().optional(), saleRate: z.number().int().min(0).default(0), purchaseRate: z.number().int().min(0).default(0),
       gstRateBp: z.number().int().min(0).max(5000).default(1800), salesAccountId: z.number().int().positive().nullable().optional(), purchaseAccountId: z.number().int().positive().nullable().optional(),
+      unit: UNIT.nullable().optional(),
     }), body);
     return withOrg(orgId, async (c) => {
       if (b.salesAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type='income'", [b.salesAccountId])).rowCount) throw new BadRequestException('The sales account must be an income account');
       if (b.purchaseAccountId && !(await c.query("SELECT 1 FROM accounts WHERE id=$1 AND type IN ('expense','asset')", [b.purchaseAccountId])).rowCount) throw new BadRequestException('The purchase account must be an expense or asset account');
-      const r = await c.query('UPDATE items SET name=$2,hsn_sac=$3,sale_rate=$4,purchase_rate=$5,gst_rate_bp=$6,sales_account_id=$7,purchase_account_id=$8 WHERE id=$1 AND active RETURNING id',
-        [id, b.name, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null]);
+      const r = await c.query('UPDATE items SET name=$2,hsn_sac=$3,sale_rate=$4,purchase_rate=$5,gst_rate_bp=$6,sales_account_id=$7,purchase_account_id=$8,unit=COALESCE($9,unit) WHERE id=$1 AND active RETURNING id',
+        [id, b.name, b.hsnSac ?? null, b.saleRate, b.purchaseRate, b.gstRateBp, b.salesAccountId ?? null, b.purchaseAccountId ?? null, b.unit === undefined ? null : b.unit]);
+      if (b.unit === null) await c.query('UPDATE items SET unit=NULL WHERE id=$1', [id]);
       if (!r.rowCount) throw new NotFoundException('Item not found');
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'item', entityId: id, after: b, ip });
       return { ok: true };
@@ -261,7 +273,7 @@ export class ExtrasController {
     const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     // Everything after the dates is optional: the screen lets the user change the lines and details before anything is posted.
     const b = parse(z.object({ issueDate: date.default(today()), dueDate: date.optional(), contactId: z.number().int().positive().optional(), lines: z.array(lineSchema).min(1).max(200).optional(),
-      notes: z.string().max(500).optional(), supplierRef: z.string().max(60).optional(), placeOfSupply: z.string().length(2).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).optional(),
+      notes: z.string().max(500).optional(), supplierRef: z.string().max(60).optional(), placeOfSupply: z.string().length(2).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge', 'unregistered']).optional(),
       tdsSection: z.string().optional(), number: z.string().trim().min(1).max(40).optional() }), body ?? {});
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT * FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
@@ -338,10 +350,12 @@ export class ExtrasController {
   }
 
   /** Email a polite reminder for every overdue sales invoice that has a contact email and was not reminded recently (see Invoice reminders). */
+  /** Reminders for every overdue invoice, or (with ids) for the chosen ones now, whatever the reminder interval. */
   @Post('documents/remind-overdue')
-  async remindOverdue(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Ip() ip: string) {
+  async remindOverdue(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    return sendOverdueReminders(orgId, uid, ip);
+    const b = parse(z.object({ ids: z.array(z.number().int().positive()).min(1).max(500).optional() }), body ?? {});
+    return sendOverdueReminders(orgId, uid, ip, b.ids);
   }
 
   // ---------- bank rules ----------

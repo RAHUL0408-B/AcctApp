@@ -40,7 +40,7 @@ const ToneCtx = createContext<Tone>(NEUTRAL);
 
 /** The "+" menu. Alt + the letter works anywhere inside an organisation. */
 const CREATE: [string, string, string][] = [
-  ['Invoice', 'I', 'invoices/new'], ['Bill', 'B', 'bills/new'], ['Contact', 'C', 'contacts/new'], ['Quote', 'Q', 'quotes/new'], ['Purchase order', 'O', 'purchase-orders/new'],
+  ['Invoice', 'I', 'invoices/new'], ['Bill', 'B', 'bills/new'], ['Credit note', 'E', 'invoices/new-credit_note'], ['Debit note', 'D', 'bills/new-debit_note'], ['Contact', 'C', 'contacts/new'], ['Quote', 'Q', 'quotes/new'], ['Purchase order', 'O', 'purchase-orders/new'],
   ['Document upload', 'U', 'files'], ['Manual journal', 'J', 'journal'], ['Spend money', 'S', 'money/spend'], ['Receive money', 'R', 'money/receive'], ['Transfer money', 'T', 'money/transfer'],
 ];
 
@@ -238,7 +238,8 @@ export function App() {
     if (!m) return '/clients';
     if (!org || page === 'dashboard') return null;
     const base = `/o/${org.id}`;
-    if (sub === 'new') return `${base}/${page}`;
+    // A record or form under a list (customers/12, customers/edit-12, invoices/new) goes back to that list.
+    if (sub && !['reports', 'compliance', 'money', 'setup'].includes(page)) return `${base}/${page}`;
     if (page === 'setup' || page === 'settings' || page === 'sales-settings' || page === 'purchases-settings') return `${base}/settings-hub`;
     return `${base}/dashboard`;
   })();

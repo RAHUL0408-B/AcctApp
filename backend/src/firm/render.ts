@@ -227,7 +227,12 @@ function addSheet(wb: ExcelJS.Workbook, sheetName: string, t: Table, orgName: st
 
 export interface InvoiceView {
   orgName: string; orgGstin: string | null; type: string; number: string; issueDate: string; dueDate: string | null; contact: string; contactGstin: string | null;
-  placeOfSupply: string | null; lines: { description: string; hsnSac: string | null; qtyMilli: number; rate: number; taxable: number; gstRateBp: number }[];
+  /** Registered (legal) name, printed in the signature block when it differs from the trade name. */ orgLegalName?: string | null;
+  /** Billing address lines of the customer or supplier, and the delivery address when it is different. */ contactAddress?: string[]; shipTo?: string[] | null;
+  /** "Maharashtra (27)". */ placeOfSupply: string | null;
+  /** Rule 46(p): whether tax is payable on reverse charge. */ reverseCharge?: boolean;
+  /** Export, SEZ or unregistered wording. */ supplyNote?: string | null;
+  lines: { description: string; hsnSac: string | null; unit?: string | null; qtyMilli: number; rate: number; taxable: number; gstRateBp: number }[];
   subtotal: number; cgst: number; sgst: number; igst: number; total: number; tdsAmount: number; notes: string | null; cess?: number;
   /** From the organisation settings: logo, address and contact lines, and payment details (bank, UPI QR). */
   branding?: Branding;
@@ -288,18 +293,31 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
     // ----- details
     const top = doc.y;
     doc.fillColor(look.text).font(look.font).fontSize(fs);
-    const meta: [string, string][] = [['Number', v.number], ['Date', v.issueDate], ...(v.dueDate ? [['Due', v.dueDate] as [string, string]] : []), ['Place of supply', v.placeOfSupply ?? '-']];
+    const sales = v.type === 'invoice' || v.type === 'credit_note';
+    const meta: [string, string][] = [['Number', v.number], ['Date', v.issueDate], ...(v.dueDate ? [['Due', v.dueDate] as [string, string]] : []),
+      ['Place of supply', v.placeOfSupply ?? '-'], ...(sales || v.reverseCharge ? [['Reverse charge', v.reverseCharge ? 'Yes' : 'No'] as [string, string]] : [])];
     const billBox = look.grid || look.head === 'band';
-    if (billBox) doc.roundedRect(40, top, W / 2 - 10, 62, 4).fillAndStroke(soft, tint(look.accent, 0.6)).fillColor(look.text);
+    const addr = v.contactAddress ?? [], ship = v.shipTo ?? null;
+    const boxH = Math.max(62, 44 + (addr.length + 1) * (fs + 3));
+    if (billBox) doc.roundedRect(40, top, W / 2 - 10, boxH, 4).fillAndStroke(soft, tint(look.accent, 0.6)).fillColor(look.text);
     doc.font(look.bold).fontSize(fs - 1).fillColor(look.accent).text(v.type === 'bill' || v.type === 'debit_note' ? 'SUPPLIER' : 'BILL TO', 50, top + 8, { width: W / 2 - 30 });
     doc.font(look.bold).fontSize(fs + 1.5).fillColor(look.text).text(v.contact, 50, doc.y + 1, { width: W / 2 - 30 });
-    doc.font(look.font).fontSize(fs).fillColor('#444444').text(v.contactGstin ? `GSTIN: ${v.contactGstin}` : 'Unregistered', 50, doc.y, { width: W / 2 - 30 });
+    doc.font(look.font).fontSize(fs).fillColor('#444444');
+    for (const l of addr) doc.text(fit(doc, l, W / 2 - 30), 50, doc.y, { width: W / 2 - 30, lineBreak: false });
+    doc.text(v.contactGstin ? `GSTIN: ${v.contactGstin}` : 'Unregistered', 50, doc.y, { width: W / 2 - 30 });
     let my = top + 8;
     meta.forEach(([k, val]) => { doc.font(look.font).fontSize(fs).fillColor('#666666').text(k, 40 + W / 2 + 20, my, { width: 90, lineBreak: false }); doc.font(look.bold).fillColor(look.text).text(fit(doc, val, W / 2 - 112), 40 + W / 2 + 112, my, { width: W / 2 - 112, lineBreak: false }); my += fs + 5; });
-    doc.y = Math.max(doc.y, my, top + 62) + 16;
+    if (ship && ship.length) {
+      my += 4;
+      doc.font(look.bold).fontSize(fs - 1).fillColor(look.accent).text('SHIP TO / DELIVERY ADDRESS', 40 + W / 2 + 20, my, { width: W / 2 - 20 }); my += fs + 3;
+      doc.font(look.font).fontSize(fs).fillColor('#444444');
+      for (const l of ship) { doc.text(fit(doc, l, W / 2 - 20), 40 + W / 2 + 20, my, { width: W / 2 - 20, lineBreak: false }); my += fs + 3; }
+    }
+    doc.y = Math.max(doc.y, my, top + boxH) + 16;
+    if (v.supplyNote) { doc.font(look.italic).fontSize(fs - 0.5).fillColor('#444444').text(v.supplyNote, 40, doc.y - 8, { width: W }); doc.y += 8; }
 
     // ----- lines table
-    const cols = [{ h: 'Description', w: W - 285, a: 'left' }, { h: 'HSN/SAC', w: 60, a: 'left' }, { h: 'Qty', w: 40, a: 'right' }, { h: 'Rate', w: 70, a: 'right' }, { h: 'GST %', w: 40, a: 'right' }, { h: 'Amount', w: 75, a: 'right' }] as const;
+    const cols = [{ h: 'Description', w: W - 325, a: 'left' }, { h: 'HSN/SAC', w: 60, a: 'left' }, { h: 'Qty', w: 40, a: 'right' }, { h: 'Unit', w: 40, a: 'left' }, { h: 'Rate', w: 70, a: 'right' }, { h: 'GST %', w: 40, a: 'right' }, { h: 'Amount', w: 75, a: 'right' }] as const;
     const rowH = fs + 8;
     const row = (cells: string[], y: number, bold: boolean, fill?: string, colour = look.text) => {
       if (fill) doc.rect(40, y - 3, W, rowH).fill(fill);
@@ -316,7 +334,7 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
     v.lines.forEach((l, i) => {
       if (doc.y > pageH - 150) { doc.addPage(); doc.y = 40; header(); }
       const y = doc.y;
-      row([l.description, l.hsnSac ?? '', String(l.qtyMilli / 1000), formatPaise(l.rate), String(l.gstRateBp / 100), formatPaise(l.taxable)], y, false, look.zebra && i % 2 === 1 ? tint(look.accent, 0.95) : undefined);
+      row([l.description, l.hsnSac ?? '', String(l.qtyMilli / 1000), l.unit ?? (l.hsnSac?.startsWith('99') ? 'OTH' : 'NOS'), formatPaise(l.rate), String(l.gstRateBp / 100), formatPaise(l.taxable)], y, false, look.zebra && i % 2 === 1 ? tint(look.accent, 0.95) : undefined);
       if (look.rowLines && !look.grid) doc.moveTo(40, y + rowH - 3).lineTo(40 + W, y + rowH - 3).strokeColor('#e2e4ea').lineWidth(0.4).stroke();
       doc.y = y + rowH;
     });
@@ -353,6 +371,16 @@ export function renderInvoicesPdf(views: InvoiceView[], o: ExportOptions = DEFAU
         if (pay.qrCaption) doc.fillColor('#555555').fontSize(7).text(pay.qrCaption, 40 + W - 110, y0 + 92, { width: 108, align: 'center', lineBreak: false });
       }
       doc.y = y0 + boxH + 6;
+    }
+
+    // ----- signature (Rule 46(q)): for the supplier, on documents we issue
+    if (v.type !== 'bill') {
+      if (doc.y + 70 > pageH - 50) { doc.addPage(); doc.y = 40; }
+      const sy = doc.y + 18, sw = 220, sx = 40 + W - sw;
+      doc.fillColor('#222222').font(look.bold).fontSize(fs).text(`For ${v.orgLegalName || v.orgName}`, sx, sy, { width: sw, align: 'right' });
+      doc.moveTo(sx + 40, sy + 46).lineTo(40 + W, sy + 46).strokeColor('#999999').lineWidth(0.5).stroke();
+      doc.fillColor('#555555').font(look.font).fontSize(fs - 1).text('Authorised Signatory', sx, sy + 50, { width: sw, align: 'right' });
+      doc.y = sy + 66;
     }
 
     };

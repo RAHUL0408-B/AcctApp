@@ -10,7 +10,7 @@ import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireOrg, requireAnyOrg } from '../tenancy/acl';
 import { financialYearOf, validateLines, reverseLines, Line } from '../ledger/ledger';
 import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
-import { computeGst, isValidGstin, stateOfGstin, supplyRules, SupplyType, TaxLine, toRupees, totals } from '../tax/gst';
+import { UQC, computeGst, isValidGstin, stateOfGstin, supplyRules, SupplyType, TaxLine, toRupees, totals } from '../tax/gst';
 import { issueCost, onHand, recordMove } from '../inventory/stock';
 import { computeTds } from '../tax/tds';
 
@@ -18,6 +18,11 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 const PREFIX = { invoice: 'INV', bill: 'BILL', credit_note: 'CN', debit_note: 'DN' } as const;
 type DocType = keyof typeof PREFIX;
 const SALES: DocType[] = ['invoice', 'credit_note'];
+
+/** Kinds of business in India; individuals and HUFs deduct TDS at the lower rate. */
+export const CONSTITUTIONS = ['individual', 'huf', 'partnership', 'llp', 'private_company', 'public_company', 'opc', 'aop', 'boi', 'trust', 'society',
+  'cooperative', 'government', 'local_authority', 'ajp', 'foreign_company', 'other'] as const;
+export const isIndividualKind = (k: string | null | undefined) => k === 'individual' || k === 'huf';
 
 const contactSchema = z.object({
   kind: z.enum(['customer', 'supplier', 'both']), name: z.string().min(1).max(200),
@@ -31,11 +36,40 @@ const contactSchema = z.object({
   udyamNo: z.string().trim().toUpperCase().regex(/^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/, 'Udyam number looks like UDYAM-MH-26-0012345').optional(),
   msmeAgreedDays: z.number().int().min(1).max(365).optional(),
   defaultSalesAccountId: z.number().int().positive().nullable().optional(), defaultPurchaseAccountId: z.number().int().positive().nullable().optional(),
+  // Billing and delivery address (printed on invoices, Rule 46).
+  addressLine1: z.string().trim().max(200).optional(), addressLine2: z.string().trim().max(200).optional(), city: z.string().trim().max(100).optional(),
+  pincode: z.string().trim().regex(/^[A-Za-z0-9 -]{3,12}$/, 'PIN code looks wrong').optional(),
+  shipLine1: z.string().trim().max(200).optional(), shipLine2: z.string().trim().max(200).optional(), shipCity: z.string().trim().max(100).optional(),
+  shipStateCode: z.string().length(2).optional(), shipPincode: z.string().trim().regex(/^[A-Za-z0-9 -]{3,12}$/, 'Delivery PIN code looks wrong').optional(),
+  // Constitution decides the TDS rate (individual / HUF pay the lower rate). Replaces the old "individual" tick when given.
+  constitution: z.enum(CONSTITUTIONS).optional(),
+  isSez: z.boolean().default(false),
+  defaultTdsSection: z.string().trim().max(20).optional(),
+  lowerTdsRateBp: z.number().int().min(0).max(3000).optional(), lowerTdsCert: z.string().trim().max(40).optional(),
+  rcmDefault: z.boolean().default(false),
 });
+/** Contacts saved with these fields; listed once so insert and update stay alike. */
+const EXTRA_COLS: [string, (b: z.infer<typeof contactSchema>) => unknown][] = [
+  ['address_line1', (b) => b.addressLine1 || null], ['address_line2', (b) => b.addressLine2 || null], ['city', (b) => b.city || null], ['pincode', (b) => b.pincode || null],
+  ['ship_line1', (b) => b.shipLine1 || null], ['ship_line2', (b) => b.shipLine2 || null], ['ship_city', (b) => b.shipCity || null],
+  ['ship_state_code', (b) => b.shipStateCode || null], ['ship_pincode', (b) => b.shipPincode || null],
+  ['constitution', (b) => b.constitution ?? (b.isIndividual ? 'individual' : null)], ['is_sez', (b) => b.isSez],
+  ['default_tds_section', (b) => b.defaultTdsSection || null], ['lower_tds_rate_bp', (b) => b.lowerTdsRateBp ?? null], ['lower_tds_cert', (b) => b.lowerTdsCert || null],
+  ['rcm_default', (b) => b.rcmDefault],
+  ['msme_type', (b) => b.msmeType ?? null], ['udyam_no', (b) => b.udyamNo ?? null], ['msme_agreed_days', (b) => b.msmeAgreedDays ?? null],
+];
+async function saveExtras(c: PoolClient, id: number, b: z.infer<typeof contactSchema>) {
+  if (b.defaultTdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1', [b.defaultTdsSection])).rowCount) throw new BadRequestException(`Unknown TDS section ${b.defaultTdsSection}`);
+  if (b.shipStateCode && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [b.shipStateCode])).rowCount) throw new BadRequestException('Unknown delivery state code');
+  await c.query(`UPDATE contacts SET ${EXTRA_COLS.map(([col], i) => `${col}=$${i + 2}`).join(', ')} WHERE id=$1`, [id, ...EXTRA_COLS.map(([, f]) => f(b))]);
+}
 const CONTACT_COLS = `id,kind,name,gstin,pan,state_code AS "stateCode",email,phone,is_individual AS "isIndividual",country,
   bank_account_name AS "bankAccountName",bank_name AS "bankName",bank_account_no AS "bankAccountNo",bank_ifsc AS "bankIfsc",
   default_sales_account_id AS "defaultSalesAccountId",default_purchase_account_id AS "defaultPurchaseAccountId",is_archived AS "isArchived",
-  msme_type AS "msmeType",udyam_no AS "udyamNo",msme_agreed_days AS "msmeAgreedDays"`;
+  msme_type AS "msmeType",udyam_no AS "udyamNo",msme_agreed_days AS "msmeAgreedDays",
+  address_line1 AS "addressLine1",address_line2 AS "addressLine2",city,pincode,ship_line1 AS "shipLine1",ship_line2 AS "shipLine2",ship_city AS "shipCity",
+  ship_state_code AS "shipStateCode",ship_pincode AS "shipPincode",constitution,is_sez AS "isSez",default_tds_section AS "defaultTdsSection",
+  lower_tds_rate_bp AS "lowerTdsRateBp",lower_tds_cert AS "lowerTdsCert",rcm_default AS "rcmDefault"`;
 const shapeContact = (r: any) => ({ ...r, id: Number(r.id), defaultSalesAccountId: r.defaultSalesAccountId ? Number(r.defaultSalesAccountId) : null, defaultPurchaseAccountId: r.defaultPurchaseAccountId ? Number(r.defaultPurchaseAccountId) : null });
 /**
  * A posted bill with the same supplier bill number from the same supplier, or from any supplier with the same GSTIN
@@ -56,11 +90,12 @@ export const docSchema = z.object({
   issueDate: date, dueDate: date.optional(), placeOfSupply: z.string().length(2).optional(), supplierRef: z.string().max(60).optional(),
   number: z.string().trim().min(1).max(40).optional(),
   originalDocId: z.number().int().positive().optional(), tdsSection: z.string().optional(), notes: z.string().max(500).optional(),
-  supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge']).default('regular'),
+  supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge', 'unregistered']).default('regular'),
   currency: z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code').default('INR'),
   fxRate: z.number().positive().max(100000).optional(), // rupees per 1 unit of the currency
   lines: z.array(z.object({
     description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
+    unit: z.string().trim().toUpperCase().refine((u) => (UQC as readonly string[]).includes(u), 'Unit must be a GST unit quantity code (UQC) such as NOS, PCS, KGS, LTR or OTH').optional(),
     quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0),
     accountId: z.number().int().positive().optional(), itemId: z.number().int().positive().optional(), trackingOptionId: z.number().int().positive().optional(),
     cessRateBp: z.number().int().min(0).max(30000).optional(), itcBlocked: z.boolean().optional(),
@@ -119,6 +154,7 @@ export class DocumentsController {
   async addContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
     const b = parse(contactSchema, body);
+    if (b.constitution) b.isIndividual = isIndividualKind(b.constitution);
     if (role === 'sales' && b.kind !== 'customer') throw new ForbiddenException('You can add customers only');
     if (b.gstin && !isValidGstin(b.gstin)) throw new BadRequestException('Invalid GSTIN (format or check digit is wrong)');
     const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
@@ -129,7 +165,7 @@ export class DocumentsController {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
         [orgId, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
           b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null])).rows[0];
-      await c.query('UPDATE contacts SET msme_type=$2, udyam_no=$3, msme_agreed_days=$4 WHERE id=$1', [r.id, b.msmeType ?? null, b.udyamNo ?? null, b.msmeAgreedDays ?? null]);
+      await saveExtras(c, Number(r.id), b);
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'contact', entityId: r.id, after: b, ip });
       return { id: Number(r.id) };
     });
@@ -140,6 +176,7 @@ export class DocumentsController {
   async editContact(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
     const b = parse(contactSchema, body);
+    if (b.constitution) b.isIndividual = isIndividualKind(b.constitution);
     if (b.gstin && !isValidGstin(b.gstin)) throw new BadRequestException('Invalid GSTIN (format or check digit is wrong)');
     const state = b.stateCode ?? (b.gstin ? stateOfGstin(b.gstin) : null);
     return withOrg(orgId, async (c) => {
@@ -151,7 +188,7 @@ export class DocumentsController {
         bank_account_name=$11,bank_name=$12,bank_account_no=$13,bank_ifsc=$14,default_sales_account_id=$15,default_purchase_account_id=$16 WHERE id=$1`,
         [id, b.kind, b.name, b.gstin?.toUpperCase() ?? null, b.pan ?? null, state, b.email ?? null, b.phone ?? null, b.isIndividual, b.country,
           b.bankAccountName ?? null, b.bankName ?? null, b.bankAccountNo ?? null, b.bankIfsc ?? null, b.defaultSalesAccountId ?? null, b.defaultPurchaseAccountId ?? null]);
-      await c.query('UPDATE contacts SET msme_type=$2, udyam_no=$3, msme_agreed_days=$4 WHERE id=$1', [id, b.msmeType ?? null, b.udyamNo ?? null, b.msmeAgreedDays ?? null]);
+      await saveExtras(c, id, b);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'contact', entityId: id, before: shapeContact(before), after: b, ip });
       return { ok: true };
     });
@@ -207,9 +244,10 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => {
       const d = (await c.query(`${OUTSTANDING_SQL} WHERE d.id=$1`, [id])).rows[0];
       if (!d || (role === 'sales' && d.doc_type !== 'invoice')) throw new NotFoundException('Document not found');
-      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp AS "cessRateBp",cess,itc_blocked AS "itcBlocked" FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
+      const lines = (await c.query('SELECT description,hsn_sac AS "hsnSac",unit,qty_milli,rate,taxable,gst_rate_bp AS "gstRateBp",cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp AS "cessRateBp",cess,itc_blocked AS "itcBlocked" FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
         .map((l) => ({ ...l, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), cgst: Number(l.cgst), sgst: Number(l.sgst), igst: Number(l.igst), cess: Number(l.cess), accountId: Number(l.account_id), itemId: l.item_id ? Number(l.item_id) : null, trackingOptionId: l.tracking_option_id ? Number(l.tracking_option_id) : null }));
-      const payments = (await c.query('SELECT id,pay_date::text AS date,amount,reference FROM payments WHERE doc_id=$1 ORDER BY id', [id])).rows.map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
+      const payments = (await c.query('SELECT id,pay_date::text AS date,amount,reference,batch_id FROM payments WHERE doc_id=$1 ORDER BY id', [id])).rows
+        .map((p) => ({ id: Number(p.id), date: p.date, amount: Number(p.amount), reference: p.reference, batchId: p.batch_id ? Number(p.batch_id) : null }));
       return { ...shapeDoc(d), lines, payments };
     });
   }
@@ -289,6 +327,44 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => ({ number: await peekNumber(c, orgId, type as DocType, d) }));
   }
 
+  /** Is this number free for this type? Checked as soon as it is typed, so the clash shows before saving. */
+  @Get('orgs/:orgId/documents-number-check')
+  async numberCheck(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type: string, @Query('number') number: string, @Query('except') except?: string) {
+    await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    if (!(type in PREFIX)) throw new BadRequestException('Unknown document type');
+    const n = (number ?? '').trim();
+    if (!n) return { free: true };
+    return withOrg(orgId, async (c) => {
+      const hit = (await c.query(`SELECT d.number, d.issue_date::text AS date, ct.name FROM documents d JOIN contacts ct ON ct.id=d.contact_id
+        WHERE d.doc_type=$1 AND lower(d.number)=lower($2) AND ($3::bigint IS NULL OR d.id <> $3) LIMIT 1`, [type, n, except ? Number(except) : null])).rows[0];
+      return hit ? { free: false, message: `${hit.number} is already used (${hit.name}, ${hit.date}). Choose another number, or leave the suggested one.` } : { free: true };
+    });
+  }
+
+  /** TDS a bill would carry, worked out exactly as on saving (thresholds, earlier bills this year, PAN, certificate). */
+  @Get('orgs/:orgId/tds-preview')
+  async tdsPreview(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query() q: Record<string, string>) {
+    await requireOrg(uid, orgId, 'read');
+    const amount = Number(q.amount), contactId = Number(q.contactId);
+    if (!q.section || !Number.isInteger(contactId) || !Number.isFinite(amount) || amount < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(q.date ?? '')) throw new BadRequestException('Give section, contactId, amount (paise) and date');
+    return withOrg(orgId, async (c) => {
+      const sec = (await c.query('SELECT * FROM tds_sections WHERE code=$1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to >= $2)', [q.section, q.date])).rows[0];
+      const contact = (await c.query('SELECT * FROM contacts WHERE id=$1', [contactId])).rows[0];
+      if (!sec || !contact) throw new NotFoundException('Unknown TDS section or contact');
+      const fy = financialYearOf(q.date);
+      const prior = (await c.query(
+        `SELECT COALESCE(SUM(subtotal),0) AS total, COALESCE(SUM(subtotal) FILTER (WHERE tds_amount > 0),0) AS deducted
+           FROM documents WHERE contact_id=$1 AND doc_type='bill' AND status='posted' AND tds_section=$2 AND issue_date BETWEEN $3 AND $4 AND ($5::bigint IS NULL OR id <> $5)`,
+        [contactId, q.section, fy.start, fy.end, q.except ? Number(q.except) : null])).rows[0];
+      const r = computeTds({
+        section: { code: sec.code, rateIndividualBp: sec.rate_individual_bp, rateOtherBp: sec.rate_other_bp, singleThreshold: Number(sec.single_threshold), annualThreshold: Number(sec.annual_threshold) },
+        deducteeIsIndividual: contact.is_individual, hasPan: !!contact.pan || !!contact.gstin, amount: Math.round(amount), priorTotal: Number(prior.total), priorDeductedBase: Number(prior.deducted),
+        certificateRateBp: contact.lower_tds_rate_bp != null && contact.default_tds_section === sec.code ? Number(contact.lower_tds_rate_bp) : undefined,
+      });
+      return { ...r, section: sec.code };
+    });
+  }
+
   /** Unlink a payment that was recorded against the wrong invoice or bill: its entry is reversed and the invoice becomes outstanding again. */
   @Delete('orgs/:orgId/payments/:paymentId')
   async unlinkPayment(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('paymentId', ParseIntPipe) paymentId: number, @Ip() ip: string) {
@@ -353,20 +429,21 @@ export async function recordPayment(c: PoolClient, orgId: number, uid: number, i
   return { id: Number(p.id), journalEntryId: eid, settled, fxGain, outstandingAfter: outstanding - settled };
 }
 
-export type DocLineInput = { description: string; hsnSac?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number; cessRateBp?: number; itcBlocked?: boolean };
+export type DocLineInput = { description: string; hsnSac?: string; unit?: string; quantity: number; rate: number; gstRateBp: number; accountId?: number; itemId?: number; trackingOptionId?: number; cessRateBp?: number; itcBlocked?: boolean };
 
 /**
  * Validate lines and work out GST for a sales or purchase document. Shared by invoices/bills, quotes and purchase orders
  * so they always agree on tax. Amounts are in the document's own currency (paise for rupees).
  */
 export async function priceLines(c: PoolClient, orgId: number, isSales: boolean, contactId: number, issueDate: string, lines: DocLineInput[], placeOfSupply?: string, supplyType: SupplyType = 'regular') {
-  const org = (await c.query('SELECT gstin,state_code,gst_scheme,lut_number FROM organizations WHERE id=$1', [orgId])).rows[0];
+  const org = (await c.query('SELECT gstin,state_code,gst_scheme,lut_number,lut_to::text AS lut_to FROM organizations WHERE id=$1', [orgId])).rows[0];
   const contact = (await c.query('SELECT * FROM contacts WHERE id=$1', [contactId])).rows[0];
   if (!contact) throw new BadRequestException('Contact not found');
   if (contact.kind !== 'both' && contact.kind !== (isSales ? 'customer' : 'supplier')) throw new BadRequestException(`This contact is a ${contact.kind}; ${isSales ? 'sales' : 'purchase'} documents need a ${isSales ? 'customer' : 'supplier'}`);
   let rules: ReturnType<typeof supplyRules>;
   try { rules = supplyRules(supplyType, isSales, org.gst_scheme === 'composition'); } catch (e) { throw new BadRequestException((e as Error).message); }
-  if (rules.needsLut && !org.lut_number) throw new BadRequestException('Add your Letter of Undertaking (LUT) number in organisation settings before making zero-rated supplies');
+  if (rules.needsLut && !org.lut_number) throw new BadRequestException('Add your Letter of Undertaking (LUT) number in Settings, Duties and taxes, before making zero-rated supplies');
+  if (rules.needsLut && org.lut_to && issueDate > org.lut_to) throw new BadRequestException(`Your LUT ${org.lut_number} ended on ${org.lut_to}. Enter the new LUT in Settings, Duties and taxes, or charge IGST.`);
   const isExport = supplyType.startsWith('export');
   if (isExport && contact.country === 'IN') throw new BadRequestException('Exports need a customer outside India: set the country on the contact');
 
@@ -406,7 +483,7 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
 
   // Blocked credit (section 17(5)) comes from the line, or from its account when the line does not say.
   const input = resolved.map((l) => ({
-    description: l.description, hsnSac: l.hsnSac, qtyMilli: Math.round(l.quantity * 1000), rate: l.rate, gstRateBp: l.gstRateBp, accountId: l.accountId!,
+    description: l.description, hsnSac: l.hsnSac, unit: l.unit, qtyMilli: Math.round(l.quantity * 1000), rate: l.rate, gstRateBp: l.gstRateBp, accountId: l.accountId!,
     itemId: l.itemId ?? null, trackingOptionId: l.trackingOptionId ?? null, cessRateBp: l.cessRateBp ?? 0,
     itcBlocked: !isSales && (l.itcBlocked ?? !!accRows.find((r) => Number(r.id) === l.accountId)?.itc_blocked),
   }));
@@ -499,6 +576,8 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
       section: { code: sec.code, rateIndividualBp: sec.rate_individual_bp, rateOtherBp: sec.rate_other_bp, singleThreshold: Number(sec.single_threshold), annualThreshold: Number(sec.annual_threshold) },
       deducteeIsIndividual: contact.is_individual, hasPan: !!contact.pan || !!contact.gstin,
       amount: t.subtotal, priorTotal: Number(prior.total), priorDeductedBase: Number(prior.deducted),
+      // A lower-deduction certificate (section 197) is for one section: its rate replaces the normal one.
+      certificateRateBp: contact.lower_tds_rate_bp != null && contact.default_tds_section === sec.code ? Number(contact.lower_tds_rate_bp) : undefined,
     });
     tdsSection = sec.code; tdsAmount = Math.min(r.tds, t.total);
   }
@@ -599,8 +678,8 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     [orgId, type, number, b.contactId, b.issueDate, dueDate, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
      tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal, t.cess])).rows[0];
   for (const l of taxLines) {
-    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp,cess,itc_blocked) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)',
-      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null, l.cessRateBp ?? 0, l.cess, !!l.itcBlocked]);
+    await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp,cess,itc_blocked,unit) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)',
+      [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null, l.cessRateBp ?? 0, l.cess, !!l.itcBlocked, l.unit ?? null]);
   }
   for (const m of moves) await recordMove(c, orgId, { ...m, date: b.issueDate, kind: type === 'bill' ? 'purchase' : 'sale', docId: Number(doc.id), entryId: eid, note: number });
   await writeAudit(c, { orgId, userId: uid, action: 'create', entity: 'document', entityId: doc.id, after: { number, total: t.total, tdsAmount, supplyType, currency }, ip });

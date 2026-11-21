@@ -273,7 +273,7 @@ export class AuthController {
   async me(@UserId() uid: number) {
     const u = (await getPool().query('SELECT id,email,full_name,totp_enabled,email_verified_at FROM users WHERE id=$1', [uid])).rows[0];
     const m = (await getPool().query(
-      `SELECT m.firm_id, f.name AS firm_name, m.org_id, m.role, m.access FROM memberships m JOIN firms f ON f.id=m.firm_id WHERE m.user_id=$1`, [uid])).rows;
+      `SELECT m.firm_id, f.name AS firm_name, m.org_id, m.role, m.access FROM memberships m JOIN firms f ON f.id=m.firm_id WHERE m.user_id=$1 ORDER BY m.id`, [uid])).rows;
     // The newest login is this session; the one before it is what the user wants to see ("last login").
     const prev = (await getPool().query(
       "SELECT created_at, ip FROM audit_log WHERE user_id=$1 AND action IN ('login','login_2fa') ORDER BY id DESC OFFSET 1 LIMIT 1", [uid])).rows[0];

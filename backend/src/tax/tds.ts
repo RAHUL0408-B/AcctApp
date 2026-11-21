@@ -15,6 +15,8 @@ export interface TdsInput {
   priorTotal: number;
   /** Part of priorTotal on which TDS was already deducted. */
   priorDeductedBase: number;
+  /** Rate from a lower or nil deduction certificate under section 197, if the deductee has one for this section. */
+  certificateRateBp?: number;
 }
 
 export const NO_PAN_RATE_BP = 2000; // section 206AA: 20% when PAN is missing (or the section rate if higher)
@@ -32,6 +34,6 @@ export function computeTds(i: TdsInput) {
   const base = Math.max(0, cumulative - i.priorDeductedBase);
   const taxBase = singleHit && !annualHit ? i.amount : base;
   const sectionRate = i.deducteeIsIndividual ? s.rateIndividualBp : s.rateOtherBp;
-  const rateBp = i.hasPan ? sectionRate : Math.max(sectionRate, NO_PAN_RATE_BP);
+  const rateBp = i.certificateRateBp != null && i.hasPan ? i.certificateRateBp : i.hasPan ? sectionRate : Math.max(sectionRate, NO_PAN_RATE_BP);
   return { base: taxBase, rateBp, tds: percentOf(taxBase, rateBp) };
 }

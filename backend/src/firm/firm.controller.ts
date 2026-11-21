@@ -17,6 +17,8 @@ import { buildTable, InvoiceView, renderInvoicesPdf, renderPdfMulti, renderXlsxM
 import { optionsFor } from './styles';
 import { templateConfigFor } from './templates';
 import { parseAccounts, parseContacts, parseVouchers } from './importer';
+import { loadInvoiceView } from '../extras/invoicepdf';
+import { MIME as TABLE_MIME, fileNameOf, renderCsv, renderXml, tableSchema, tidy } from './tableexport';
 
 const DATA_DIR = () => process.env.DATA_DIR ?? join(process.cwd(), 'data');
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
@@ -148,7 +150,8 @@ export class FirmController {
     let parsed;
     try { parsed = kind === 'contacts' ? parseContacts(b.csv) : kind === 'accounts' ? parseAccounts(b.csv) : parseVouchers(b.csv); }
     catch (e) { throw new BadRequestException((e as Error).message); }
-    if (parsed.errors.length) return { imported: 0, errors: parsed.errors.slice(0, 50), dryRun: b.dryRun, ok: false };
+    const problems = 'problems' in parsed ? parsed.problems : [];
+    if (parsed.errors.length) return { imported: 0, errors: parsed.errors.slice(0, 50), problems, dryRun: b.dryRun, ok: false };
     if (b.dryRun) return { imported: 0, wouldImport: parsed.rows.length, errors: [], dryRun: true, ok: true };
 
     return withOrg(orgId, async (c) => {
@@ -160,8 +163,12 @@ export class FirmController {
           if (dup.rowCount) { errors.push(`Skipped existing contact ${r.name}`); continue; }
           const state = r.stateCode ?? (r.gstin ? r.gstin.slice(0, 2) : null);
           const okState = state ? (await c.query('SELECT 1 FROM gst_states WHERE code=$1', [state])).rowCount : 1;
-          await c.query('INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,bank_account_name,bank_name,bank_account_no,bank_ifsc) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-            [orgId, r.kind, r.name, r.gstin ?? null, r.pan ?? null, okState ? state : null, r.email ?? null, r.phone ?? null, r.bankAccountName ?? null, r.bankName ?? null, r.bankAccountNo ?? null, r.bankIfsc ?? null]);
+          const tds = r.defaultTdsSection && (await c.query('SELECT 1 FROM tds_sections WHERE code=$1', [r.defaultTdsSection])).rowCount ? r.defaultTdsSection : null;
+          if (r.defaultTdsSection && !tds) errors.push(`${r.name}: TDS section ${r.defaultTdsSection} is not in the TDS table, so it was left empty`);
+          await c.query(`INSERT INTO contacts(org_id,kind,name,gstin,pan,state_code,email,phone,bank_account_name,bank_name,bank_account_no,bank_ifsc,
+              address_line1,address_line2,city,pincode,constitution,is_individual,default_tds_section) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+            [orgId, r.kind, r.name, r.gstin ?? null, r.pan ?? null, okState ? state : null, r.email ?? null, r.phone ?? null, r.bankAccountName ?? null, r.bankName ?? null, r.bankAccountNo ?? null, r.bankIfsc ?? null,
+              r.addressLine1 ?? null, r.addressLine2 ?? null, r.city ?? null, r.pincode ?? null, r.constitution ?? null, r.constitution === 'individual' || r.constitution === 'huf', tds]);
           imported++;
         }
       } else if (kind === 'accounts') {
@@ -197,6 +204,21 @@ export class FirmController {
   private sendFile(res: Response, fmt: string, name: string, data: Buffer) {
     res.setHeader('Content-Type', fmt === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${name}.${fmt}"`);
+    res.send(data);
+  }
+
+  /** Any table on screen (a list, statement or report) as Excel, PDF, CSV or XML, in the organisation's report template. */
+  @Post('export-table')
+  async exportTable(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Res() res: Response) {
+    await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    const b = parse(tableSchema, body);
+    const t = tidy(b);
+    const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const o = optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'report')), {});
+    const data = b.format === 'pdf' ? await renderPdfMulti([t], org.name, o) : b.format === 'xlsx' ? await renderXlsxMulti([t], org.name, o)
+      : b.format === 'csv' ? renderCsv(t) : renderXml(t, org.name);
+    res.setHeader('Content-Type', TABLE_MIME[b.format]);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileNameOf(t.title)}.${b.format}"`);
     res.send(data);
   }
 
@@ -245,20 +267,12 @@ export class FirmController {
   }
 
   private async invoiceViews(orgId: number, ids: number[]): Promise<InvoiceView[]> {
-    const org = (await getPool().query('SELECT name,gstin FROM organizations WHERE id=$1', [orgId])).rows[0];
-    const iso = (x: unknown) => (x ? new Date(x as string).toISOString().slice(0, 10) : null);
     return withOrg(orgId, async (c) => {
       const out: InvoiceView[] = [];
       for (const id of ids) {
-        const d = (await c.query('SELECT d.*, ct.name AS cname, ct.gstin AS cgstin FROM documents d JOIN contacts ct ON ct.id=d.contact_id WHERE d.id=$1', [id])).rows[0];
-        if (!d) throw new NotFoundException(`Document ${id} not found`);
-        const lines = (await c.query('SELECT description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows;
-        out.push({
-          orgName: org.name, orgGstin: org.gstin, type: d.doc_type, number: d.number, issueDate: iso(d.issue_date)!, dueDate: iso(d.due_date), contact: d.cname, contactGstin: d.cgstin, placeOfSupply: d.place_of_supply,
-          lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, qtyMilli: Number(l.qty_milli), rate: Number(l.rate), taxable: Number(l.taxable), gstRateBp: l.gst_rate_bp })),
-          subtotal: Number(d.subtotal), cgst: Number(d.cgst), sgst: Number(d.sgst), igst: Number(d.igst), cess: Number(d.cess ?? 0), total: Number(d.total), tdsAmount: Number(d.tds_amount), notes: d.notes,
-          branding: await brandingFor(c, { type: d.doc_type, number: d.number, total: Number(d.total), tdsAmount: Number(d.tds_amount), currency: d.currency }),
-        });
+        const v = await loadInvoiceView(c, orgId, id);
+        if (!v) throw new NotFoundException(`Document ${id} not found`);
+        out.push(v);
       }
       return out;
     });

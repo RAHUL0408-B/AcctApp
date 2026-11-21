@@ -5,6 +5,8 @@ import { Button, Card, ErrorMsg, Field, useAction } from '../ui';
 
 export function Clients({ me, orgs, firmRole, onOpen, onChanged }: { me: Me; orgs: Org[]; firmRole?: string; onOpen: (id: number) => void; onChanged: () => void }) {
   const firm = me.memberships.find((m) => m.orgId === null);
+  // Someone working for more than one firm sees every firm's clients, so name them all.
+  const firmNames = [...new Set(me.memberships.filter((m) => m.orgId === null).map((m) => m.firmName))];
   const [f, setF] = useState({ name: '', gstin: '', pan: '', template: 'services' });
   const { error, busy, run } = useAction();
   const canAdd = firmRole === 'owner' || firmRole === 'accountant';
@@ -20,7 +22,7 @@ export function Clients({ me, orgs, firmRole, onOpen, onChanged }: { me: Me; org
 
   return (
     <>
-      <Card title={firm ? `${firm.firmName} — clients` : 'Your organizations'}>
+      <Card title={firmNames.length ? `${firmNames.join(' and ')} — clients` : 'Your organizations'}>
         {orgs.length === 0 ? (
           <div className="rounded bg-brand-50 p-4 text-sm" data-testid="onboarding">
             <p className="font-semibold">Welcome! Three steps to get going:</p>

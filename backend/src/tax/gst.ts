@@ -18,7 +18,7 @@ export function isValidGstin(gstin: string): boolean {
 
 export const stateOfGstin = (gstin: string) => gstin.slice(0, 2);
 
-export interface TaxLineInput { description: string; hsnSac?: string; qtyMilli: number; rate: number; gstRateBp: number; accountId: number; itemId?: number | null; trackingOptionId?: number | null;
+export interface TaxLineInput { description: string; hsnSac?: string; /** GST unit quantity code, e.g. NOS, KGS. */ unit?: string; qtyMilli: number; rate: number; gstRateBp: number; accountId: number; itemId?: number | null; trackingOptionId?: number | null;
   /** Compensation cess, in basis points of the taxable value (for example 1200 = 12%). */ cessRateBp?: number;
   /** Section 17(5): the GST on this purchase line can never be claimed as input credit, so it is part of the cost. */ itcBlocked?: boolean; }
 export interface TaxLine extends TaxLineInput { taxable: number; cgst: number; sgst: number; igst: number; cess: number; }
@@ -51,7 +51,10 @@ export function totals(lines: TaxLine[]) {
   return { subtotal, cgst, sgst, igst, cess, total: subtotal + cgst + sgst + igst + cess };
 }
 
-export type SupplyType = 'regular' | 'export_lut' | 'export_igst' | 'sez_lut' | 'sez_igst' | 'reverse_charge';
+/** GST unit quantity codes (UQC) accepted on invoices and in GSTR-1. */
+export const UQC = ['BAG', 'BAL', 'BDL', 'BKL', 'BOU', 'BOX', 'BTL', 'BUN', 'CAN', 'CBM', 'CCM', 'CMS', 'CTN', 'DOZ', 'DRM', 'GGK', 'GMS', 'GRS', 'GYD', 'KGS', 'KLR', 'KME', 'LTR', 'MLS', 'MLT', 'MTR', 'MTS', 'NOS', 'OTH', 'PAC', 'PCS', 'PRS', 'QTL', 'ROL', 'SET', 'SQF', 'SQM', 'SQY', 'TBS', 'TGM', 'THD', 'TON', 'TUB', 'UGS', 'UNT', 'YDS'] as const;
+
+export type SupplyType = 'regular' | 'export_lut' | 'export_igst' | 'sez_lut' | 'sez_igst' | 'reverse_charge' | 'unregistered';
 
 /**
  * How a supply type changes the GST on a document.
@@ -61,11 +64,14 @@ export type SupplyType = 'regular' | 'export_lut' | 'export_igst' | 'sez_lut' | 
  */
 export function supplyRules(supply: SupplyType, isSales: boolean, composition: boolean) {
   if (supply === 'reverse_charge' && isSales) throw new Error('Reverse charge applies to purchases only');
-  if (supply !== 'regular' && supply !== 'reverse_charge' && !isSales) throw new Error('Export and SEZ supply types apply to sales only');
+  if (supply === 'unregistered' && isSales) throw new Error('"Supply from an unregistered dealer" applies to purchases only');
+  const purchaseKinds: SupplyType[] = ['regular', 'reverse_charge', 'unregistered'];
+  if (!purchaseKinds.includes(supply) && !isSales) throw new Error('Export and SEZ supply types apply to sales only');
   if (composition && isSales && supply !== 'regular') throw new Error('A composition dealer cannot make exports or SEZ supplies');
   return {
-    chargeTax: !(isSales && composition) && !supply.endsWith('_lut') && supply !== 'reverse_charge',
-    forceIgst: supply !== 'regular' && supply !== 'reverse_charge',
+    // A dealer who is not registered under GST cannot charge it, so there is nothing to claim either.
+    chargeTax: !(isSales && composition) && !supply.endsWith('_lut') && supply !== 'reverse_charge' && supply !== 'unregistered',
+    forceIgst: supply !== 'regular' && supply !== 'reverse_charge' && supply !== 'unregistered',
     reverseCharge: supply === 'reverse_charge',
     needsLut: supply.endsWith('_lut'),
     claimInputCredit: !composition,

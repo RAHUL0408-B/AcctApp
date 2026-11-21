@@ -31,7 +31,17 @@ describe('CSV importers', () => {
   it('contacts: maps common aliases, infers supplier, flags a bad GSTIN, keeps good rows', () => {
     const r = parseContacts('Party Name,Type,GST No,Mobile\nAcme,Customer,,99999\nSupply Co,Vendor,,\nBad Co,Customer,27AAPFU0939F1ZX,');
     expect(r.rows.map((x) => [x.name, x.kind])).toEqual([['Acme', 'customer'], ['Supply Co', 'supplier']]);
-    expect(r.errors).toEqual([expect.stringMatching(/Row 4: invalid GSTIN/)]);
+    expect(r.errors).toEqual([expect.stringMatching(/Row 4: GSTIN check digit is wrong/)]);
+    expect(r.problems).toEqual([expect.objectContaining({ row: 4, name: 'Bad Co', column: 'GSTIN', value: '27AAPFU0939F1ZX', fix: expect.stringMatching(/GST portal/) })]);
+  });
+  it('contacts: lists every problem in a row with what to change, and reads address, constitution and TDS section', () => {
+    const r = parseContacts('Name,GSTIN,PAN,State,Email,IFSC,Account Number,Constitution,TDS Section,Address,City,PIN code\n'
+      + 'Mixed Up,27AAPFU0939F1ZV,ABCDE1234F,29,not-an-email,HDFC1,12-34,Pvt Ltd,194Z9,,,\n'
+      + 'Good LLP,,AAACG1234B,27,a@b.in,,,LLP,194J,1 MG Road,Pune,411001\n');
+    expect(r.problems.map((p) => p.column)).toEqual(['PAN', 'State Code', 'Email', 'IFSC', 'Bank Account Number', 'TDS Section']);
+    expect(r.problems.find((p) => p.column === 'PAN')!.fix).toMatch(/AAPFU0939F/);
+    expect(r.problems.every((p) => p.row === 2 && p.fix.length > 10)).toBe(true);
+    expect(r.rows).toEqual([expect.objectContaining({ name: 'Good LLP', constitution: 'llp', defaultTdsSection: '194J', addressLine1: '1 MG Road', city: 'Pune', pincode: '411001' })]);
   });
   it('accounts: maps capital -> equity and rejects unknown types', () => {
     const r = parseAccounts('Code,Name,Type\n3001,Partner Capital,Capital\n9,Odd,Weird');

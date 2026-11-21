@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import { formatPaise } from '../money';
 
 /** Built-in number prefixes. An organisation can replace any of them in its invoice settings. */
-export const DEFAULT_PREFIX = { invoice: 'INV', bill: 'BILL', credit_note: 'CN', debit_note: 'DN', quote: 'QU', purchase_order: 'PO' } as const;
+export const DEFAULT_PREFIX = { invoice: 'INV', bill: 'BILL', credit_note: 'CN', debit_note: 'DN', quote: 'QU', purchase_order: 'PO', journal: 'JV' } as const;
 export type PrefixType = keyof typeof DEFAULT_PREFIX;
 
 /** The prefix this organisation uses for a document type. Call inside withOrg(). */

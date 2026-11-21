@@ -14,10 +14,10 @@ export async function checkStaffLock(c: PoolClient, orgId: number, uid: number |
 
 /** Insert one balanced journal entry (the database re-checks balance at commit). Closing entries are marked so profit reports can skip them. */
 export async function insertEntry(c: PoolClient, orgId: number, uid: number, date: string, narration: string,
-  reference: string | null, reversesId: number | null, lines: Line[], kind: 'normal' | 'closing' = 'normal') {
+  reference: string | null, reversesId: number | null, lines: Line[], kind: 'normal' | 'closing' = 'normal', voucherNo: string | null = null) {
   await checkStaffLock(c, orgId, uid, date);
-  const e = (await c.query('INSERT INTO journal_entries(org_id,entry_date,narration,reference,reverses_id,created_by,kind) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-    [orgId, date, narration, reference, reversesId, uid, kind])).rows[0];
+  const e = (await c.query('INSERT INTO journal_entries(org_id,entry_date,narration,reference,reverses_id,created_by,kind,voucher_no) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+    [orgId, date, narration, reference, reversesId, uid, kind, voucherNo])).rows[0];
   for (const l of lines) {
     await c.query('INSERT INTO journal_lines(entry_id,org_id,account_id,debit,credit,memo,tracking_option_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [e.id, orgId, l.accountId, l.debit, l.credit, l.memo ?? null, l.trackingOptionId ?? null]);

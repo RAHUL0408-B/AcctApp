@@ -52,9 +52,9 @@ step('client created, books opened');
 
 const post = async (acc1, d, acc2, c, text) => {
   await page.getByLabel('Narration').fill(text);
-  await page.getByLabel('Account 1').selectOption({ label: acc1 });
+  await page.getByLabel('Account 1').fill(acc1);
   await page.getByLabel('Debit 1').fill(d);
-  await page.getByLabel('Account 2').selectOption({ label: acc2 });
+  await page.getByLabel('Account 2').fill(acc2);
   await page.getByLabel('Credit 2').fill(c);
 };
 await post('1000 · Cash in Hand', '5,000.50', '4000 · Sales', '5000.50', 'Cash sale');
@@ -77,7 +77,7 @@ step('trial balance shows 5,000.50 on both sides');
 
 { const acc = page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }); if ((await acc.getAttribute('aria-expanded')) !== 'true') await acc.click(); } // open the section only if it is closed
 await page.getByRole('button', { name: 'Manual journals', exact: true }).click();
-await page.getByRole('button', { name: 'Reverse' }).first().click();
+await page.getByRole('button', { name: /^Actions for entry/ }).first().click(); await page.getByRole('menuitem', { name: 'Reverse' }).click();
 await page.getByText('Reversal posted.').waitFor();
 await openSection('Reporting');
 await page.getByRole('button', { name: 'All reports', exact: true }).click();

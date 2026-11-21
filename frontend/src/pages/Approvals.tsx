@@ -57,7 +57,35 @@ export function Approvals({ org, canManage }: { org: Org; canManage: boolean }) 
           </>
         )}
       </Card>
+      <JournalReviews org={org} canManage={canManage} />
     </>
+  );
+}
+
+interface JDraft { id: number; date: string; narration: string; reference: string | null; voucherNo: string | null; total: number; status: string; reason: string | null; submittedBy: string; postedVoucher: string | null; lines: { accountId: number; debit?: number; credit?: number }[] }
+/** Journals staff sent for review: an owner or accountant posts or rejects them. */
+export function JournalReviews({ org, canManage }: { org: Org; canManage: boolean }) {
+  const [list, setList] = useState<JDraft[]>([]);
+  const [reason, setReason] = useState('');
+  const [ok, setOk] = useState('');
+  const { error, busy, run } = useAction();
+  const load = useCallback(() => api<JDraft[]>(`/orgs/${org.id}/journal-drafts`).then(setList).catch(() => setList([])), [org.id]);
+  useEffect(() => { load(); }, [load]);
+  const decide = (d: JDraft, approve: boolean) => run(async () => {
+    if (approve) { const r = await api(`/orgs/${org.id}/journal-drafts/${d.id}/approve`, { body: {} }); setOk(`Journal posted as ${r.voucherNo}.`); }
+    else { await api(`/orgs/${org.id}/journal-drafts/${d.id}/reject`, { body: { reason } }); setOk('Journal sent back.'); }
+    load();
+  });
+  if (!list.length) return null;
+  return (
+    <Card title={`Journals for review (${list.filter((d) => d.status === 'submitted').length} waiting)`} actions={canManage && <div className="w-72"><Field label="Reason, if you send one back" aria-label="Journal rejection reason" value={reason} onChange={(e) => setReason(e.target.value)} /></div>}>
+      <div className="mb-2 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      <table className="w-full text-sm"><thead><tr className="text-left"><th>Date</th><th>Voucher</th><th>Narration</th><th>Reference</th><th>Sent by</th><th className="text-right">Amount</th><th>Status</th><th /></tr></thead>
+        <tbody>{list.map((d) => (
+          <tr key={d.id}><td>{d.date}</td><td>{d.postedVoucher ?? d.voucherNo ?? '(next)'}</td><td>{d.narration}</td><td>{d.reference ?? '—'}</td><td>{d.submittedBy}</td><td className="text-right">{fmt(d.total)}</td>
+            <td><Badge text={BADGE_TEXT[d.status] ?? d.status} />{d.reason && <span className="text-xs text-slate-500"> {d.reason}</span>}</td>
+            <td className="space-x-1 whitespace-nowrap text-right">{canManage && d.status === 'submitted' && <><Button onClick={() => decide(d, true)} disabled={busy}>Approve and post</Button><Button variant="ghost" onClick={() => decide(d, false)} disabled={busy || !reason}>Send back</Button></>}</td></tr>))}</tbody></table>
+    </Card>
   );
 }
 

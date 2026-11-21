@@ -8,6 +8,7 @@ import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { requireAnyOrg, requireOrg } from '../tenancy/acl';
 import { financialYearOf } from '../ledger/ledger';
 import { peekNumber } from '../accounting/documents.controller';
+import { peekJournalNumber } from '../ledger/ledger.controller';
 import { DEFAULT_PREFIX, DEFAULT_TEMPLATES, fillTemplate, PrefixType, upiLink } from './settings';
 import { sendOverdueReminders } from '../extras/extras.controller';
 
@@ -37,7 +38,7 @@ const schema = z.object({
   upiId: text(100).refine((v) => !v || /^[A-Za-z0-9._-]{2,256}@[A-Za-z]{2,64}$/.test(v), 'Invalid UPI ID (e.g. business@okhdfcbank)'),
   showPaymentOnInvoice: z.boolean().optional(), showUpiQr: z.boolean().optional(),
   // numbering
-  prefixes: z.record(z.enum(['invoice', 'bill', 'credit_note', 'debit_note', 'quote', 'purchase_order']),
+  prefixes: z.record(z.enum(['invoice', 'bill', 'credit_note', 'debit_note', 'quote', 'purchase_order', 'journal']),
     z.string().trim().max(10).regex(/^[A-Za-z0-9-]*$/, 'A prefix may have letters, digits and dashes only')).optional(),
   // email
   emailReplyTo: text(200).refine((v) => !v || z.string().email().safeParse(v).success, 'Invalid reply-to email'),
@@ -115,6 +116,7 @@ export class SettingsController {
     return withOrg(orgId, async (c) => {
       const out: Record<string, string> = {};
       for (const t of DOC_TYPES) out[t] = await peekNumber(c, orgId, t, on);
+      out.journal = await peekJournalNumber(c, orgId, on);
       for (const k of ['quote', 'purchase_order'] as const) {
         const n = Number((await c.query("SELECT next_no FROM doc_sequences WHERE org_id=$1 AND doc_type=$2 AND fy_label='-'", [orgId, k])).rows[0]?.next_no ?? 1);
         const p = (await c.query('SELECT doc_prefixes FROM organizations WHERE id=$1', [orgId])).rows[0].doc_prefixes?.[k] || DEFAULT_PREFIX[k];
@@ -127,7 +129,7 @@ export class SettingsController {
   @Put('numbering/next')
   async setNext(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'manage');
-    const b = parse(z.object({ type: z.enum(['invoice', 'bill', 'credit_note', 'debit_note', 'quote', 'purchase_order']), next: z.number().int().min(1).max(999999) }), body);
+    const b = parse(z.object({ type: z.enum(['invoice', 'bill', 'credit_note', 'debit_note', 'quote', 'purchase_order', 'journal']), next: z.number().int().min(1).max(999999) }), body);
     const fy = ['quote', 'purchase_order'].includes(b.type) ? '-' : financialYearOf(today()).label;
     return withOrg(orgId, async (c) => {
       const before = (await c.query('SELECT next_no FROM doc_sequences WHERE org_id=$1 AND doc_type=$2 AND fy_label=$3', [orgId, b.type, fy])).rows[0]?.next_no ?? 1;

@@ -3,10 +3,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, download, fileToBase64, fmt, toPaise } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, Select } from '../kit';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { DataTable, Icon, RowMenu, type Column } from '../table';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account, TrackingCategory } from './Lines';
 
-interface Entry { id: number; date: string; narration: string; reference?: string | null; reversesId: number | null; lines: { accountId: number; debit: number; credit: number }[] }
+interface Entry { id: number; date: string; narration: string; reference?: string | null; reversesId: number | null; voucherNo?: string | null; createdBy?: string | null; reversed?: boolean; lines: { accountId: number; debit: number; credit: number }[] }
 interface Rule { id: number; name: string; narration: string; frequency: string; nextDate: string; endDate: string | null; active: boolean; runs: number; lastRun: string | null; lines: { accountId: number; debit: number; credit: number }[] }
 interface Attachment { id: number; name: string }
 
@@ -14,11 +15,30 @@ const safe = (s: string) => { try { return toPaise(s); } catch { return 0; } };
 const blankRows = () => [{ accountId: '', debit: '', credit: '', cc: '' }, { accountId: '', debit: '', credit: '', cc: '' }];
 const FREQ = [['monthly', 'Every month'], ['weekly', 'Every week'], ['quarterly', 'Every quarter'], ['yearly', 'Every year']];
 
-export function Journal({ org, accounts, canPost }: { org: Org; accounts: Account[]; canPost: boolean }) {
+/** Account box: type the number or the name, or pick from the list. */
+function AccountInput({ label, accounts, value, onChange }: { label: string; accounts: Account[]; value: string; onChange: (id: string) => void }) {
+  const text = (a: Account) => `${a.code} · ${a.name}`;
+  const chosen = accounts.find((a) => String(a.id) === value);
+  const [typed, setTyped] = useState(chosen ? text(chosen) : '');
+  useEffect(() => { if (chosen) setTyped(text(chosen)); else if (!value) setTyped((t) => (find(t) ? '' : t)); }, [chosen?.id, value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const find = (v: string) => { const t = v.trim().toLowerCase(); return accounts.find((a) => text(a).toLowerCase() === t) ?? accounts.find((a) => a.code.toLowerCase() === t) ?? accounts.find((a) => a.name.toLowerCase() === t); };
+  const pick = (v: string) => { setTyped(v); const hit = find(v); onChange(hit ? String(hit.id) : ''); };
+  // The list can arrive after something was typed: match it again when it does.
+  useEffect(() => { if (typed && !chosen) { const hit = find(typed); if (hit) onChange(String(hit.id)); } }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (<>
+    <input aria-label={label} list="journal-accounts" autoComplete="off" placeholder="Type a number or name…" value={typed} onChange={(e) => pick(e.target.value)}
+      onBlur={() => { if (chosen) setTyped(text(chosen)); }} className={`w-full rounded border px-2 py-1 ${typed && !chosen ? 'border-amber-400 bg-amber-50' : 'border-slate-300'}`} />
+  </>);
+}
+
+export function Journal({ org, accounts, canPost, role = 'owner', go }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today), [narration, setNarration] = useState('');
+  const [reference, setReference] = useState(''), [voucher, setVoucher] = useState(''), [voucherTouched, setVoucherTouched] = useState(false), [nextVoucher, setNextVoucher] = useState('');
+  const [needsReview, setNeedsReview] = useState(false);
+  useEffect(() => { api(`/orgs/${org.id}/settings`).then((s) => setNeedsReview(!!s.requireApproval)).catch(() => undefined); }, [org.id]);
   const [rows, setRows] = useState(blankRows());
   const [files, setFiles] = useState<File[]>([]);
   const [rule, setRule] = useState({ on: false, name: '', frequency: 'monthly', endDate: '' });
@@ -31,12 +51,22 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
   const [centres, setCentres] = useState<{ id: number; label: string }[]>([]); // cost centres (tracking options) the entry can be tagged with
   useEffect(() => { api<TrackingCategory[]>(`/orgs/${org.id}/tracking`).then((c) => setCentres(c.flatMap((x) => x.options.map((o) => ({ id: o.id, label: `${x.name}: ${o.name}` }))))).catch(() => undefined); }, [org.id]);
   useEffect(() => { load(); loadRules(); }, [load, loadRules]);
+  useEffect(() => { api(`/orgs/${org.id}/journal-next-number?date=${date || today}`).then((r) => setNextVoucher(r.number)).catch(() => setNextVoucher('')); }, [org.id, date, entries.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSelected(new Set()); }, [entries]);
 
   const name = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
   const totalD = rows.reduce((s, r) => s + (r.debit ? safe(r.debit) : 0), 0), totalC = rows.reduce((s, r) => s + (r.credit ? safe(r.credit) : 0), 0);
   const apiLines = () => rows.filter((r) => r.accountId).map((r) => ({ accountId: Number(r.accountId), ...(r.debit ? { debit: toPaise(r.debit) } : {}), ...(r.credit ? { credit: toPaise(r.credit) } : {}), ...(r.cc ? { trackingOptionId: Number(r.cc) } : {}) }));
-  const clear = () => { setNarration(''); setRows(blankRows()); setFiles([]); setRule({ on: false, name: '', frequency: 'monthly', endDate: '' }); };
+  const clear = () => { setNarration(''); setReference(''); setVoucher(''); setVoucherTouched(false); setRows(blankRows()); setFiles([]); setRule({ on: false, name: '', frequency: 'monthly', endDate: '' }); };
+  // Staff can send a journal to an accountant; when the organisation asks for approval, that is the only way.
+  const staff = role === 'staff';
+  const mustReview = staff && needsReview;
+  const header = () => ({ date, narration, ...(reference.trim() ? { reference: reference.trim() } : {}), ...(voucherTouched && voucher.trim() ? { voucherNo: voucher.trim() } : {}) });
+  const sendForReview = () => run(async () => {
+    setOk('');
+    const r = await api(`/orgs/${org.id}/journal-drafts`, { body: { ...header(), lines: apiLines() } });
+    clear(); setOk(`Sent for review (₹${fmt(r.total)}). It reaches the books once an owner or accountant approves it under Purchases, Awaiting approval.`);
+  });
 
   const submit = () => run(async () => {
     setOk('');
@@ -46,13 +76,13 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
       const r = await api(`/orgs/${org.id}/journal-rules/run`, { body: {} });
       setOk(`Rule saved. ${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted so far; the rest post automatically on their dates.`); clear(); load(); loadRules(); return;
     }
-    const r = await api(`/orgs/${org.id}/journal`, { body: { date, narration, lines: apiLines() } });
+    const r = await api(`/orgs/${org.id}/journal`, { body: { ...header(), lines: apiLines() } });
     let note = '';
     for (const file of files) {
       try { await api(`/orgs/${org.id}/files`, { body: { name: file.name, mime: file.type || 'application/octet-stream', dataBase64: await fileToBase64(file), linkType: 'journal', linkId: r.id } }); }
       catch (e) { note = ` The entry was posted, but ${file.name} could not be attached: ${(e as Error).message}`; }
     }
-    clear(); setOk(`Entry posted.${note}`); load();
+    clear(); setOk(`Entry posted. Voucher ${r.voucherNo}.${note}`); load();
   });
   const reverse = (id: number) => run(async () => { await api(`/orgs/${org.id}/journal/${id}/reverse`, { body: { date: today, reason } }); setOk('Reversal posted.'); load(); });
   const bulkDelete = () => run(async () => {
@@ -73,9 +103,13 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
     <>
       {canPost && (
         <Card title="New journal entry">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <Field label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <div className="md:col-span-2"><Field label="Narration" value={narration} onChange={(e) => setNarration(e.target.value)} /></div>
+            <div><Field label="Voucher number" aria-label="Voucher number" value={voucherTouched ? voucher : nextVoucher} placeholder="Automatic" disabled={rule.on}
+              onChange={(e) => { setVoucherTouched(true); setVoucher(e.target.value); }} />
+              <p className="mt-1 text-xs text-slate-500">{rule.on ? 'Each posted entry gets the next number' : voucherTouched ? 'Your number' : 'Next in the series; type over it to change'}</p></div>
+            <Field label="Reference number (optional)" aria-label="Reference number" placeholder="e.g. bank ref, agreement no." value={reference} onChange={(e) => setReference(e.target.value)} />
+            <Field label="Narration" value={narration} onChange={(e) => setNarration(e.target.value)} />
           </div>
           {centres.length > 0 && (
             <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
@@ -91,24 +125,28 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}>
-                  <td className="pr-2"><select aria-label={`Account ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1" value={r.accountId}
-                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, accountId: e.target.value } : x)))}>
-                    <option value="">Select account…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
-                  </select></td>
+                  <td className="pr-2"><AccountInput label={`Account ${i + 1}`} accounts={accounts} value={r.accountId} onChange={(id) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, accountId: id } : x)))} /></td>
                   <td className="pr-2"><input aria-label={`Debit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.debit}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, debit: e.target.value, credit: e.target.value ? '' : x.credit } : x)))} /></td>
                   <td className="pr-2"><input aria-label={`Credit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.credit}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, credit: e.target.value, debit: e.target.value ? '' : x.debit } : x)))} /></td>
                   {centres.length > 0 && <td><select aria-label={`Cost centre ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1" value={r.cc} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, cc: e.target.value } : x)))}>
                     <option value="">—</option>{centres.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></td>}
+                  <td className="w-8">{rows.length > 2 && <button type="button" aria-label={`Remove line ${i + 1}`} className="text-slate-400 hover:text-red-600" onClick={() => setRows(rows.filter((_, j) => j !== i))}>✕</button>}</td>
                 </tr>
               ))}
+              <tr><td colSpan={centres.length > 0 ? 5 : 4} className="pt-1">
+                <button type="button" className="text-sm text-brand-700 underline" onClick={() => setRows([...rows, { accountId: '', debit: '', credit: '', cc: rows.length && rows.every((x) => x.cc === rows[0].cc) ? rows[0].cc : '' }])}>+ Add line</button></td></tr>
             </tbody>
-            <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td>{centres.length > 0 && <td />}</tr></tfoot>
+
+            <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : totalD !== totalC ? `· difference ${fmt(Math.abs(totalD - totalC))}` : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td>{centres.length > 0 && <td />}<td /></tr></tfoot>
           </table>
+          <datalist id="journal-accounts">{accounts.map((a) => <option key={a.id} value={`${a.code} · ${a.name}`} />)}</datalist>
           <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Attach documents (policy, bill, working)</span>
-              <input aria-label="Attach documents" type="file" multiple disabled={rule.on} onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])} />
+            <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Attachments (policy, bill, working)</span>
+              <label className={`inline-flex items-center gap-2 rounded-md border-2 border-dashed px-4 py-2 font-medium ${rule.on ? 'cursor-not-allowed border-slate-200 text-slate-400' : 'cursor-pointer border-brand-300 bg-brand-50/50 text-brand-700 hover:border-brand-500 hover:bg-brand-50'}`}>
+                <Icon name="plus" className={rule.on ? 'text-slate-400' : 'text-brand-600'} />Upload documents
+                <input aria-label="Attach documents" type="file" multiple disabled={rule.on} className="sr-only" onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ''; }} /></label>
               <ul className="mt-1 text-xs text-slate-600">{files.map((x, i) => <li key={i}>{x.name} <button className="text-red-700" onClick={() => setFiles(files.filter((_, j) => j !== i))}>remove</button></li>)}</ul></div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
               <label className="flex items-center gap-2 font-medium"><input type="checkbox" aria-label="Repeat automatically" checked={rule.on} onChange={(e) => setRule({ ...rule, on: e.target.checked })} />Post this entry automatically on a schedule (a rule)</label>
@@ -121,9 +159,11 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
                 </div>)}
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-3">
-            <Button variant="ghost" onClick={() => setRows([...rows, { accountId: '', debit: '', credit: '', cc: rows.length && rows.every((x) => x.cc === rows[0].cc) ? rows[0].cc : '' }])}>Add line</Button>
-            <Button onClick={submit} disabled={busy}>{rule.on ? 'Save rule' : 'Post entry'}</Button>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {!mustReview && <Button onClick={submit} disabled={busy || !accounts.length}>{rule.on ? 'Save rule' : 'Post entry'}</Button>}
+            {staff && !rule.on && <Button variant={mustReview ? 'primary' : 'ghost'} onClick={sendForReview} disabled={busy || !accounts.length}>Send for review</Button>}
+            {!accounts.length && <p className="text-xs text-slate-500">Loading accounts…</p>}
+            {mustReview && <p className="text-xs text-slate-500">Your organisation asks an accountant to review journals before they are posted.</p>}
           </div>
           <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
         </Card>
@@ -142,20 +182,35 @@ export function Journal({ org, accounts, canPost }: { org: Org; accounts: Accoun
 
       <Card title="Posted entries">
         {canPost && <div className="mb-3 flex flex-wrap items-end gap-3"><div className="max-w-sm"><Field label="Reason used when reversing an entry" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
-          {selectable.length > 0 && <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" aria-label="Select all entries" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((e) => e.id)))} />Select all</label>}
           {selected.size > 0 && <Button variant="danger" disabled={busy} onClick={bulkDelete}>Delete {selected.size} selected</Button>}</div>}
-        {entries.length === 0 ? <p className="text-sm text-slate-500">Nothing posted yet.</p> : entries.map((e) => (
-          <div key={e.id} className="border-b border-slate-100 py-3 last:border-0">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="flex items-center gap-2">{canPost && !e.reversesId && <input type="checkbox" aria-label={`Select entry ${e.id}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} />}
-                <span><b>#{e.id}</b> · {e.date} · {e.narration}{e.reversesId && <em className="ml-2 text-amber-700">(reversal of #{e.reversesId})</em>}</span></span>
-              <span className="whitespace-nowrap"><Button variant="ghost" onClick={() => toggleFiles(e.id)}>Files</Button> {canPost && !e.reversesId && <Button variant="ghost" onClick={() => { setError(''); reverse(e.id); }}>Reverse</Button>}</span>
-            </div>
-            <ul className="mt-1 text-sm text-slate-600">{e.lines.map((l, i) => <li key={i} className="flex justify-between"><span>{name(l.accountId)}</span><span>{l.debit ? `Dr ${fmt(l.debit)}` : `Cr ${fmt(l.credit)}`}</span></li>)}</ul>
-            {open[e.id] && <p className="mt-1 text-xs text-slate-600">{open[e.id]!.length === 0 ? 'No documents attached.' : open[e.id]!.map((a) => <button key={a.id} className="mr-3 underline" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button>)}</p>}
-          </div>
-        ))}
+        <DataTable id="journal" rows={entries} rowKey={(e) => e.id} orgId={org.id} exportTitle="Journal entries" searchLabel="Search journal entries (voucher, reference, text, account)" empty="Nothing posted yet."
+          columns={journalColumns(accounts)}
+          leadingHead={canPost && selectable.length > 0 ? <input type="checkbox" aria-label="Select all entries" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((e) => e.id)))} /> : undefined}
+          leading={canPost ? (e) => (!e.reversesId ? <input type="checkbox" aria-label={`Select entry ${e.id}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /> : null) : undefined}
+          trailing={(e) => <RowMenu label={`Actions for entry ${e.voucherNo ?? e.id}`} actions={[
+            { label: 'Attached files', icon: 'note', onClick: () => toggleFiles(e.id) },
+            { label: 'Reverse', icon: 'restore', onClick: () => { setError(''); reverse(e.id); }, hidden: !canPost || !!e.reversesId || !!e.reversed },
+          ]} />} />
+        {Object.entries(open).filter(([, v]) => v).map(([id, v]) => (
+          <div key={id} className="mt-2 text-xs text-slate-600"><b>Files on entry #{id}:</b> {v!.length === 0 ? 'none attached.' : v!.map((a) => <button key={a.id} className="mr-3 underline" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button>)}
+            <button className="ml-2 text-slate-400" onClick={() => setOpen({ ...open, [id]: undefined })}>✕</button></div>))}
       </Card>
     </>
   );
+}
+
+/** Columns of the posted entries list. */
+function journalColumns(accounts: Account[]): Column<Entry>[] {
+  const name = (id: number) => { const a = accounts.find((x) => x.id === id); return a ? `${a.code} ${a.name}` : `#${id}`; };
+  const amount = (e: Entry) => e.lines.reduce((s, l) => s + l.debit, 0);
+  return [
+    { key: 'voucher', label: 'Voucher', value: (e) => e.voucherNo ?? `#${e.id}`, render: (e) => <b>{e.voucherNo ?? `#${e.id}`}</b> },
+    { key: 'date', label: 'Date', value: (e) => e.date },
+    { key: 'reference', label: 'Reference', value: (e) => e.reference ?? null },
+    { key: 'narration', label: 'Narration', value: (e) => e.narration, render: (e) => <span>{e.narration}{e.reversesId && <em className="ml-2 text-amber-700">(reversal of #{e.reversesId})</em>}{e.reversed && <span className="ml-2"><Badge text="reversed" /></span>}</span> },
+    { key: 'lines', label: 'Accounts', value: (e) => e.lines.map((l) => `${l.debit ? 'Dr' : 'Cr'} ${name(l.accountId)} ${fmt(l.debit || l.credit)}`).join('; '),
+      render: (e) => <ul className="text-xs text-slate-600">{e.lines.map((l, i) => <li key={i}>{l.debit ? 'Dr' : 'Cr'} {name(l.accountId)} · {fmt(l.debit || l.credit)}</li>)}</ul> },
+    { key: 'amount', label: 'Amount', value: amount, money: true, noSearch: true },
+    { key: 'by', label: 'Entered by', value: (e) => e.createdBy ?? null, hidden: true },
+  ];
 }

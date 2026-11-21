@@ -215,7 +215,7 @@ function Financial({ org, canManage }: { org: Org; canManage: boolean }) {
 
 // ---------------------------------------------------------------- invoice settings (numbering)
 
-const NUM_TYPES: [string, string][] = [['invoice', 'Invoices'], ['credit_note', 'Credit notes'], ['bill', 'Bills'], ['debit_note', 'Debit notes'], ['quote', 'Quotes'], ['purchase_order', 'Purchase orders']];
+const NUM_TYPES: [string, string][] = [['invoice', 'Invoices'], ['credit_note', 'Credit notes'], ['bill', 'Bills'], ['debit_note', 'Debit notes'], ['quote', 'Quotes'], ['purchase_order', 'Purchase orders'], ['journal', 'Journal vouchers']];
 
 function InvoiceSettings({ org, canManage, go }: { org: Org; canManage: boolean; go: (p: string) => void }) {
   const { s, reload } = useOrgSettings(org);

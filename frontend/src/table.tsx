@@ -59,20 +59,26 @@ function useOutside(open: boolean, close: () => void) {
 
 /**
  * Where to draw a pop-up menu: fixed to the screen under its button, so a list that scrolls sideways (inside a card)
- * does not cut it off. Closes when the page scrolls or resizes.
+ * does not cut it off. It follows the button when the page scrolls.
  */
 function useAnchor(open: boolean, close: () => void, width: number) {
   const btn = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<React.CSSProperties>({});
   useEffect(() => {
     if (!open || !btn.current) return;
-    const r = btn.current.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
-    const below = window.innerHeight - r.bottom;
-    setPos(below < 260 && r.top > below ? { position: 'fixed', left, bottom: window.innerHeight - r.top + 4, width } : { position: 'fixed', left, top: r.bottom + 4, width });
-    const shut = (e: Event) => { if (!(e.target instanceof Node) || !(e.target as HTMLElement).closest?.('[data-popover]')) close(); };
-    window.addEventListener('scroll', shut, true); window.addEventListener('resize', close);
-    return () => { window.removeEventListener('scroll', shut, true); window.removeEventListener('resize', close); };
+    const place = () => {
+      if (!btn.current) return;
+      const r = btn.current.getBoundingClientRect();
+      // The button scrolled out of sight: the menu has nothing to hang from.
+      if (r.bottom < 0 || r.top > window.innerHeight) { close(); return; }
+      const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
+      const below = window.innerHeight - r.bottom;
+      setPos(below < 260 && r.top > below ? { position: 'fixed', left, bottom: window.innerHeight - r.top + 4, width } : { position: 'fixed', left, top: r.bottom + 4, width });
+    };
+    place();
+    // Follow the button when the page or a list scrolls, instead of closing (which also broke "scroll into view").
+    window.addEventListener('scroll', place, true); window.addEventListener('resize', place);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
   }, [open, close, width]);
   return { btn, pos };
 }

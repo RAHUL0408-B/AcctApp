@@ -70,6 +70,17 @@ export function ExportTemplates({ org, role }: { org: Org; role: string }) {
   const set = <K extends keyof Config>(k: K, v: Config[K]) => draft && setDraft({ ...draft, cfg: { ...draft.cfg, [k]: v } });
 
   const saveUse = () => run(async () => { await api(`/orgs/${org.id}/export-defaults`, { method: 'PUT', body: use }); setOk(`Saved. Reports now use ${nameOf(use.report)}; invoices and bills use ${nameOf(use.document)}.`); load(); });
+  /** One click: this template for reports, or for invoices and bills, keeping the other choice. */
+  const useFor = (ref: string, kind: 'report' | 'document') => run(async () => {
+    const next = { ...data.defaults, [kind]: ref };
+    await api(`/orgs/${org.id}/export-defaults`, { method: 'PUT', body: next });
+    setOk(`Reports use ${nameOf(next.report)}; invoices and bills use ${nameOf(next.document)}.`); load();
+  });
+  const useButtons = (ref: string, label: string) => owner && (
+    <div className="mt-2 flex flex-wrap gap-1">
+      <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={data.defaults.report === ref} aria-label={`Use ${label} for reports`} onClick={() => useFor(ref, 'report')}>{data.defaults.report === ref ? '✓ Reports' : 'Use for reports'}</Button>
+      <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={data.defaults.document === ref} aria-label={`Use ${label} for invoices`} onClick={() => useFor(ref, 'document')}>{data.defaults.document === ref ? '✓ Invoices' : 'Use for invoices'}</Button>
+    </div>);
   const save = () => run(async () => {
     if (!draft) return;
     if (draft.id) await api(`/orgs/${org.id}/export-templates/${draft.id}`, { method: 'PUT', body: { name: draft.name, config: draft.cfg } });
@@ -174,6 +185,7 @@ export function ExportTemplates({ org, role }: { org: Org; role: string }) {
               <Sketch cfg={p.config} />
               <p className="mt-2 font-semibold">{p.label}</p><p className="text-xs text-slate-500">{p.blurb}</p>
               <div className="mt-2 flex flex-wrap gap-1 text-[11px]">{data.defaults.report === p.name && <span className="rounded bg-violet-100 px-1.5 text-violet-800">reports</span>}{data.defaults.document === p.name && <span className="rounded bg-emerald-100 px-1.5 text-emerald-800">invoices</span>}</div>
+              {useButtons(p.name, p.label)}
               {owner && <Button variant="ghost" className="mt-2" aria-label={`Customise ${p.label}`} onClick={() => startFrom(p.config, `${p.label} copy`)}>Customise a copy</Button>}
             </div>))}
         </div>
@@ -187,6 +199,7 @@ export function ExportTemplates({ org, role }: { org: Org; role: string }) {
                 <Sketch cfg={t.config} />
                 <p className="mt-2 font-semibold">{t.name}</p>
                 <div className="mt-1 flex flex-wrap gap-1 text-[11px]">{data.defaults.report === `custom:${t.id}` && <span className="rounded bg-violet-100 px-1.5 text-violet-800">reports</span>}{data.defaults.document === `custom:${t.id}` && <span className="rounded bg-emerald-100 px-1.5 text-emerald-800">invoices</span>}</div>
+                {useButtons(`custom:${t.id}`, t.name)}
                 {owner && <div className="mt-2 flex flex-wrap gap-1">
                   <Button variant="ghost" aria-label={`Edit ${t.name}`} onClick={() => { setOk(''); setPdf(null); setDraft({ id: t.id, name: t.name, cfg: { ...t.config } }); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Edit</Button>
                   <Button variant="ghost" aria-label={`Copy ${t.name}`} onClick={() => startFrom(t.config, `${t.name} copy`)}>Copy</Button>

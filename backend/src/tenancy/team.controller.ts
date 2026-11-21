@@ -78,7 +78,8 @@ export class TeamController {
     });
     const link = linkFor('invite', t.raw);
     await this.mail(firmId, uid, b.email, b.role, b.orgId, link);
-    return { id: Number(r.id), link, expiresInDays: INVITE_DAYS };
+    // Without SMTP_URL the server cannot send email: say so, so the link is shared another way.
+    return { id: Number(r.id), link, expiresInDays: INVITE_DAYS, emailSent: !!process.env.SMTP_URL };
   }
 
   private async mail(firmId: number, uid: number, email: string, role: string, orgId: number | undefined | null, link: string) {
@@ -101,7 +102,7 @@ export class TeamController {
     const link = linkFor('invite', t.raw);
     await this.mail(firmId, uid, inv.email, inv.role, inv.org_id ? Number(inv.org_id) : null, link);
     await tx((c) => writeAudit(c, { userId: uid, action: 'resend_invitation', entity: 'invitation', entityId: id, ip }));
-    return { ok: true, link };
+    return { ok: true, link, emailSent: !!process.env.SMTP_URL };
   }
 
   @Delete('invitations/:id')

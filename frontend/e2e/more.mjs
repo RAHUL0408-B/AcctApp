@@ -47,6 +47,7 @@ await heading('Dashboard');
 
 // ---- settings: LUT
 await nav('Organisation settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('LUT number (for exports without GST)').fill('AD2704260012345');
 await btn('Save').click();
 await ok(/Saved\. State code is now 27/);

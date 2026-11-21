@@ -71,6 +71,7 @@ step('Settings hub lists every setting in three groups, with search');
 // ---- organisation details and logo
 await tile('Organisation details');
 await heading('Organisation settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Legal name (if different)').fill('Shree Traders Private Limited');
 await page.getByLabel('Business type').selectOption('private_limited');
 await page.getByLabel('TAN').fill('mums12345b');
@@ -95,9 +96,12 @@ step('organisation details saved (wrong PIN refused), logo uploaded; Back return
 await tile('Financial settings');
 await heading('Financial settings');
 await valueIs(page.getByLabel('Financial year'), 'April to March');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Staff lock date').fill('2026-03-31');
+await page.getByLabel('Password to confirm').fill(password);
 await btn('Save lock dates').click();
 await ok('Lock dates saved. Staff: up to 2026-03-31.');
+await page.getByLabel('Password to confirm').fill(password);
 await btn('Remove lock dates').click();
 await ok('Lock dates removed. All periods are open again.');
 step('financial year shown as April to March; staff lock date set and removed');
@@ -106,6 +110,7 @@ step('financial year shown as April to March; staff lock date set and removed');
 await hub();
 await tile('Invoice settings');
 await heading('Invoice settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Invoices prefix').fill('si');
 await btn('Save prefixes').click();
 await ok(/Prefixes saved/);
@@ -119,6 +124,7 @@ step('invoice prefix changed to SI and numbering continues from 100');
 // ---- payment services
 await hub();
 await tile('Payment services');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Account name').fill('Shree Traders');
 await page.getByLabel('Bank name').fill('HDFC Bank');
 await page.getByLabel('Account number').fill('50100012345678');
@@ -133,6 +139,7 @@ step('bank details and UPI ID saved, printed on invoices with a QR code');
 // ---- email settings
 await hub();
 await tile('Email settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Sender name').fill('Shree Accounts');
 await page.getByLabel('Replies go to').fill('accounts@shree.in');
 await page.getByLabel('Invoice email subject').fill('Your invoice {number} from {org}');
@@ -145,6 +152,7 @@ step('email sender, reply-to and template saved; preview fills in the words');
 // ---- reminders
 await hub();
 await tile('Invoice reminders');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Send reminders automatically every day').check();
 await page.getByLabel('Days between reminders').fill('5');
 await btn('Save').click();
@@ -156,6 +164,7 @@ step('automatic reminders turned on every 5 days; send now works');
 // ---- currencies, and the rate filled in on a new invoice
 await hub();
 await tile('Currencies');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Currency code').fill('usd');
 await page.getByLabel('Default rate').fill('83.5');
 await btn('Add or update').click();

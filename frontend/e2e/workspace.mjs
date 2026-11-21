@@ -82,6 +82,7 @@ step('organisation menu: settings, billing, switch, add, practice overview');
 // ---- sales settings, customer via "+" menu, invoice via Alt+I
 await menu('Sales', 'Sales settings');
 await heading('Sales settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Invoice due days').fill('15');
 await page.getByLabel('Invoice terms').fill('Pay by NEFT to HDFC Bank');
 await btn('Save').click();

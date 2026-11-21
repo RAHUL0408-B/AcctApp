@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Me, Org } from '../App';
 import { Badge, Empty, PageHeader } from '../kit';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
 type Level = 'none' | 'view' | 'edit';
 interface Member { id: number; userId: number; name: string; email: string; emailVerified: boolean; twoFactor: boolean; role: string; orgId: number | null; orgName: string | null; access: Record<string, Level> | null }
@@ -39,6 +39,7 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
   const [team, setTeam] = useState<Team | null>(null);
   const [f, setF] = useState({ email: '', role: 'staff', orgId: '' });
   const [link, setLink] = useState('');
+  const [mailed, setMailed] = useState(true);
   const [ok, setOk] = useState('');
   const [limit, setLimit] = useState<{ m: Member; a: Record<string, Level> } | null>(null);
   const { error, busy, run } = useAction();
@@ -53,9 +54,10 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
 
   const invite = () => run(async () => {
     const r = await api(`/firms/${firmId}/invitations`, { body: { email: f.email, role: f.role, ...(f.orgId ? { orgId: Number(f.orgId) } : {}) } });
-    setOk(`Invitation sent to ${f.email}. It works for ${r.expiresInDays} days.`); setLink(r.link); setF({ ...f, email: '' }); load();
+    setMailed(r.emailSent !== false);
+    setOk(r.emailSent === false ? `Invitation made for ${f.email}. It works for ${r.expiresInDays} days.` : `Invitation sent to ${f.email}. It works for ${r.expiresInDays} days.`); setLink(r.link); setF({ ...f, email: '' }); load();
   });
-  const resend = (i: Invitation) => run(async () => { const r = await api(`/firms/${firmId}/invitations/${i.id}/resend`, { body: {} }); setOk(`A new link was sent to ${i.email}.`); setLink(r.link); load(); });
+  const resend = (i: Invitation) => run(async () => { const r = await api(`/firms/${firmId}/invitations/${i.id}/resend`, { body: {} }); setMailed(r.emailSent !== false); setOk(r.emailSent === false ? `A new link was made for ${i.email}.` : `A new link was sent to ${i.email}.`); setLink(r.link); load(); });
   const cancel = (i: Invitation) => run(async () => { await api(`/firms/${firmId}/invitations/${i.id}`, { method: 'DELETE' }); setOk(`Invitation to ${i.email} cancelled.`); setLink(''); load(); });
   const setRole = (m: Member, role: string) => run(async () => {
     const orgId = ONE_CLIENT.has(role) ? (m.orgId ?? Number(clients[0]?.id)) : null;
@@ -76,7 +78,13 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
     <>
       <PageHeader title="People and access" subtitle={`${team.plan.people} of ${team.plan.maxMembers} people on your ${team.plan.name} plan. Each person has their own login and sees only what their role allows.`} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} />
-        {link && <p className="rounded bg-slate-100 px-3 py-2 text-xs text-slate-700">The invitation was emailed. You can also share this link yourself: <span className="break-all font-mono" data-testid="invite-link">{link}</span></p>}</div>
+        {link && (mailed
+          ? <p className="rounded bg-slate-100 px-3 py-2 text-xs text-slate-700">The invitation was emailed. You can also share this link yourself: <span className="break-all font-mono" data-testid="invite-link">{link}</span></p>
+          : <Callout tone="warning" title="Email is not set up on this server, so no email went out">
+              Send this link to the person yourself (email, WhatsApp…). They open it to join. To have invitations emailed, the server needs its email settings (SMTP_URL and MAIL_FROM).
+              <div className="mt-2 flex flex-wrap items-center gap-2"><span className="break-all rounded bg-white px-2 py-1 font-mono text-xs" data-testid="invite-link">{link}</span>
+                <Button variant="ghost" onClick={() => navigator.clipboard?.writeText(link).then(() => setOk('Link copied.'), () => undefined)}>Copy link</Button></div>
+            </Callout>)}</div>
       {firms.length > 1 && <label className="mb-3 block max-w-xs text-sm"><span className="mb-1 block font-medium text-slate-600">Firm</span>
         <select aria-label="Firm" className="w-full rounded-md border border-slate-300 bg-white px-3 py-2" value={firmId} onChange={(e) => { setTeam(null); setFirmId(Number(e.target.value)); }}>{firms.map((x) => <option key={x.firmId} value={x.firmId}>{x.firmName}</option>)}</select></label>}
 

@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, download, fileToBase64, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { useEditing } from '../editmode';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account, Item } from './Lines';
 import { OrgDetailsMore } from './Settings';
 
@@ -219,7 +220,8 @@ export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: 
   const [loaded, setLoaded] = useState(false);
   // Only the newest load may fill the form: a load that was abandoned (React runs effects twice in development) is ignored.
   useEffect(() => { let live = true; api(`/orgs/${org.id}/settings`).then((s) => { if (!live) return; setF({ name: s.name, gstin: s.gstin ?? '', pan: s.pan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', requireApproval: s.requireApproval }); setLoaded(true); }); return () => { live = false; }; }, [org.id]);
-  const editable = canManage && loaded;
+  const { editing } = useEditing();
+  const editable = canManage && loaded && editing;
   return (
     <>
       <PageHeader title="Organisation settings" subtitle="Business details used on invoices and to decide CGST/SGST vs IGST." />
@@ -234,19 +236,13 @@ export function OrgSettings({ org, canManage, onSaved }: { org: Org; canManage: 
           <Field label="LUT number (for exports without GST)" value={f.lutNumber} onChange={(e) => setF({ ...f, lutNumber: e.target.value.toUpperCase() })} disabled={!editable} />
           <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" aria-label="Require approval" disabled={!editable} checked={f.requireApproval} onChange={(e) => setF({ ...f, requireApproval: e.target.checked })} />Staff need approval for invoices and bills</label>
         </div>
-        {canManage && <div className="mt-3"><Button disabled={busy || !loaded} onClick={() => run(async () => {
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !loaded} onClick={() => run(async () => {
           const r = await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { name: f.name, gstin: f.gstin || null, pan: f.pan || null, gstScheme: f.gstScheme, lutNumber: f.lutNumber || null, requireApproval: f.requireApproval } });
           setOk(`Saved. State code is now ${r.stateCode ?? 'not set'}.`); onSaved();
         })}>Save</Button></div>}
       </Card>
       <OrgDetailsMore org={org} canManage={canManage} />
-      {canManage && (
-        <Card title="Lock the books">
-          <p className="mb-3 text-sm text-slate-600">After you file a return, lock the period. Nothing can then be posted on or before this date, for every user.</p>
-          <div className="flex items-end gap-3"><Field label="Lock up to and including" type="date" value={through} onChange={(e) => setThrough(e.target.value)} />
-            <Button disabled={busy || !through} onClick={() => run(async () => { await api(`/orgs/${org.id}/lock`, { body: { through } }); setOk(`Books locked through ${through}.`); })}>Lock</Button></div>
-        </Card>
-      )}
+      {canManage && <Callout tone="info" title="Lock the books">Lock dates (with your password; only the owner can unlock) are under Settings, Financial settings. <a className="font-medium underline" href={`#/o/${org.id}/setup/financial`}>Open lock dates</a></Callout>}
     </>
   );
 }
@@ -258,6 +254,7 @@ export function DocDefaults({ org, side, canManage }: { org: Org; side: 'sales' 
   const { error, busy, run } = useAction();
   const [loaded, setLoaded] = useState(false); // locked until the saved values arrive, so typing is never overwritten
   useEffect(() => { let live = true; api(`/orgs/${org.id}/settings`).then((s) => { if (!live) return; setF({ invoiceDueDays: s.invoiceDueDays ?? '', billDueDays: s.billDueDays ?? '', invoiceTerms: s.invoiceTerms ?? '' }); setLoaded(true); }); return () => { live = false; }; }, [org.id]);
+  const { editing } = useEditing();
   const days = (v: string) => (v === '' ? null : Number(v));
   const save = () => run(async () => {
     await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: side === 'sales' ? { invoiceDueDays: days(String(f.invoiceDueDays)), invoiceTerms: f.invoiceTerms || null } : { billDueDays: days(String(f.billDueDays)) } });
@@ -271,15 +268,15 @@ export function DocDefaults({ org, side, canManage }: { org: Org; side: 'sales' 
       <Card title="Payment terms">
         <div className="grid gap-3 md:grid-cols-2">
           {sales
-            ? <Field label="Invoices are due this many days after the invoice date" aria-label="Invoice due days" type="number" min={0} max={365} value={f.invoiceDueDays} disabled={!canManage || !loaded} onChange={(e) => setF({ ...f, invoiceDueDays: e.target.value })} />
-            : <Field label="Bills are due this many days after the bill date" aria-label="Bill due days" type="number" min={0} max={365} value={f.billDueDays} disabled={!canManage || !loaded} onChange={(e) => setF({ ...f, billDueDays: e.target.value })} />}
+            ? <Field label="Invoices are due this many days after the invoice date" aria-label="Invoice due days" type="number" min={0} max={365} value={f.invoiceDueDays} disabled={!canManage || !loaded || !editing} onChange={(e) => setF({ ...f, invoiceDueDays: e.target.value })} />
+            : <Field label="Bills are due this many days after the bill date" aria-label="Bill due days" type="number" min={0} max={365} value={f.billDueDays} disabled={!canManage || !loaded || !editing} onChange={(e) => setF({ ...f, billDueDays: e.target.value })} />}
         </div>
         <p className="mt-2 text-xs text-slate-500">Leave empty for no default. A due date typed on the document always wins.</p>
         {sales && (
           <label className="mt-4 block text-sm"><span className="mb-1 block font-medium text-slate-600">Terms printed on every invoice</span>
-            <textarea aria-label="Invoice terms" rows={3} maxLength={500} disabled={!canManage || !loaded} className="w-full rounded-md border border-slate-300 px-3 py-2" placeholder="e.g. Please pay by NEFT to HDFC Bank, A/c 0001234, IFSC HDFC0000001" value={f.invoiceTerms} onChange={(e) => setF({ ...f, invoiceTerms: e.target.value })} /></label>
+            <textarea aria-label="Invoice terms" rows={3} maxLength={500} disabled={!canManage || !loaded || !editing} className="w-full rounded-md border border-slate-300 px-3 py-2" placeholder="e.g. Please pay by NEFT to HDFC Bank, A/c 0001234, IFSC HDFC0000001" value={f.invoiceTerms} onChange={(e) => setF({ ...f, invoiceTerms: e.target.value })} /></label>
         )}
-        {canManage && <div className="mt-3"><Button disabled={busy || !loaded} onClick={save}>Save</Button></div>}
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !loaded} onClick={save}>Save</Button></div>}
       </Card>
     </>
   );

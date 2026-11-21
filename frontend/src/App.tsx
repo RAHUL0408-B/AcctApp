@@ -6,7 +6,7 @@ import { Clients } from './pages/Clients';
 import { areaOfPage, NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
 import { Security } from './pages/Security';
 import { TeamPage } from './pages/Team';
-import { SETUP_SECTIONS } from './pages/Settings';
+import { HUB, SETUP_SECTIONS } from './pages/Settings';
 import { Billing, Help, Privacy } from './pages/Account';
 import { PracticeOverview } from './pages/PracticeOverview';
 import { favouriteReports } from './pages/Reports';
@@ -426,11 +426,28 @@ function SearchPanel({ org, onPick }: { org: Org; onPick: (page: string) => void
     const t = setTimeout(() => api(`/orgs/${org.id}/search?q=${encodeURIComponent(q.trim())}`).then((r) => mine === latest.current && setResults(r.results)).catch(() => undefined), 250);
     return () => clearTimeout(t);
   }, [q, org.id]);
+  // Screens and settings match by name or description too ("lock", "prefix", "upi", "ledger"…).
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const features = q.trim().length < 2 ? [] : [
+    ...NAV.flatMap((g) => g.items.map((i) => ({ title: i.label, subtitle: g.group, page: i.sub ? `${i.key}/${i.sub}` : i.key }))),
+    ...HUB.flatMap((g) => g.tiles.map((t) => ({ title: t.label, subtitle: `Settings · ${t.desc}`, page: t.to }))),
+    { title: 'Lock dates', subtitle: 'Settings · Financial settings · lock the books', page: 'setup/financial' },
+    { title: 'Number prefixes', subtitle: 'Settings · Invoice settings · invoice, bill, journal numbering', page: 'setup/invoice' },
+    { title: 'Credit note', subtitle: 'Sales · new credit note against an invoice', page: 'invoices/new-credit_note' },
+    { title: 'Debit note', subtitle: 'Purchases · new debit note against a bill', page: 'bills/new-debit_note' },
+  ].filter((x, i, all) => all.findIndex((y) => y.page === x.page && y.title === x.title) === i)
+   .filter((x) => words.every((w) => `${x.title} ${x.subtitle}`.toLowerCase().includes(w))).slice(0, 6);
+  const pick = (page: string) => (page.startsWith('#/') ? (location.hash = page.slice(1)) : onPick(page));
   return (
     <div className="px-4">
-      <input autoFocus aria-label="Search this organisation" placeholder="Search contacts, invoices, bills, items, projects…" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input autoFocus aria-label="Search this organisation" placeholder="Search records, screens and settings…" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="mt-2 max-h-80 overflow-y-auto">
-        {q.trim().length >= 2 && results.length === 0 && <p className="py-3 text-sm text-slate-500">No matches.</p>}
+        {q.trim().length >= 2 && results.length === 0 && features.length === 0 && <p className="py-3 text-sm text-slate-500">No matches.</p>}
+        {features.map((r) => (
+          <button key={`f-${r.page}-${r.title}`} onClick={() => pick(r.page)} className="flex w-full items-center justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100">
+            <span><span className="block font-medium text-slate-800">{r.title}</span><span className="text-xs text-slate-500">{r.subtitle}</span></span>
+            <span className="shrink-0 rounded bg-brand-50 px-2 py-0.5 text-xs text-brand-700">{r.subtitle.startsWith('Settings') ? 'Setting' : 'Screen'}</span>
+          </button>))}
         {results.map((r) => (
           <button key={`${r.type}-${r.id}`} onClick={() => onPick(r.page)} className="flex w-full items-center justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100">
             <span><span className="block font-medium text-slate-800">{r.title}</span>{r.subtitle && <span className="text-xs text-slate-500">{r.subtitle}</span>}</span>

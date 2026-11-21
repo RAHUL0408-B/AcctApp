@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { api, fmt } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { EditMode, useEditing } from '../editmode';
+import { ExportMenu } from '../table';
 import { Empty, PageHeader, Select } from '../kit';
 
 type S = Record<string, any>;
@@ -31,11 +33,11 @@ const Area = ({ label, value, onChange, disabled, rows = 4, placeholder }: { lab
 
 export const SETUP_SECTIONS: Record<string, string> = {
   financial: 'Financial settings', invoice: 'Invoice settings', payment: 'Payment services', email: 'Email settings', reminders: 'Invoice reminders',
-  currencies: 'Currencies', 'tax-rates': 'Tax rates', history: 'History and notes',
+  currencies: 'Currencies', 'tax-rates': 'Tax rates', history: 'History and notes', taxes: 'Duties and taxes',
 };
 
-interface Tile { label: string; desc: string; to: string; manage?: boolean; owner?: boolean; firm?: boolean }
-const HUB: { group: string; tiles: Tile[] }[] = [
+export interface Tile { label: string; desc: string; to: string; manage?: boolean; owner?: boolean; firm?: boolean }
+export const HUB: { group: string; tiles: Tile[] }[] = [
   { group: 'General', tiles: [
     { label: 'Organisation details', desc: 'Name, GSTIN, PAN, legal name, address, contact details and logo', to: 'settings' },
     { label: 'Users', desc: 'Invite people and choose what they can do', to: '#/team', firm: true },
@@ -55,6 +57,7 @@ const HUB: { group: string; tiles: Tile[] }[] = [
   ] },
   { group: 'Accounting', tiles: [
     { label: 'Chart of accounts', desc: 'The accounts transactions post to', to: 'coa' },
+    { label: 'Duties and taxes', desc: 'GSTIN, PAN, TAN, the LUT for exports, and ledgers for duties such as customs', to: 'setup/taxes' },
     { label: 'Tax rates', desc: 'GST rates and TDS sections with their limits', to: 'setup/tax-rates' },
     { label: 'Currencies', desc: 'Foreign currencies and their default exchange rates', to: 'setup/currencies' },
     { label: 'Cost centres', desc: 'Tracking categories for reports by branch, project or department', to: 'tracking' },
@@ -110,7 +113,8 @@ export function OrgDetailsMore({ org, canManage }: { org: Org; canManage: boolea
   const [ok, setOk] = useState('');
   const { error, busy, run, setError } = useAction();
   useEffect(() => { if (s) { setF(Object.fromEntries(DETAIL_KEYS.map((k) => [k, s[k] ?? '']))); setLogo(s.logo); } }, [s]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const saveDetails = () => run(async () => {
     await save(org, { ...Object.fromEntries(DETAIL_KEYS.map((k) => [k, nul(f[k] ?? '')])), tan: nul((f.tan ?? '').toUpperCase()), cin: nul((f.cin ?? '').toUpperCase()) });
@@ -148,7 +152,7 @@ export function OrgDetailsMore({ org, canManage }: { org: Org; canManage: boolea
           <Field label="Business email" type="email" value={f.email ?? ''} onChange={set('email')} disabled={!editable} />
           <Field label="Website" value={f.website ?? ''} onChange={set('website')} disabled={!editable} />
         </div>
-        {canManage && <div className="mt-3"><Button disabled={busy || !s} onClick={saveDetails}>Save details</Button></div>}
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !s} onClick={saveDetails}>Save details</Button></div>}
       </Card>
       <Card title="Logo">
         <div className="flex flex-wrap items-center gap-4">
@@ -175,11 +179,12 @@ const ZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 
 function Financial({ org, canManage }: { org: Org; canManage: boolean }) {
   const { s, reload } = useOrgSettings(org);
   const [tz, setTz] = useState('Asia/Kolkata');
-  const [staff, setStaff] = useState(''), [all, setAll] = useState('');
+  const [staff, setStaff] = useState(''), [all, setAll] = useState(''), [pw, setPw] = useState('');
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
   useEffect(() => { if (s) { setTz(s.timezone); setStaff(s.staffLockThrough ?? ''); setAll(s.lockThrough ?? ''); } }, [s]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   const fy = s ? `${MONTHS[s.fyStartMonth - 1]} to ${MONTHS[(s.fyStartMonth + 10) % 12]}` : '';
   return (
     <>
@@ -190,7 +195,7 @@ function Financial({ org, canManage }: { org: Org; canManage: boolean }) {
           <Select label="Time zone" value={tz} disabled={!editable} onChange={(e) => setTz(e.target.value)}>{[...new Set([tz, ...ZONES])].map((z) => <option key={z}>{z}</option>)}</Select>
         </div>
         <p className="mt-2 text-xs text-slate-500">Indian books follow the April to March financial year (Income Tax Act and GST), so it cannot be changed.</p>
-        {canManage && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => { await save(org, { timezone: tz }); setOk('Time zone saved.'); })}>Save</Button></div>}
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => { await save(org, { timezone: tz }); setOk('Time zone saved.'); })}>Save</Button></div>}
       </Card>
       <Card title="Lock dates">
         <p className="mb-3 text-sm text-slate-600">Stop changes to periods you have already filed or reviewed. Nothing can be posted on or before a lock date.</p>
@@ -204,10 +209,12 @@ function Financial({ org, canManage }: { org: Org; canManage: boolean }) {
             <p className="mt-1 text-xs text-slate-500">Use this after filing GSTR-3B or closing the year.</p>
           </div>
         </div>
-        {canManage && <div className="mt-3 flex gap-2">
-          <Button disabled={busy || !s} onClick={() => run(async () => { await api(`/orgs/${org.id}/lock-dates`, { method: 'PUT', body: { staffLockThrough: staff || null, lockThrough: all || null } }); setOk(`Lock dates saved.${staff ? ` Staff: up to ${staff}.` : ''}${all ? ` Everyone: up to ${all}.` : ''}`); reload(); })}>Save lock dates</Button>
-          {(s?.staffLockThrough || s?.lockThrough) && <Button variant="ghost" disabled={busy} onClick={() => run(async () => { await api(`/orgs/${org.id}/lock-dates`, { method: 'PUT', body: { staffLockThrough: null, lockThrough: null } }); setOk('Lock dates removed. All periods are open again.'); reload(); })}>Remove lock dates</Button>}
+        {canManage && editing && <div className="mt-3 flex gap-2">
+          <div className="w-64"><Field label="Your password, to confirm" aria-label="Password to confirm" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
+          <Button className="self-end" disabled={busy || !s || !pw} onClick={() => run(async () => { await api(`/orgs/${org.id}/lock-dates`, { method: 'PUT', body: { staffLockThrough: staff || null, lockThrough: all || null, password: pw } }); setPw(''); setOk(`Lock dates saved.${staff ? ` Staff: up to ${staff}.` : ''}${all ? ` Everyone: up to ${all}.` : ''}`); reload(); })}>Save lock dates</Button>
+          {(s?.staffLockThrough || s?.lockThrough) && <Button className="self-end" variant="ghost" disabled={busy || !pw} onClick={() => run(async () => { await api(`/orgs/${org.id}/lock-dates`, { method: 'PUT', body: { staffLockThrough: null, lockThrough: null, password: pw } }); setPw(''); setOk('Lock dates removed. All periods are open again.'); reload(); })}>Remove lock dates</Button>}
         </div>}
+        <p className="mt-2 text-xs text-slate-500">Locking asks for your password. Moving a lock date earlier, or removing it, unlocks books that were closed: only the owner can do that.</p>
       </Card>
     </>
   );
@@ -227,7 +234,8 @@ function InvoiceSettings({ org, canManage, go }: { org: Org; canManage: boolean;
   const { error, busy, run } = useAction();
   useEffect(() => { if (s) setP(s.prefixes); }, [s]);
   useEffect(() => { let live = true; api(`/orgs/${org.id}/numbering`).then((x) => { if (live) setNums(x); }); return () => { live = false; }; }, [org.id, n]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   return (
     <>
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
@@ -244,7 +252,7 @@ function InvoiceSettings({ org, canManage, go }: { org: Org; canManage: boolean;
                 <Button variant="ghost" disabled={busy || !next[k]} onClick={() => run(async () => { await api(`/orgs/${org.id}/numbering/next`, { method: 'PUT', body: { type: k, next: Number(next[k]) } }); setNext({ ...next, [k]: '' }); setN((x) => x + 1); setOk(`${label} will continue from ${next[k]}.`); })}>Set</Button></span></td>}
             </tr>))}</tbody>
         </table>
-        {canManage && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => { await save(org, { prefixes: p }); setOk('Prefixes saved. New documents use them; existing numbers do not change.'); reload(); setN((x) => x + 1); })}>Save prefixes</Button></div>}
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => { await save(org, { prefixes: p }); setOk('Prefixes saved. New documents use them; existing numbers do not change.'); reload(); setN((x) => x + 1); })}>Save prefixes</Button></div>}
         <p className="mt-2 text-xs text-slate-500">Leave a prefix empty to use the built-in one. Letters, digits and dashes only.</p>
       </Card>
       <Card title="More invoice settings">
@@ -269,7 +277,8 @@ function PaymentServices({ org, canManage }: { org: Org; canManage: boolean }) {
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
   useEffect(() => { if (s) { setF(Object.fromEntries(PAY_KEYS.map((k) => [k, s[k] ?? '']))); setShow(s.showPaymentOnInvoice); setQr(s.showUpiQr); } }, [s]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   const set = (k: string, up = false) => (e: { target: { value: string } }) => setF({ ...f, [k]: up ? e.target.value.toUpperCase() : e.target.value });
   return (
     <>
@@ -286,7 +295,7 @@ function PaymentServices({ org, canManage }: { org: Org; canManage: boolean }) {
           <Toggle label="Print these payment details on sales invoices" checked={show} onChange={setShow} disabled={!editable} />
           <Toggle label="Add a UPI QR code with the invoice amount (customers scan to pay)" checked={qr} onChange={setQr} disabled={!editable || !show} />
         </div>
-        {canManage && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => {
+        {canManage && editing && <div className="mt-3"><Button disabled={busy || !s} onClick={() => run(async () => {
           await save(org, { ...Object.fromEntries(PAY_KEYS.map((k) => [k, nul(f[k] ?? '')])), showPaymentOnInvoice: show, showUpiQr: show && qr });
           setOk(show ? `Saved. Sales invoices now show how to pay${show && qr && f.upiId ? ', with a UPI QR code for the amount due' : ''}.` : 'Saved. Payment details are not printed on invoices.'); reload();
         })}>Save</Button></div>}
@@ -311,7 +320,8 @@ function EmailSettings({ org, canManage }: { org: Org; canManage: boolean }) {
     setF({ emailSenderName: s.emailSenderName ?? '', emailReplyTo: s.emailReplyTo ?? '', emailInvoiceSubject: s.emailInvoiceSubject ?? d.invoiceSubject, emailInvoiceBody: s.emailInvoiceBody ?? d.invoiceBody,
       emailReminderSubject: s.emailReminderSubject ?? d.reminderSubject, emailReminderBody: s.emailReminderBody ?? d.reminderBody });
   }, [s]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   const set = (k: string) => (v: string) => setF({ ...f, [k]: v });
   const show = (subject: string, body: string) => run(async () => setPreview(await api(`/orgs/${org.id}/email-preview`, { body: { subject, body } })));
   return (
@@ -340,7 +350,7 @@ function EmailSettings({ org, canManage }: { org: Org; canManage: boolean }) {
           </div>
         </div>
         {preview && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm" data-testid="email-preview"><p><b>Subject:</b> {preview.subject}</p><pre className="mt-2 whitespace-pre-wrap font-sans text-slate-700">{preview.body}</pre></div>}
-        {canManage && <div className="mt-3 flex gap-2">
+        {canManage && editing && <div className="mt-3 flex gap-2">
           <Button disabled={busy || !s} onClick={() => run(async () => { await save(org, Object.fromEntries(MAIL_KEYS.map((k) => [k, nul(f[k] ?? '')]))); setOk('Email settings saved.'); reload(); })}>Save</Button>
           <Button variant="ghost" disabled={busy || !s} onClick={() => run(async () => { await save(org, { emailInvoiceSubject: null, emailInvoiceBody: null, emailReminderSubject: null, emailReminderBody: null }); setOk('Templates reset to the standard wording.'); setPreview(null); reload(); })}>Reset templates</Button>
         </div>}
@@ -357,7 +367,8 @@ function Reminders({ org, canManage, canPost }: { org: Org; canManage: boolean; 
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
   useEffect(() => { if (s) { setAuto(s.autoRemind); setDays(String(s.remindEveryDays)); } }, [s]);
-  const editable = canManage && !!s;
+  const { editing } = useEditing();
+  const editable = canManage && !!s && editing;
   return (
     <>
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
@@ -447,7 +458,10 @@ function History({ org }: { org: Org }) {
   return (
     <>
       <ErrorMsg msg={error} />
-      <Card title="Changes, newest first" actions={<span className="flex gap-2"><input aria-label="Filter history" placeholder="e.g. document, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm" /><Button variant="ghost" onClick={() => load()}>Filter</Button></span>}>
+      <Card title="Changes, newest first" actions={<span className="flex gap-2"><input aria-label="Filter history" placeholder="e.g. document, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm" /><Button variant="ghost" onClick={() => load()}>Filter</Button>
+        <ExportMenu orgId={org.id} disabled={!rows?.length} build={() => ({ title: 'History', subtitle: q ? `Filter: ${q}` : 'Newest first',
+          columns: [{ header: 'When' }, { header: 'Who' }, { header: 'What' }, { header: 'Record' }, { header: 'Details' }],
+          rows: (rows ?? []).map((r) => [new Date(r.at).toLocaleString('en-IN'), r.user, ACTION_TEXT[r.action] ?? r.action.replace(/_/g, ' '), `${r.entity.replace(/_/g, ' ')}${r.entityId ? ` #${r.entityId}` : ''}`, r.after ? JSON.stringify(r.after).slice(0, 1500) : '']) })} /></span>}>
         {!rows ? <p className="text-sm text-slate-500">Loading…</p> : rows.length === 0 ? <Empty text="Nothing recorded yet." /> : (
           <table className="w-full text-sm" data-testid="history-rows">
             <thead><tr className="text-left text-slate-500"><th className="py-1">When</th><th>Who</th><th>What</th><th>Record</th></tr></thead>
@@ -471,10 +485,12 @@ export function SettingsSection({ org, role, sub, go }: { org: Org; role: string
     financial: 'Financial year, time zone and the dates up to which the books are locked.', invoice: 'How invoices, notes, bills, quotes and purchase orders are numbered.',
     payment: 'How customers can pay you, printed on every sales invoice.', email: 'Who emails come from and what they say.', reminders: 'Chase overdue invoices without writing each email.',
     currencies: 'Currencies you invoice or buy in, with the exchange rate to start from.', 'tax-rates': 'The GST rates and TDS sections the app applies.', history: 'Every change made in these books.',
+    taxes: 'GST, PAN and TAN, the Letter of Undertaking for exports, and ledgers for duties and taxes.',
   };
   return (
     <>
       <PageHeader title={title} subtitle={SUB[sub!]} />
+      <EditMode canManage={canManage && !['history', 'tax-rates'].includes(sub!)}>
       <div className="space-y-5">
         {sub === 'financial' && <Financial org={org} canManage={canManage} />}
         {sub === 'invoice' && <InvoiceSettings org={org} canManage={canManage} go={go} />}
@@ -484,7 +500,71 @@ export function SettingsSection({ org, role, sub, go }: { org: Org; role: string
         {sub === 'currencies' && <Currencies org={org} canManage={canManage} />}
         {sub === 'tax-rates' && <TaxRates />}
         {sub === 'history' && <History org={org} />}
+        {sub === 'taxes' && <DutiesAndTaxes org={org} canManage={canManage} go={go} />}
       </div>
+      </EditMode>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- duties and taxes
+
+/** GST, PAN and TAN, the LUT for zero-rated supplies, and the ledgers for duties and taxes (add one for customs duty, cess…). */
+function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; go: (p: string) => void }) {
+  const { editing } = useEditing();
+  const [f, setF] = useState<{ gstin: string; pan: string; tan: string; gstScheme: string; lutNumber: string; lutFrom: string; lutTo: string } | null>(null);
+  const [ledgers, setLedgers] = useState<{ id: number; code: string; name: string; group: string; subGroup: string | null; isActive: boolean }[]>([]);
+  const [nl, setNl] = useState({ name: '', subGroup: 'Other Statutory Dues' });
+  const [ok, setOk] = useState('');
+  const { error, busy, run } = useAction();
+  const load = () => {
+    api(`/orgs/${org.id}/settings`).then((s) => setF({ gstin: s.gstin ?? '', pan: s.pan ?? '', tan: s.tan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', lutFrom: s.lutFrom ?? '', lutTo: s.lutTo ?? '' }));
+    api<any[]>(`/orgs/${org.id}/accounts`).then((a) => setLedgers(a.filter((x) => /duties|tax|gst|tds|statutory/i.test(`${x.group} ${x.subGroup ?? ''}`) && x.type === 'liability')));
+  };
+  useEffect(load, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!f) return <p className="text-slate-500">Loading…</p>;
+  const editable = canManage && editing;
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: k === 'lutFrom' || k === 'lutTo' || k === 'gstScheme' ? e.target.value : e.target.value.toUpperCase() });
+  const lutOk = !f.lutNumber ? 'No LUT entered: exports and SEZ supplies need IGST.' : f.lutTo && f.lutTo < new Date().toISOString().slice(0, 10) ? `The LUT ended on ${f.lutTo}: enter the new one.` : `LUT ${f.lutNumber}${f.lutTo ? ` valid up to ${f.lutTo}` : ''}: exports and SEZ supplies can be zero-rated.`;
+  return (
+    <>
+      <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      <Card title="Registrations">
+        <div className="grid gap-3 md:grid-cols-4">
+          <Field label="GSTIN" value={f.gstin} onChange={set('gstin')} disabled={!editable} />
+          <Field label="PAN" value={f.pan} onChange={set('pan')} disabled={!editable} />
+          <Field label="TAN (for TDS)" aria-label="TAN" value={f.tan} onChange={set('tan')} disabled={!editable} placeholder="e.g. PNEA12345B" />
+          <Select label="GST scheme" aria-label="GST scheme" value={f.gstScheme} disabled={!editable} onChange={set('gstScheme')}><option value="regular">Regular</option><option value="composition">Composition</option></Select>
+        </div>
+      </Card>
+      <Card title="Letter of Undertaking (LUT) for exports and SEZ">
+        <div className="grid gap-3 md:grid-cols-3">
+          <Field label="LUT / ARN number" aria-label="LUT number" value={f.lutNumber} onChange={set('lutNumber')} disabled={!editable} />
+          <Field label="Valid from" aria-label="LUT valid from" type="date" value={f.lutFrom} onChange={set('lutFrom')} disabled={!editable} />
+          <Field label="Valid up to" aria-label="LUT valid up to" type="date" value={f.lutTo} onChange={set('lutTo')} disabled={!editable} />
+        </div>
+        <p className="mt-2 text-xs text-slate-500">{lutOk} An overseas or SEZ customer's invoice picks "under LUT" while it is valid, and "with IGST" otherwise.</p>
+      </Card>
+      {editable && <div><Button disabled={busy} onClick={() => run(async () => {
+        await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { gstin: f.gstin || null, pan: f.pan || null, tan: f.tan || null, gstScheme: f.gstScheme, lutNumber: f.lutNumber || null, lutFrom: f.lutFrom || null, lutTo: f.lutTo || null } });
+        setOk('Duties and taxes saved.'); load();
+      })}>Save duties and taxes</Button></div>}
+      <Card title="Ledgers for duties and taxes">
+        <table className="w-full text-sm"><thead><tr className="text-left"><th>Code</th><th>Ledger</th><th>Group</th><th>Sub-group</th></tr></thead>
+          <tbody>{ledgers.map((l) => <tr key={l.id}><td>{l.code}</td><td>{l.name}{!l.isActive && <span className="ml-1 text-xs text-slate-400">archived</span>}</td><td>{l.group}</td><td>{l.subGroup ?? '—'}</td></tr>)}</tbody></table>
+        {editable && (
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <div className="w-64"><Field label="New duty or tax ledger" aria-label="New duty ledger" placeholder="e.g. Customs Duty Payable" value={nl.name} onChange={(e) => setNl({ ...nl, name: e.target.value })} /></div>
+            <Select label="Sub-group" aria-label="Duty sub-group" value={nl.subGroup} onChange={(e) => setNl({ ...nl, subGroup: e.target.value })}>
+              {['Output Tax Liability', 'TDS Payable', 'Other Statutory Dues'].map((x) => <option key={x}>{x}</option>)}</Select>
+            <Button disabled={busy || !nl.name.trim()} onClick={() => run(async () => {
+              const r = await api(`/orgs/${org.id}/accounts`, { body: { fsli: 'cl', group: 'Duties & Taxes', subGroup: nl.subGroup, name: nl.name.trim() } });
+              setOk(`Ledger ${r.code} · ${nl.name.trim()} created under Current Liabilities › Duties & Taxes › ${nl.subGroup}.`); setNl({ ...nl, name: '' }); load();
+            })}>Create ledger</Button>
+            <Button variant="ghost" onClick={() => go('coa')}>Open chart of accounts</Button>
+          </div>)}
+        <p className="mt-2 text-xs text-slate-500">GST, cess and TDS ledgers are created and posted to automatically. Add your own here for other duties, such as customs duty paid on imports.</p>
+      </Card>
     </>
   );
 }

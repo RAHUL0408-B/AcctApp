@@ -239,6 +239,7 @@ await nav('Import data');
 await btn('Check (dry run)').click();
 await page.getByText('Looks good: 1 record(s) ready to import.').waitFor();
 await nav('Organisation settings');
+await page.getByRole('button', { name: /^Edit (settings|organisation details)$/ }).click();
 await page.getByLabel('Business name').fill('Mehta Consulting LLP');
 await btn('Save').click();
 await page.getByText(/Saved. State code is now 27/).waitFor();

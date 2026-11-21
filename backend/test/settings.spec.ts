@@ -3,7 +3,7 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { auth, boot } from './helpers';
+import { auth, boot, pw } from './helpers';
 import { getPool } from '../src/db/db';
 import { fillTemplate, upiLink } from '../src/settings/settings';
 import { fromHeader } from '../src/firm/mailer';
@@ -68,7 +68,7 @@ describe('organisation settings through the API', () => {
   it('only owners and accountants can change settings', async () => {
     await put('/org-settings', { industry: 'x' }, staffT).expect(403);
     await get('/org-settings', staffT).expect(200);
-    await ctx.http().put(`/api/orgs/${org}/lock-dates`).set(auth(staffT)).send({ staffLockThrough: today }).expect(403);
+    await ctx.http().put(`/api/orgs/${org}/lock-dates`).set(auth(staffT)).send({ staffLockThrough: today, password: pw }).expect(403);
   });
 
   it('prints the logo, address and payment details with a UPI QR on sales invoices', async () => {
@@ -139,17 +139,19 @@ describe('organisation settings through the API', () => {
 
   it('lock dates: staff stop at the staff lock date, everyone stops at the hard lock', async () => {
     const entry = (date: string) => ({ date, narration: 'lock test', lines: [{ accountId: cash, debit: 100 }, { accountId: sales, credit: 100 }] });
-    await put('/lock-dates', { staffLockThrough: '2026-03-31' }).expect(200);
+    await put('/lock-dates', { staffLockThrough: '2026-03-31' }).expect(400);                 // the password is asked for
+    await put('/lock-dates', { staffLockThrough: '2026-03-31', password: 'wrong-one' }).expect(401);
+    await put('/lock-dates', { staffLockThrough: '2026-03-31', password: pw }).expect(200);
     const blocked = await post('/journal', entry('2026-03-15'), staffT);
     expect(blocked.status).toBe(403);
     expect(blocked.body.message).toMatch(/locked for staff up to 2026-03-31/);
     await post('/journal', entry('2026-04-02'), staffT).expect(201);
     await post('/journal', entry('2026-03-15')).expect(201);                     // the owner may still post
-    await put('/lock-dates', { lockThrough: '2026-02-28' }).expect(200);
+    await put('/lock-dates', { lockThrough: '2026-02-28', password: pw }).expect(200);
     expect((await post('/journal', entry('2026-02-10'))).status).toBe(400);      // nobody posts into the hard-locked period
     const s = (await get('/org-settings')).body;
     expect(s).toMatchObject({ staffLockThrough: '2026-03-31', lockThrough: '2026-02-28' });
-    await put('/lock-dates', { staffLockThrough: null, lockThrough: null }).expect(200);
+    await put('/lock-dates', { staffLockThrough: null, lockThrough: null, password: pw }).expect(200);
     await post('/journal', entry('2026-02-10'), staffT).expect(201);
   });
 

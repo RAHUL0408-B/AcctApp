@@ -1,6 +1,7 @@
 // Organisation settings beyond the basics (which stay in GET/PUT settings): organisation details, branding, payment
 // services, invoice numbering, email templates, invoice reminders, lock dates, currencies and history.
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { verifyPassword } from '../security/password';
 import { z } from 'zod';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
@@ -143,11 +144,18 @@ export class SettingsController {
   /** Lock dates: one for staff (owners and accountants can still post), one for everybody. */
   @Put('lock-dates')
   async lockDates(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
-    await requireOrg(uid, orgId, 'manage');
-    const b = parse(z.object({ staffLockThrough: date.nullable().optional(), lockThrough: date.nullable().optional() }), body);
+    const role = await requireAnyOrg(uid, orgId, ['manage']);
+    const b = parse(z.object({ staffLockThrough: date.nullable().optional(), lockThrough: date.nullable().optional(), password: z.string().min(1, 'Enter your password to confirm').max(200) }), body);
+    // Locking or unlocking the books is confirmed with the person's own password.
+    const hash = (await getPool().query('SELECT password_hash FROM users WHERE id=$1', [uid])).rows[0]?.password_hash;
+    if (!hash || !(await verifyPassword(b.password, hash))) throw new UnauthorizedException('That password is not right');
     return withOrg(orgId, async (c) => {
       const before = { staffLockThrough: (await c.query('SELECT staff_lock_through::text AS d FROM organizations WHERE id=$1', [orgId])).rows[0].d,
         lockThrough: (await c.query('SELECT MAX(locked_through)::text AS d FROM financial_years')).rows[0].d };
+      // Moving a lock date earlier, or removing it, opens periods that were closed: only the owner may do that.
+      const opens = (old: string | null, next: string | null | undefined) => next !== undefined && !!old && (next === null || next < old);
+      if (role !== 'owner' && (opens(before.staffLockThrough, b.staffLockThrough) || opens(before.lockThrough, b.lockThrough)))
+        throw new ForbiddenException('Only the owner can unlock books that are locked. Ask the owner to change the lock date.');
       if (b.staffLockThrough !== undefined) await c.query('UPDATE organizations SET staff_lock_through=$2 WHERE id=$1', [orgId, b.staffLockThrough]);
       if (b.lockThrough !== undefined) {
         if (b.lockThrough === null) await c.query('UPDATE financial_years SET locked_through=NULL');

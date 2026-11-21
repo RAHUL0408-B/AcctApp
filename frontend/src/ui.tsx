@@ -11,7 +11,7 @@ export function Field({ label, ...p }: { label: string } & React.InputHTMLAttrib
   return (
     <label className="block text-sm">
       <span className="mb-1 block font-medium text-slate-600">{label}</span>
-      <input {...p} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-200" />
+      <input {...p} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
     </label>
   );
 }
@@ -27,13 +27,32 @@ export function Card({ title, children, actions }: { title?: string; children: R
       {(title || actions) && <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h2 className="text-base font-semibold text-slate-900">{title}</h2>{actions}</div>}
       {/* A wide table scrolls sideways inside its card instead of making the whole page wider than the screen.
           The small negative margin and padding leave room for focus outlines at the edges. */}
-      <div className="-m-1 overflow-x-auto p-1">{children}</div>
+      <div className="relative -m-1 overflow-x-auto p-1">{children}</div>
     </section>
   );
 }
 
-export const ErrorMsg = ({ msg }: { msg: string }) => (msg ? <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{msg}</p> : null);
-export const Ok = ({ msg }: { msg: string }) => (msg ? <p className="rounded bg-green-50 px-3 py-2 text-sm text-green-800">{msg}</p> : null);
+type Tone = 'error' | 'warning' | 'success' | 'info';
+const TONE: Record<Tone, { box: string; icon: string; title: string; path: string }> = {
+  error: { box: 'border-red-200 bg-red-50 text-red-800', icon: 'text-red-600', title: 'text-red-900', path: 'M12 8v5m0 3h.01M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+  warning: { box: 'border-amber-200 bg-amber-50 text-amber-900', icon: 'text-amber-600', title: 'text-amber-950', path: 'M12 8v5m0 3h.01M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+  success: { box: 'border-emerald-200 bg-emerald-50 text-emerald-900', icon: 'text-emerald-600', title: 'text-emerald-950', path: 'M20 6 9 17l-5-5' },
+  info: { box: 'border-sky-200 bg-sky-50 text-sky-900', icon: 'text-sky-600', title: 'text-sky-950', path: 'M12 16v-5m0-3h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+};
+/** A message box with an icon, a coloured edge and an optional heading: errors, warnings, confirmations and tips all look alike. */
+export function Callout({ tone = 'info', title, children, role, onClose, testId }: { tone?: Tone; title?: string; children?: ReactNode; role?: 'alert' | 'status'; onClose?: () => void; testId?: string }) {
+  const t = TONE[tone];
+  return (
+    <div role={role ?? (tone === 'error' ? 'alert' : 'status')} data-testid={testId}
+      className={`flex items-start gap-3 rounded-lg border border-l-4 px-4 py-3 text-sm shadow-sm ${t.box}`}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={`mt-0.5 shrink-0 ${t.icon}`}><path d={t.path} /></svg>
+      <div className="min-w-0 flex-1">{title && <p className={`font-semibold ${t.title}`}>{title}</p>}{children && <div className={title ? 'mt-0.5' : ''}>{children}</div>}</div>
+      {onClose && <button type="button" aria-label="Dismiss" onClick={onClose} className="-mr-1 rounded p-1 opacity-60 hover:opacity-100">✕</button>}
+    </div>
+  );
+}
+export const ErrorMsg = ({ msg }: { msg: string }) => (msg ? <Callout tone="error">{msg}</Callout> : null);
+export const Ok = ({ msg }: { msg: string }) => (msg ? <Callout tone="success" role="status">{msg}</Callout> : null);
 
 /** Run an async action, tracking busy + error state. */
 export function useAction() {

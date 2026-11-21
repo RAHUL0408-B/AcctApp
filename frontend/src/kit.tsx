@@ -24,9 +24,10 @@ export function Stat({ label, value, sub, tone = 'default', testId }: { label: s
 const BADGE: Record<string, string> = {
   posted: 'bg-blue-100 text-blue-800', paid: 'bg-green-100 text-green-800', void: 'bg-slate-200 text-slate-600', draft: 'bg-slate-100 text-slate-700', sent: 'bg-blue-100 text-blue-800',
   accepted: 'bg-green-100 text-green-800', declined: 'bg-red-100 text-red-800', converted: 'bg-purple-100 text-purple-800', open: 'bg-amber-100 text-amber-800',
+  overdue: 'bg-red-100 text-red-700', 'part paid': 'bg-amber-100 text-amber-800', undone: 'bg-slate-200 text-slate-600',
   done: 'bg-green-100 text-green-800', active: 'bg-green-100 text-green-800', disposed: 'bg-slate-200 text-slate-600',
 };
-export const Badge = ({ text }: { text: string }) => <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${BADGE[text] ?? 'bg-slate-100 text-slate-700'}`}>{text}</span>;
+export const Badge = ({ text }: { text: string }) => <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium first-letter:uppercase ${BADGE[text] ?? 'bg-slate-100 text-slate-700'}`}>{text}</span>;
 
 export const Select = ({ label, children, ...p }: { label: string } & React.SelectHTMLAttributes<HTMLSelectElement>) => (
   <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">{label}</span>

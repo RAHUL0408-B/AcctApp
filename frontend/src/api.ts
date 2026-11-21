@@ -92,6 +92,15 @@ export async function download(path: string, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** POST something and save the file that comes back (exports of on-screen tables). */
+export async function postDownload(path: string, body: unknown, filename: string) {
+  const res = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) }, body: JSON.stringify(body) });
+  if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(Array.isArray(d.message) ? d.message.join('; ') : d.message ?? `Error ${res.status}`); }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** POST something and get back a PDF as an object URL, to show in a frame (used to preview a template design). */
 export async function previewPdf(path: string, body: unknown): Promise<string> {
   const res = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) }, body: JSON.stringify(body) });

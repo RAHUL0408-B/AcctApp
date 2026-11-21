@@ -28,8 +28,8 @@ const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY
 const blankForm = { contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '', number: '', notes: '' };
 const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10);
 
-export function Documents({ org, kind, canPost, accounts, startNew = false, startType, openId, restricted = false, role = 'owner', go }:
-  { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean; startType?: string; /** open this document (from a report) */ openId?: number; restricted?: boolean; role?: string; go?: (p: string) => void }) {
+export function Documents({ org, kind, canPost, accounts, startNew = false, startType, openId, fromDueId, restricted = false, role = 'owner', go }:
+  { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean; startType?: string; /** open this document (from a report) */ openId?: number; /** a due run of a repeating schedule to complete and post */ fromDueId?: number; restricted?: boolean; role?: string; go?: (p: string) => void }) {
   // A restricted (sales) role can create and view, but not pay, edit, delete, archive or email.
   const full = canPost && !restricted;
   const types = TYPES[kind];
@@ -93,9 +93,9 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   // Due date: the issue date plus the days set in Sales / Purchases settings, until the person changes it.
   const dueDays = sales ? settings.invoiceDueDays : settings.billDueDays;
   useEffect(() => {
-    if (dueTouched || editing || dueDays == null || !f.issueDate || (docType !== 'invoice' && docType !== 'bill')) return;
-    setF((x) => ({ ...x, dueDate: addDays(x.issueDate, dueDays) }));
-  }, [f.issueDate, dueDays, dueTouched, editing, docType]);
+    if (!showForm || dueTouched || editing || dueDays == null || !f.issueDate || (docType !== 'invoice' && docType !== 'bill')) return;
+    setF((x) => (x.dueDate === addDays(x.issueDate, dueDays) ? x : { ...x, dueDate: addDays(x.issueDate, dueDays) }));
+  }, [f.issueDate, f.dueDate, dueDays, dueTouched, editing, docType, showForm]);
 
   const contact = contacts.find((c) => String(c.id) === f.contactId);
   const foreign = f.currency !== 'INR';
@@ -195,6 +195,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     }
     let attachNote = '';
     try { await uploadAll(r.id); } catch (e) { attachNote = ` The document was saved, but a file could not be attached: ${(e as Error).message}`; }
+    if (dueRun && !editing) { await api(`/orgs/${org.id}/recurring-due/${dueRun}`, { body: { status: 'posted', documentId: r.id } }).catch(() => undefined); setDueRun(null); }
     let left = '';
     if (isNote && original) {
       const o = await api<Doc>(`/orgs/${org.id}/documents/${original.id}`).catch(() => null);
@@ -331,6 +332,19 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     opened.current = openId;
     if (canEdit(d)) startEdit(d); else setOk(`${d.number}: ${statusOf(d)}, total ₹${fmt(d.total)}. It cannot be edited; use the ⋮ menu for its PDF.`);
   }, [openId, docs]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A run of a repeating schedule that waits for review: fill the form from it; posting marks it done.
+  const [dueRun, setDueRun] = useState<number | null>(null);
+  useEffect(() => {
+    if (!fromDueId || dueRun === fromDueId) return;
+    api<any[]>(`/orgs/${org.id}/recurring-due`).then((list) => {
+      const d = list.find((x) => x.id === fromDueId);
+      if (!d) { setError('That repeating entry was already posted or skipped.'); return; }
+      setDueRun(fromDueId); setShowForm(true); setDocType(d.docType);
+      setF({ ...blankForm, contactId: String(d.contactId), issueDate: d.dueDate, dueDate: addDays(d.dueDate, d.dueDays ?? 0), tdsSection: d.tdsSection ?? '', supplyType: d.supplyType ?? 'regular', notes: d.notes ?? '' });
+      setDueTouched(true); setLines(linesFromApi(d.lines));
+      setOk(`Repeating ${d.docType} for ${d.contactName} dated ${d.dueDate}: add the ${d.docType === 'bill' ? "supplier's bill number and a copy" : 'details'}, check it, and create it.`);
+    }).catch(() => undefined);
+  }, [fromDueId]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownDocs = showForm && f.contactId && !allDocs ? docs.filter((d) => String(d.contactId) === f.contactId) : docs;
   const partyOriginals = docs.filter((d) => d.status === 'posted' && d.docType === (sales ? 'invoice' : 'bill') && String(d.contactId) === f.contactId);
   const currencies = [...new Set(['INR', ...Object.keys(fxDefaults), ...COMMON_CURRENCIES, ...(f.currency ? [f.currency] : [])])];

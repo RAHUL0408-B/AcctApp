@@ -16,7 +16,7 @@ const LABEL: Record<string, string> = { owner: 'Owner', accountant: 'Accountant'
 /** These roles always belong to one client; the others can cover the whole firm. */
 const ONE_CLIENT = new Set(['client', 'sales', 'employee']);
 /** Roles that can be limited area by area (owners always have everything; sales and employee already see a few pages). */
-const LIMITABLE = new Set(['accountant', 'staff', 'client']);
+const LIMITABLE = new Set(['staff', 'client']); // owners and accountants always have full access
 const AREA_NAME: Record<string, string> = { sales: 'Sales', purchases: 'Purchases', bank: 'Bank', accounting: 'Accounting', reports: 'Reports', tax: 'Tax and compliance', contacts: 'Contacts', projects: 'Projects', settings: 'Settings' };
 /** Ready-made access sets, like Xero's "bank only" and "read only" users. */
 const PRESETS: [string, (a: string) => Level][] = [
@@ -116,7 +116,7 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
                 <select aria-label={`Role for ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} className="rounded border border-slate-300 bg-white px-2 py-1" value={m.role} disabled={busy} onChange={(e) => setRole(m, e.target.value)}>
                   {ROLE_ORDER.map((r) => <option key={r} value={r}>{LABEL[r]}</option>)}</select>) : <Badge text={m.role} />}</td>
               <td>{m.orgName ?? <span className="text-slate-500">All clients</span>}</td>
-              <td className="max-w-xs text-xs text-slate-600" data-testid={`areas-${m.email}`}>{m.role === 'owner' ? 'Everything' : LIMITABLE.has(m.role) ? summary(m.access) : 'Their own pages'}
+              <td className="max-w-xs text-xs text-slate-600" data-testid={`areas-${m.email}`}>{m.role === 'owner' || m.role === 'accountant' ? 'Everything' : LIMITABLE.has(m.role) ? summary(m.access) : 'Their own pages'}
                 {edit && LIMITABLE.has(m.role) && <button className="ml-1 text-brand-700 underline" aria-label={`Limit access for ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} onClick={() => openLimit(m)}>Change</button>}</td>
               <td className="whitespace-nowrap text-xs text-slate-600">{m.emailVerified ? 'Email confirmed' : 'Email not confirmed'}{m.twoFactor ? ' · 2-step on' : ''}</td>
               <td className="text-right">{edit && <Button variant="ghost" className="text-red-700" aria-label={`Remove ${m.name}${m.orgName ? ` at ${m.orgName}` : ''}`} onClick={() => remove(m)}>Remove</Button>}</td>

@@ -72,3 +72,12 @@ export function nextCode(used: string[], from: number, to: number, step = 10): s
   for (let n = from; n <= to; n++) if (!taken.has(n)) return String(n);
   return null;
 }
+
+/** The sub-group a standard account belongs to (GST and TDS accounts), or null. */
+export function defaultSubGroup(code: string): string | null {
+  if (['2100', '2110', '2120', '2130', '2140', '2150', '2160'].includes(code)) return 'Output Tax Liability';
+  if (['1300', '1310', '1320', '1330', '1340'].includes(code)) return 'Input Tax Credit';
+  if (code === '2200') return 'TDS Payable';
+  if (code === '1400') return 'TDS and TCS Receivable';
+  return null;
+}

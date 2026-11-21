@@ -4,7 +4,8 @@ import { getPool, tx, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
 import { COA_TEMPLATES, templateFor } from '../coa/templates';
-import { DEFAULT_GROUPS, FSLIS, fsliByKey, fsliOf, nextCode } from '../coa/structure';
+import { DEFAULT_GROUPS, FSLIS, Fsli, defaultSubGroup, fsliByKey, fsliOf, nextCode } from '../coa/structure';
+import { PoolClient } from 'pg';
 import { financialYearOf } from '../ledger/ledger';
 import { isValidGstin } from '../tax/gst';
 import { firmPlan } from '../ops/launch.controller';
@@ -35,6 +36,25 @@ const addMember = z.object({
   firmId: z.number().int().positive(), email: z.string().trim().toLowerCase().email(),
   role: z.enum(['owner', 'accountant', 'staff', 'client', 'sales', 'employee']), orgId: z.number().int().positive().optional(),
 });
+
+
+/** The next free ledger number for a statement line, group and sub-group: its number range, after the last number used in it. */
+async function suggestCode(c: PoolClient, f: Fsli, group?: string, subGroup?: string) {
+      const own = (await c.query('SELECT name,parent,code_from,code_to FROM account_groups WHERE fsli=$1', [f.key])).rows;
+  const def = DEFAULT_GROUPS.find((g) => g.fsli === f.key && g.name.toLowerCase() === (group ?? '').toLowerCase());
+  const ownG = own.find((o) => !o.parent && o.name.toLowerCase() === (group ?? '').toLowerCase());
+  const defSub = def?.sub?.find((s) => s.name.toLowerCase() === (subGroup ?? '').toLowerCase());
+  const ownSub = own.find((o) => o.parent && o.parent.toLowerCase() === (group ?? '').toLowerCase() && o.name.toLowerCase() === (subGroup ?? '').toLowerCase());
+  const range = (defSub && { from: defSub.from, to: defSub.to }) ?? (ownSub?.code_from != null ? { from: ownSub.code_from, to: ownSub.code_to } : null)
+    ?? (def && { from: def.from, to: def.to }) ?? (ownG?.code_from != null ? { from: ownG.code_from, to: ownG.code_to } : null) ?? { from: f.from, to: f.to };
+  const codes = (await c.query('SELECT code FROM accounts')).rows.map((r) => r.code as string);
+  // Within a group, follow the numbers already used by its ledgers (the last one plus 10).
+  const groupCodes = group ? (await c.query('SELECT code FROM accounts WHERE lower(group_name)=lower($1) AND ($2::text IS NULL OR lower(COALESCE(sub_group, \'\'))=lower($2))', [group, subGroup || null])).rows.map((r) => r.code as string) : [];
+  const inRange = groupCodes.filter((x) => { const n = Number.parseInt(x, 10); return n >= range.from && n <= range.to; });
+  let code = nextCode(inRange.length ? inRange : codes, range.from, range.to);
+  if (code && codes.includes(code)) code = nextCode(codes, range.from, range.to);
+  return { code, from: range.from, to: range.to };
+}
 
 @Controller()
 @UseGuards(AuthGuard)
@@ -68,7 +88,7 @@ export class OrgController {
       await c.query('SET LOCAL ROLE app_user');
       await c.query("SELECT set_config('app.org_id', $1, true)", [String(orgId)]);
       for (const a of templateFor(b.template)) {
-        await c.query('INSERT INTO accounts(org_id,code,name,type,group_name) VALUES ($1,$2,$3,$4,$5)', [orgId, a.code, a.name, a.type, a.group]);
+        await c.query('INSERT INTO accounts(org_id,code,name,type,group_name,fsli,sub_group) VALUES ($1,$2,$3,$4,$5,$6,$7)', [orgId, a.code, a.name, a.type, a.group, fsliOf(a.type, a.code), defaultSubGroup(a.code)]);
       }
       const fy = financialYearOf(new Date().toISOString().slice(0, 10));
       await c.query('INSERT INTO financial_years(org_id,label,starts_on,ends_on) VALUES ($1,$2,$3,$4)', [orgId, fy.label, fy.start, fy.end]);
@@ -138,22 +158,7 @@ export class OrgController {
     await requireOrg(uid, orgId, 'read');
     const f = fsliByKey(fsli ?? '');
     if (!f) throw new BadRequestException('Unknown financial statement line item');
-    return withOrg(orgId, async (c) => {
-      const own = (await c.query('SELECT name,parent,code_from,code_to FROM account_groups WHERE fsli=$1', [f.key])).rows;
-      const def = DEFAULT_GROUPS.find((g) => g.fsli === f.key && g.name.toLowerCase() === (group ?? '').toLowerCase());
-      const ownG = own.find((o) => !o.parent && o.name.toLowerCase() === (group ?? '').toLowerCase());
-      const defSub = def?.sub?.find((s) => s.name.toLowerCase() === (subGroup ?? '').toLowerCase());
-      const ownSub = own.find((o) => o.parent && o.parent.toLowerCase() === (group ?? '').toLowerCase() && o.name.toLowerCase() === (subGroup ?? '').toLowerCase());
-      const range = (defSub && { from: defSub.from, to: defSub.to }) ?? (ownSub?.code_from != null ? { from: ownSub.code_from, to: ownSub.code_to } : null)
-        ?? (def && { from: def.from, to: def.to }) ?? (ownG?.code_from != null ? { from: ownG.code_from, to: ownG.code_to } : null) ?? { from: f.from, to: f.to };
-      const codes = (await c.query('SELECT code FROM accounts')).rows.map((r) => r.code as string);
-      // Within a group, follow the numbers already used by its ledgers (the last one plus 10).
-      const groupCodes = group ? (await c.query('SELECT code FROM accounts WHERE lower(group_name)=lower($1) AND ($2::text IS NULL OR lower(COALESCE(sub_group, \'\'))=lower($2))', [group, subGroup || null])).rows.map((r) => r.code as string) : [];
-      const inRange = groupCodes.filter((x) => { const n = Number.parseInt(x, 10); return n >= range.from && n <= range.to; });
-      let code = nextCode(inRange.length ? inRange : codes, range.from, range.to);
-      if (code && codes.includes(code)) code = nextCode(codes, range.from, range.to);
-      return { code, from: range.from, to: range.to };
-    });
+    return withOrg(orgId, (c) => suggestCode(c, f, group, subGroup));
   }
 
   /** Rename a ledger or move it to another group; the statement line must keep the same type once it has entries. */
@@ -227,8 +232,7 @@ export class OrgController {
     return withOrg(orgId, async (c) => {
       let code = b.code;
       if (!code) {
-        const range = f ?? { from: 1, to: 999999 };
-        code = nextCode((await c.query('SELECT code FROM accounts')).rows.map((r) => r.code), range.from, range.to) ?? undefined;
+        code = f ? (await suggestCode(c, f, b.group, b.subGroup)).code ?? undefined : nextCode((await c.query('SELECT code FROM accounts')).rows.map((r) => r.code), 1, 999999) ?? undefined;
         if (!code) throw new BadRequestException('No free number in this range: type one');
       }
       const dup = await c.query('SELECT 1 FROM accounts WHERE code=$1', [code]);

@@ -26,7 +26,7 @@ export async function accessFor(uid: number, orgId: number): Promise<{ access: A
   const r = (await getPool().query(
     `SELECT m.role, m.access FROM memberships m JOIN organizations o ON o.firm_id = m.firm_id
       WHERE m.user_id=$1 AND o.id=$2 AND (m.org_id=$2 OR m.org_id IS NULL) ORDER BY (m.org_id IS NULL) ASC LIMIT 1`, [uid, orgId])).rows[0];
-  const a = r?.role === 'owner' ? null : (r?.access ?? null); // an owner is never limited
+  const a = r?.role === 'owner' || r?.role === 'accountant' ? null : (r?.access ?? null); // owners and accountants always have full access
   cache.set(k, { a, role: r?.role ?? null, at: Date.now() });
   return { access: a, role: r?.role ?? null };
 }
@@ -86,6 +86,9 @@ export async function areaOf(orgId: number, method: string, rest: string, body: 
   if ((m = /^pre-documents\/(\d+)(\/.*)?$/.exec(p))) return docArea(await kindOf(orgId, 'SELECT kind AS k FROM pre_documents WHERE id=$1', Number(m[1])));
   if (p === 'recurring') return read ? (query?.type === 'bill' ? 'purchases' : 'sales') : body?.docType === 'bill' ? 'purchases' : 'sales';
   if ((m = /^recurring\/(\d+)(\/.*)?$/.exec(p))) return docArea(await kindOf(orgId, 'SELECT doc_type AS k FROM recurring_invoices WHERE id=$1', Number(m[1])));
+  if (p === 'recurring-due') return read ? null : 'purchases';
+  if (p === 'recurring/run') return ['sales', 'purchases'];
+  if ((m = /^recurring-due\/(\d+)$/.exec(p))) return docArea(await kindOf(orgId, 'SELECT r.doc_type AS k FROM recurring_due d JOIN recurring_invoices r ON r.id=d.recurring_id WHERE d.id=$1', Number(m[1])));
   if ((m = /^drafts\/(\d+)(\/.*)?$/.exec(p))) return docArea(await kindOf(orgId, 'SELECT doc_type AS k FROM document_drafts WHERE id=$1', Number(m[1]))) ?? 'sales';
   return null;
 }

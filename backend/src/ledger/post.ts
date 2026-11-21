@@ -1,3 +1,4 @@
+import { defaultSubGroup, fsliOf } from '../coa/structure';
 import { PoolClient } from 'pg';
 import { ForbiddenException } from '@nestjs/common';
 import type { Line } from './ledger';
@@ -54,5 +55,5 @@ export async function ensureAccount(c: PoolClient, orgId: number, code: keyof ty
   const found = await c.query('SELECT id FROM accounts WHERE code=$1', [code]);
   if (found.rowCount) return Number(found.rows[0].id);
   const a = SYSTEM_ACCOUNTS[code];
-  return Number((await c.query('INSERT INTO accounts(org_id,code,name,type,group_name) VALUES ($1,$2,$3,$4,$5) RETURNING id', [orgId, code, a.name, a.type, a.group])).rows[0].id);
+  return Number((await c.query('INSERT INTO accounts(org_id,code,name,type,group_name,fsli,sub_group) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id', [orgId, code, a.name, a.type, a.group, fsliOf(a.type, code), defaultSubGroup(code)])).rows[0].id);
 }

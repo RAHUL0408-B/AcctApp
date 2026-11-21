@@ -241,8 +241,8 @@ item(20, 'purchase order reviewed and changed before the bill was posted');
 
 // 17. Export every account's ledger at once
 await menu('Reporting', 'All reports');
-await page.getByRole('button', { name: 'Ledger', exact: true }).click();
-f = await download(() => btn('Export all accounts (Excel)').click());
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Ledger' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+f = await download(() => page.locator('main').getByRole('button', { name: 'Export ▾' }).click().then(() => page.getByRole('menuitem', { name: 'Excel (.xlsx)' }).click()));
 assert.strictEqual(f.name, 'all-ledgers.xlsx');
 item(17, 'all accounts exported at once from Reports');
 

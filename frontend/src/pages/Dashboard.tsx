@@ -75,10 +75,10 @@ export function Dashboard({ org, go, lastLogin }: { org: Org; go: (page: string)
       )}
 
       {show('figures') && <div className="grid gap-4 md:grid-cols-4">
-        <Stat label="Cash and bank" value={`₹${fmt(d.totalCash)}`} sub={`${d.banks.length} bank account(s)`} testId="total-cash" />
-        <Stat label="Owed to you" value={`₹${fmt(d.receivables.total)}`} sub={`₹${fmt(d.receivables.overdue)} overdue`} tone={d.receivables.overdue > 0 ? 'bad' : 'default'} testId="receivables" />
-        <Stat label="You owe" value={`₹${fmt(d.payables.total)}`} sub={`₹${fmt(d.payables.overdue)} overdue`} tone={d.payables.overdue > 0 ? 'bad' : 'default'} testId="payables" />
-        <Stat label={`Profit ${d.ytd.label}`} value={`₹${fmt(d.ytd.profit)}`} sub={`Income ₹${fmt(d.ytd.income)} · Expenses ₹${fmt(d.ytd.expense)}`} tone={d.ytd.profit < 0 ? 'bad' : 'good'} testId="ytd-profit" />
+        <Stat label="Cash and bank" value={`₹${fmt(d.totalCash)}`} sub={`${d.banks.length} bank account(s)`} testId="total-cash" onOpen={() => go('bank')} openLabel="Bank accounts" />
+        <Stat label="Owed to you" value={`₹${fmt(d.receivables.total)}`} sub={`₹${fmt(d.receivables.overdue)} overdue`} tone={d.receivables.overdue > 0 ? 'bad' : 'default'} testId="receivables" onOpen={() => go('reports/ar-run')} openLabel="Aged receivables" />
+        <Stat label="You owe" value={`₹${fmt(d.payables.total)}`} sub={`₹${fmt(d.payables.overdue)} overdue`} tone={d.payables.overdue > 0 ? 'bad' : 'default'} testId="payables" onOpen={() => go('reports/ap-run')} openLabel="Aged payables" />
+        <Stat label={`Profit ${d.ytd.label}`} value={`₹${fmt(d.ytd.profit)}`} sub={`Income ₹${fmt(d.ytd.income)} · Expenses ₹${fmt(d.ytd.expense)}`} tone={d.ytd.profit < 0 ? 'bad' : 'good'} testId="ytd-profit" onOpen={() => go('reports/pnl-run')} openLabel="Profit and loss" />
       </div>}
       {show('charts') && <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Card title="Income and expenses, last 6 months"><BarChart data={d.months.map((m) => ({ label: label(m.month), values: [m.income, m.expense] }))} series={[{ name: 'Income', color: '#6c5ce7' }, { name: 'Expenses', color: '#e11d48' }]} /></Card>

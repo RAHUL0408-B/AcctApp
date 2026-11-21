@@ -28,8 +28,8 @@ const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY
 const blankForm = { contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '', number: '', notes: '' };
 const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10);
 
-export function Documents({ org, kind, canPost, accounts, startNew = false, startType, restricted = false, role = 'owner', go }:
-  { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean; startType?: string; restricted?: boolean; role?: string; go?: (p: string) => void }) {
+export function Documents({ org, kind, canPost, accounts, startNew = false, startType, openId, restricted = false, role = 'owner', go }:
+  { org: Org; kind: 'sales' | 'purchases'; canPost: boolean; accounts: Account[]; startNew?: boolean; startType?: string; /** open this document (from a report) */ openId?: number; restricted?: boolean; role?: string; go?: (p: string) => void }) {
   // A restricted (sales) role can create and view, but not pay, edit, delete, archive or email.
   const full = canPost && !restricted;
   const types = TYPES[kind];
@@ -322,6 +322,15 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const payLabel = sales ? 'Receive payment' : 'Pay';
   const canEdit = (d: Doc) => full && d.status === 'posted';
   const contactPage = sales ? 'customers' : 'suppliers';
+  // Opened from a report or ledger: show that document (in the edit form when it can be edited).
+  const opened = useRef<number | null>(null);
+  useEffect(() => {
+    if (!openId || opened.current === openId || !docs.length) return;
+    const d = docs.find((x) => x.id === openId);
+    if (!d) return;
+    opened.current = openId;
+    if (canEdit(d)) startEdit(d); else setOk(`${d.number}: ${statusOf(d)}, total ₹${fmt(d.total)}. It cannot be edited; use the ⋮ menu for its PDF.`);
+  }, [openId, docs]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownDocs = showForm && f.contactId && !allDocs ? docs.filter((d) => String(d.contactId) === f.contactId) : docs;
   const partyOriginals = docs.filter((d) => d.status === 'posted' && d.docType === (sales ? 'invoice' : 'bill') && String(d.contactId) === f.contactId);
   const currencies = [...new Set(['INR', ...Object.keys(fxDefaults), ...COMMON_CURRENCIES, ...(f.currency ? [f.currency] : [])])];

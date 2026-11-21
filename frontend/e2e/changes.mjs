@@ -169,16 +169,16 @@ step('manual journal saved as a repeating rule and listed under Journal rules');
 // ---- report as a table, with all-ledgers export button on the ledger report
 await menu('Reporting', 'All reports');
 await heading('Reports');
-await page.getByRole('button', { name: 'All ledgers', exact: true }).click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Ledger' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await btn('Run').click();
 await page.getByTestId('table-report').waitFor();
-await page.getByRole('button', { name: 'Invoice-wise', exact: true }).click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Invoice-wise' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await btn('Run').click();
 await page.getByTestId('table-report').waitFor();
-await page.getByRole('button', { name: 'Purchase register', exact: true }).click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Purchase register' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await btn('Run').click();
 await page.getByTestId('table-report').waitFor();
-await page.getByRole('button', { name: 'Fixed asset register', exact: true }).click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Fixed asset register' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await btn('Run').click();
 await page.getByTestId('table-report').waitFor();
 step('All ledgers, Invoice-wise, Purchase register and Fixed asset register reports render as tables');
@@ -274,13 +274,13 @@ const grabbed = async (click) => {
   const buf = fs.readFileSync(await dl.path()); return { name: dl.suggestedFilename(), head: buf.subarray(0, 4).toString('latin1'), size: buf.length }; };
 await menu('Reporting', 'All reports');
 await heading('Reports');
-await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Trial balance' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 assert.strictEqual(await page.getByRole('button', { name: 'Customize export…' }).count(), 0, 'the per-export customise option is gone');
-let f = await grabbed(() => btn('Export PDF').click());
+let f = await grabbed(() => page.locator('main').getByRole('button', { name: 'Export ▾' }).click().then(() => page.getByRole('menuitem', { name: 'PDF (.pdf)' }).click()));
 assert.strictEqual(f.head, '%PDF'); assert.strictEqual(f.name, 'trial-balance.pdf');
 step('reports export straight away; the per-export customise option is gone');
 
-await btn('Export several reports…').click();
+await btn('Several reports in one file…').click();
 await page.getByLabel('Profit & loss', { exact: true }).check();
 await page.getByLabel('Balance sheet', { exact: true }).check();
 await page.getByText('3 chosen').waitFor();
@@ -337,8 +337,8 @@ assert.strictEqual(saved.templates[0].config.font, 'mono');
 step('owner designed "Brand red" (colours, typeface, heading, table style, footer), previewed it as PDF, and chose it for reports and Corporate for invoices');
 
 await menu('Reporting', 'All reports');
-await page.getByRole('button', { name: 'Trial balance', exact: true }).click();
-f = await grabbed(() => btn('Export Excel').click());
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Trial balance' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+f = await grabbed(() => page.locator('main').getByRole('button', { name: 'Export ▾' }).click().then(() => page.getByRole('menuitem', { name: 'Excel (.xlsx)' }).click()));
 assert.strictEqual(f.head.slice(0, 2), 'PK');
 step('reports now download in the chosen template with no options to pick');
 

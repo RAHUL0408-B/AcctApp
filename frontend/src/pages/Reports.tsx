@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
-import { Button, Card, ErrorMsg, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, useAction } from '../ui';
+import { FORMATS, Icon, exportTable, type ExportFormat, type ExportTable } from '../table';
 import { CombinePanel } from '../export';
 
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
@@ -29,14 +30,34 @@ const RANGED = ['pnl', 'ledger', 'gstr1', 'gstr3b', 'cf', 'pnlm', 'pnlt', 'bva',
 const TABLE: Record<string, string> = { alll: 'all-ledgers', invw: 'invoice-wise', billw: 'bill-wise', preg: 'purchase-register', far: 'fixed-assets' };
 const EXPORT: Record<string, string> = { tb: 'trial-balance', pnl: 'pnl', bs: 'balance-sheet', ledger: 'ledger', cf: '', ar: 'aged-receivables', ap: 'aged-payables', gstr1: 'gstr1-b2b', gstr3b: 'gstr3b', pnlm: '', pnlt: '', bva: '', stcf: '', snap: '', tds: '', alll: 'all-ledgers', invw: 'invoice-wise', billw: 'bill-wise', preg: 'purchase-register', far: 'fixed-assets' };
 
-export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string }) {
-  const known = (k?: string) => (k && REPORTS.some(([x]) => x === k) ? k : undefined);
+/** The report picker, grouped. "All ledgers" is now the ledger report with no account range chosen. */
+const MENU: [string, string[]][] = [
+  ['Financial statements', ['pnl', 'bs', 'tb', 'cf']], ['Ledgers', ['ledger']], ['Receivables and payables', ['ar', 'ap', 'invw', 'billw', 'preg']],
+  ['GST and TDS', ['gstr1', 'gstr3b', 'tds']], ['Analytics', ['pnlm', 'pnlt', 'bva', 'stcf', 'snap']], ['Registers', ['far']],
+];
+const nameOf = (k: string) => REPORTS.find((r) => r[0] === k)?.[1] ?? k;
+type Level = 'ledger' | 'group' | 'fsli';
+const FSLI_NAME: Record<string, string> = { equity: 'Capital and Reserves & Surplus', ncl: 'Non-Current Liabilities', cl: 'Current Liabilities', nca: 'Non-Current Assets', ca: 'Current Assets', di: 'Direct Incomes', ii: 'Indirect Incomes', de: 'Direct Expenses', ie: 'Indirect Expenses' };
+interface Item { id?: number; code: string; name: string; group?: string; subGroup?: string | null; fsli?: string; amount: number }
+/** Items of a P&L or Balance Sheet section added up to the chosen level (ledger, group, or statement line). */
+export function rollUp(items: Item[], level: Level): { key: string; label: string; amount: number; code?: string }[] {
+  if (level === 'ledger') return items.map((i) => ({ key: i.code, label: `${i.code} ${i.name}`, amount: i.amount, code: i.code }));
+  const m = new Map<string, number>();
+  for (const i of items) { const k = level === 'group' ? i.group ?? 'Other' : FSLI_NAME[i.fsli ?? ''] ?? 'Other'; m.set(k, (m.get(k) ?? 0) + i.amount); }
+  return [...m.entries()].map(([k, v]) => ({ key: k, label: k, amount: v }));
+}
+
+export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string; go?: (p: string) => void }) {
+  // "reports/ar-run" (from a dashboard figure) opens the report already run; a menu link waits for Run.
+  const known = (k?: string) => { const x = k === 'alll' ? 'ledger' : k?.replace(/-run$/, ''); return x && REPORTS.some(([r]) => r === x) ? x : undefined; };
   const [rep, setRep] = useState<string>(known(initial) ?? 'pnl');
-  useEffect(() => { const k = known(initial); if (k) setRep(k); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const k = known(initial); if (k) { setRep(k); setData(null); if (initial?.endsWith('-run')) load(k); } }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
   const [days, setDays] = useState('30');
   const [, setFavTick] = useState(0);
   const isFav = favouriteReports().some((f) => f.key === rep);
-  const [from, setFrom] = useState(fyStart()), [to, setTo] = useState(today()), [accountId, setAccountId] = useState('');
+  const [from, setFrom] = useState(fyStart()), [to, setTo] = useState(today());
+  const [fromCode, setFromCode] = useState(''), [toCode, setToCode] = useState('');
+  const [level, setLevel] = useState<Level>('ledger');
   const [categories, setCategories] = useState<{ id: number; name: string }[]>([]), [budgets, setBudgets] = useState<{ id: number; name: string }[]>([]);
   const [categoryId, setCategoryId] = useState(''), [budgetId, setBudgetId] = useState('');
   useEffect(() => {
@@ -44,94 +65,181 @@ export function Reports({ org, accounts, initial }: { org: Org; accounts: { id: 
     api<{ id: number; name: string }[]>(`/orgs/${org.id}/budgets`).then((b) => { setBudgets(b); if (b[0]) setBudgetId(String(b[0].id)); });
   }, [org.id]);
   const [data, setData] = useState<{ rep: string; d: any } | null>(null); // tagged so a stale report never renders in another layout
-  const { error, run } = useAction();
+  const { error, busy, run } = useAction();
   const latest = useRef(0); // only the newest request may set the result; slower, older responses are dropped
+  const codeOf = (t: string) => { const v = t.trim(); const a = accounts.find((x) => `${x.code} · ${x.name}`.toLowerCase() === v.toLowerCase()) ?? accounts.find((x) => x.code === v); return a ? a.code : v.split(' ')[0]; };
 
-  const query = () => {
+  const query = (r = rep, codes?: { fromCode: string; toCode: string }) => {
     const p = new URLSearchParams();
-    if (RANGED.includes(rep)) { p.set('from', from); p.set('to', to); } else p.set('asOf', to);
-    if (rep === 'ledger') p.set('accountId', accountId);
-    if (rep === 'pnlt') p.set('categoryId', categoryId);
-    if (rep === 'bva') p.set('budgetId', budgetId);
-    if (rep === 'stcf') p.set('days', days);
+    if (RANGED.includes(r)) { p.set('from', from); p.set('to', to); } else p.set('asOf', to);
+    if (r === 'ledger') { const fc = codes ? codes.fromCode : codeOf(fromCode), tc = codes ? codes.toCode : codeOf(toCode); if (fc) p.set('fromCode', fc); if (tc) p.set('toCode', tc); }
+    if (r === 'pnlt') p.set('categoryId', categoryId);
+    if (r === 'bva') p.set('budgetId', budgetId);
+    if (r === 'stcf') p.set('days', days);
     return p;
   };
-  const load = () => run(async () => {
+  const load = (r = rep, codes?: { fromCode: string; toCode: string }) => run(async () => {
     const mine = ++latest.current;
     setData(null);
-    const q = query();
-    const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/reports/ledger/${accountId}?${q}`,
+    const q = query(r, codes);
+    if ((r === 'pnlt' && !categoryId) || (r === 'bva' && !budgetId)) throw new Error(r === 'pnlt' ? 'Add a cost centre group under Accounting first.' : 'Create a budget under Accounting first.');
+    const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/report-table/all-ledgers?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}`,
       pnlm: `/reports/pnl-by-month?${q}`, pnlt: `/reports/pnl-by-tracking?${q}`, bva: `/reports/budget-vs-actual?${q}`,
       stcf: `/reports/short-term-cash-flow?${q}`, snap: `/reports/business-snapshot?${q}`, tds: `/reports/tds?${q}`,
-      alll: `/report-table/all-ledgers?${q}`, invw: `/report-table/invoice-wise?${q}`, billw: `/report-table/bill-wise?${q}`, preg: `/report-table/purchase-register?${q}`, far: `/report-table/fixed-assets?${q}` }[rep]!;
-    if ((rep === 'ledger' && !accountId) || (rep === 'pnlt' && !categoryId) || (rep === 'bva' && !budgetId)) return;
-    const current = rep;
+      invw: `/report-table/invoice-wise?${q}`, billw: `/report-table/bill-wise?${q}`, preg: `/report-table/purchase-register?${q}`, far: `/report-table/fixed-assets?${q}` }[r]!;
     const d = await api(`/orgs/${org.id}${url}`);
-    if (mine === latest.current) setData({ rep: current, d });
+    if (mine === latest.current) setData({ rep: r, d });
   });
-  useEffect(() => { load(); }, [rep, org.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const choose = (k: string) => { setRep(k); setData(null); };
+  /** Click an account anywhere in a report: its ledger for the same dates. */
+  const openLedger = (code: string) => { setRep('ledger'); setFromCode(code); setToCode(code); load('ledger', { fromCode: code, toCode: code }); };
+  /** Click a ledger line: the invoice, bill or journal behind it. */
+  const openSource = (l: any) => {
+    if (!go || !l) return;
+    if (l.kind === 'document') go(`${l.docType === 'invoice' || l.docType === 'credit_note' ? 'invoices' : 'bills'}/open-${l.id}`);
+    else if (l.kind === 'journal') go(`journal/open-${l.id}`);
+    else if (l.kind === 'account') openLedger(l.code);
+  };
 
-  const exp = (format: 'pdf' | 'xlsx') => run(() => download(`/orgs/${org.id}/export/${EXPORT[rep]}?format=${format}&${query()}`, `${EXPORT[rep]}.${format}`));
-  // Several reports combined into one file. How the file looks comes from the organisation's report template.
-  const [combine, setCombine] = useState(false);
-  const manyChoices = REPORTS.filter(([k]) => EXPORT[k]).map(([k, label]) => ({ key: k, label, disabled: k === 'ledger' && !accountId ? 'choose an account first' : undefined }));
-  const exportMany = (format: 'pdf' | 'xlsx', chosen: string[]) => run(() => {
-    const p = new URLSearchParams({ from, to, asOf: to, ...(accountId ? { accountId } : {}) });
-    return download(`/orgs/${org.id}/export-multi?format=${format}&reports=${chosen.map((k) => EXPORT[k]).join(',')}&${p}`, `reports.${format}`);
+  /** Every report exports in every format: from the server's table where there is one, otherwise from what is on screen. */
+  const exportAs = (f: ExportFormat) => run(async () => {
+    const serverName = EXPORT[rep] === 'ledger' ? 'all-ledgers' : EXPORT[rep];
+    if (serverName && !((rep === 'pnl' || rep === 'bs') && level !== 'ledger')) {
+      await download(`/orgs/${org.id}/export/${serverName}?format=${f}&${query()}`, `${serverName}.${f}`); return;
+    }
+    if (!data || data.rep !== rep) throw new Error('Click Run first, then export what is shown.');
+    await exportTable(org.id, screenTable(rep, data.d, { from, to, level }), f);
   });
-  // Every account's ledger in one file, for the same dates.
-  const expAll = (format: 'pdf' | 'xlsx') => run(() => { const p = new URLSearchParams({ from, to }); return download(`/orgs/${org.id}/export/all-ledgers?format=${format}&${p}`, `all-ledgers.${format}`); });
+  const [combine, setCombine] = useState(false);
+  const manyChoices = REPORTS.filter(([k]) => EXPORT[k] && k !== 'alll').map(([k, label]) => ({ key: k, label }));
+  const exportMany = (format: 'pdf' | 'xlsx', chosen: string[]) => run(() => {
+    const p = new URLSearchParams({ from, to, asOf: to });
+    return download(`/orgs/${org.id}/export-multi?format=${format}&reports=${chosen.map((k) => (k === 'ledger' ? 'all-ledgers' : EXPORT[k])).join(',')}&${p}`, `reports.${format}`);
+  });
+  const inputCls = 'rounded-md border border-slate-300 px-2 py-1.5';
 
   return (
     <>
-      <div className="flex flex-wrap gap-1 text-sm">{REPORTS.map(([k, l]) => <button key={k} className={`rounded px-3 py-1 ${rep === k ? 'bg-slate-800 text-white' : 'border border-slate-300 bg-white'}`} onClick={() => setRep(k)}>{l}</button>)}</div>
       <Card>
         <div className="flex flex-wrap items-end gap-3 text-sm">
-          {RANGED.includes(rep) && <label>From <input aria-label="From" type="date" className="rounded border border-slate-300 px-2 py-1" value={from} onChange={(e) => setFrom(e.target.value)} /></label>}
-          {rep === 'stcf' ? <label>Next <select aria-label="Days ahead" className="rounded border border-slate-300 px-2 py-1" value={days} onChange={(e) => setDays(e.target.value)}>{['30', '60', '90'].map((d) => <option key={d} value={d}>{d} days</option>)}</select></label>
-            : <label>{RANGED.includes(rep) ? 'To' : 'As at'} <input aria-label="To" type="date" className="rounded border border-slate-300 px-2 py-1" value={to} onChange={(e) => setTo(e.target.value)} /></label>}
-          {rep === 'ledger' && <select aria-label="Ledger account" className="rounded border border-slate-300 px-2 py-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-            <option value="">Account…</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select>}
-          {rep === 'pnlt' && (categories.length ? <select aria-label="Cost centre group" className="rounded border border-slate-300 px-2 py-1" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-            : <span className="text-slate-500">Add a cost centre group under Accounting first.</span>)}
-          {rep === 'bva' && (budgets.length ? <select aria-label="Budget" className="rounded border border-slate-300 px-2 py-1" value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>{budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
-            : <span className="text-slate-500">Create a budget under Accounting first.</span>)}
-          <Button onClick={load}>Run</Button>
+          <label className="block"><span className="mb-1 block font-medium text-slate-600">Report</span>
+            <select aria-label="Report" className={`${inputCls} min-w-56 bg-white`} value={rep} onChange={(e) => choose(e.target.value)}>
+              {MENU.map(([g, keys]) => <optgroup key={g} label={g}>{keys.map((k) => <option key={k} value={k}>{nameOf(k)}</option>)}</optgroup>)}</select></label>
+          {RANGED.includes(rep) && <label className="block"><span className="mb-1 block font-medium text-slate-600">From</span><input aria-label="From" type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} /></label>}
+          {rep === 'stcf' ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Next</span><select aria-label="Days ahead" className={inputCls} value={days} onChange={(e) => setDays(e.target.value)}>{['30', '60', '90'].map((d) => <option key={d} value={d}>{d} days</option>)}</select></label>
+            : <label className="block"><span className="mb-1 block font-medium text-slate-600">{RANGED.includes(rep) ? 'To' : 'As at'}</span><input aria-label="To" type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></label>}
+          {rep === 'ledger' && <>
+            <label className="block"><span className="mb-1 block font-medium text-slate-600">From account</span>
+              <input aria-label="From account" list="report-accounts" placeholder="First account" className={`${inputCls} w-56`} value={fromCode} onChange={(e) => setFromCode(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block font-medium text-slate-600">To account</span>
+              <input aria-label="To account" list="report-accounts" placeholder="Last account" className={`${inputCls} w-56`} value={toCode} onChange={(e) => setToCode(e.target.value)} /></label>
+            <datalist id="report-accounts">{accounts.map((a) => <option key={a.id} value={`${a.code} · ${a.name}`} />)}</datalist></>}
+          {rep === 'pnlt' && (categories.length ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Cost centre group</span><select aria-label="Cost centre group" className={inputCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+            : <span className="pb-2 text-slate-500">Add a cost centre group under Accounting first.</span>)}
+          {rep === 'bva' && (budgets.length ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Budget</span><select aria-label="Budget" className={inputCls} value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>{budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+            : <span className="pb-2 text-slate-500">Create a budget under Accounting first.</span>)}
+          {(rep === 'pnl' || rep === 'bs') && <label className="block"><span className="mb-1 block font-medium text-slate-600">Show</span>
+            <select aria-label="Show by" className={inputCls} value={level} onChange={(e) => setLevel(e.target.value as Level)}><option value="ledger">Each ledger</option><option value="group">Groups</option><option value="fsli">Statement lines</option></select></label>}
+          <Button disabled={busy} onClick={() => load()}>Run</Button>
+          <ReportExport onExport={exportAs} disabled={busy} />
+          <Button variant="ghost" aria-expanded={combine} onClick={() => setCombine(!combine)}>Several reports in one file…</Button>
           <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
-          {EXPORT[rep] && <><Button variant="ghost" onClick={() => exp('pdf')}>Export PDF</Button>
-          <Button variant="ghost" onClick={() => exp('xlsx')}>Export Excel</Button></>}
-          <Button variant="ghost" aria-expanded={combine} onClick={() => setCombine(!combine)}>Export several reports…</Button>
-          {rep === 'ledger' && <><Button variant="ghost" onClick={() => expAll('xlsx')}>Export all accounts (Excel)</Button><Button variant="ghost" onClick={() => expAll('pdf')}>Export all accounts (PDF)</Button></>}
         </div>
+        {rep === 'ledger' && <p className="mt-2 text-xs text-slate-500">Leave both accounts empty for every ledger; choose the same account twice for one ledger. Click a line to open the invoice, bill or journal behind it.</p>}
         <div className="mt-3"><ErrorMsg msg={error} /></div>
       </Card>
       {combine && <CombinePanel title="Export several reports in one file" choices={manyChoices} chosen={EXPORT[rep] ? [rep] : []} busy={false} onExport={exportMany} onClose={() => setCombine(false)} />}
-      {data && data.rep === rep && <Card title={REPORTS.find((r) => r[0] === rep)![1]}><ReportView rep={rep} d={data.d} org={org} reload={load} /></Card>}
+      {data && data.rep === rep
+        ? <Card title={nameOf(rep)}><ReportView rep={rep} d={data.d} org={org} reload={() => load()} level={level} openLedger={openLedger} openSource={openSource} /></Card>
+        : !busy && <Callout tone="info">Choose the dates{rep === 'ledger' ? ' and accounts' : ''}, then click <b>Run</b> to see {nameOf(rep)}.</Callout>}
     </>
   );
 }
 
-const Row = ({ label, v, bold }: { label: string; v: number; bold?: boolean }) => (
-  <tr className={`border-t border-slate-100 ${bold ? 'font-semibold' : ''}`}><td className="py-1">{label}</td><td className="text-right">{fmt(v)}</td></tr>
-);
+/** "Export ▾" for a report: Excel, PDF, CSV or XML. */
+function ReportExport({ onExport, disabled }: { onExport: (f: ExportFormat) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <Button variant="ghost" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}><span className="inline-flex items-center gap-1.5"><Icon name="download" />Export ▾</span></Button>
+      {open && <div role="menu" className="absolute left-0 z-30 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+        {FORMATS.map(([f, label]) => <button key={f} type="button" role="menuitem" className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setOpen(false); onExport(f); }}>{label} (.{f})</button>)}</div>}
+    </div>
+  );
+}
 
-function ReportView({ rep, d, org, reload }: { rep: string; d: any; org: Org; reload: () => void }) {
+/** The report on screen as a table, for the reports the server does not export itself (and for grouped views). */
+function screenTable(rep: string, d: any, o: { from: string; to: string; level: Level }): ExportTable {
+  const t = (title: string, columns: ExportTable['columns'], rows: ExportTable['rows'], boldRows?: number[]) => ({ title, subtitle: `${o.from} to ${o.to}`, columns, rows, boldRows });
+  const M = (h: string) => ({ header: h, money: true }), T = (h: string) => ({ header: h });
+  if (rep === 'pnl' || rep === 'bs') {
+    const rows: ExportTable['rows'] = [], bold: number[] = [];
+    const secs: [string, any][] = rep === 'pnl' ? [['Income', d.income], ['Expenses', d.expenses]] : [['Assets', d.assets], ['Liabilities', d.liabilities], ['Equity', d.equity]];
+    for (const [name, s] of secs) {
+      bold.push(rows.length); rows.push([name.toUpperCase(), null]);
+      for (const r of rollUp(s.items, o.level)) rows.push([r.label, r.amount]);
+      if (name === 'Equity') rows.push(['Profit to date', d.equity.profitToDate]);
+      bold.push(rows.length); rows.push([`Total ${name.toLowerCase()}`, s.total]);
+    }
+    if (rep === 'pnl') { bold.push(rows.length); rows.push(['NET PROFIT / (LOSS)', d.netProfit]); }
+    return { ...t(rep === 'pnl' ? 'Profit and Loss' : 'Balance Sheet', [T(o.level === 'ledger' ? 'Account' : o.level === 'group' ? 'Group' : 'Statement line'), M('Amount')], rows, bold), subtitle: rep === 'bs' ? `As at ${o.to}` : `${o.from} to ${o.to}` };
+  }
+  if (rep === 'cf') return t('Cash flow', [T('Month'), M('Opening'), M('Cash in'), M('Cash out'), M('Closing')],
+    [...d.months.map((m: any) => [m.month, m.opening, m.cashIn, m.cashOut, m.closing]), ['Total', null, d.totalIn, d.totalOut, d.closingBalance]], [d.months.length]);
+  if (rep === 'pnlm' || rep === 'pnlt') {
+    const rows: ExportTable['rows'] = [], bold: number[] = [];
+    for (const [name, s] of [['Income', d.income], ['Expenses', d.expenses]] as [string, any][]) {
+      bold.push(rows.length); rows.push([name.toUpperCase(), ...d.columns.map(() => null), null]);
+      for (const i of s.items) rows.push([`${i.code} ${i.name}`, ...i.amounts, i.total]);
+      bold.push(rows.length); rows.push([`Total ${name.toLowerCase()}`, ...s.totals, s.total]);
+    }
+    bold.push(rows.length); rows.push(['Net profit', ...d.netProfit, d.netProfitTotal]);
+    return t(rep === 'pnlm' ? 'Profit and Loss by month' : 'Profit and Loss by cost centre', [T('Account'), ...d.columns.map((c: string) => M(c)), M('Total')], rows, bold);
+  }
+  if (rep === 'bva') return t('Budget vs actual', [T('Account'), M('Budget'), M('Actual'), M('Variance')],
+    [...d.lines.map((l: any) => [`${l.code} ${l.name}`, l.budget, l.actual, l.variance]), ['Profit', d.totals.profitBudget, d.totals.profitActual, d.totals.profitActual - d.totals.profitBudget]], [d.lines.length]);
+  if (rep === 'stcf') return t(`Short-term cash flow (${d.days} days)`, [T('Week'), M('Money in'), M('Money out'), M('Net'), M('Balance')],
+    d.weeks.map((w: any) => [`${w.start} to ${w.end}`, w.cashIn, w.cashOut, w.net, w.closing]));
+  if (rep === 'snap') return t('Business snapshot', [T('Measure'), T('Value'), T('Status')], d.scorecard.map((s: any) => [s.metric, s.value == null ? '' : `${s.value} ${s.unit}`, s.status]));
+  if (rep === 'tds') return t('TDS deducted', [T('Date'), T('Quarter'), T('Bill'), T('Party'), T('PAN'), T('Section'), M('Amount'), M('TDS')],
+    [...d.rows.map((x: any) => [x.date, x.quarter, x.number, x.party, x.pan ?? 'missing', x.section, x.amount, x.tds]), ['Total', '', '', '', '', '', null, d.totalTds]], [d.rows.length]);
+  if (rep === 'gstr1') return t('GSTR-1', [T('Section'), T('Number'), T('Date'), T('GSTIN / party'), T('Place of supply'), M('Taxable'), M('IGST'), M('CGST'), M('SGST'), M('Cess')],
+    (['b2b', 'b2cl', 'exp', 'cdnr', 'cdnur'] as const).flatMap((s) => d[s].map((x: any) => [s.toUpperCase(), x.number, x.date, x.gstin ?? x.party, x.placeOfSupply, x.taxable, x.igst, x.cgst, x.sgst, x.cess ?? 0])));
+  if (rep === 'tb') return t('Trial balance', [T('Code'), T('Account'), M('Debit'), M('Credit')], [...d.accounts.map((a: any) => [a.code, a.name, a.debit, a.credit]), ['', 'Total', d.totalDebit, d.totalCredit]], [d.accounts.length]);
+  if (rep === 'ar' || rep === 'ap') return t(rep === 'ar' ? 'Aged receivables' : 'Aged payables', [T('Contact'), M('Not due'), M('1-30'), M('31-60'), M('61-90'), M('90+'), M('Total')],
+    [...d.contacts, { contact: 'Total', ...d.totals }].map((c: any) => [c.contact, c.notDue, c.days1to30, c.days31to60, c.days61to90, c.over90, c.total]));
+  if (d.columns && d.rows) return { title: d.title, subtitle: d.subtitle, columns: d.columns.map((c: any) => ({ header: c.header, money: c.type === 'money' })), rows: d.rows, boldRows: d.boldRows };
+  throw new Error('This report cannot be exported yet');
+}
+
+/** A report line; with a code, the label and amount open that account's ledger. */
+const Row = ({ label, v, bold, code, open }: { label: string; v: number; bold?: boolean; code?: string; open?: (code: string) => void }) => (
+  <tr className={`border-t border-slate-100 ${bold ? 'font-semibold' : ''}`}>
+    <td className="py-1">{code && open ? <button type="button" className="text-left hover:text-brand-700 hover:underline" title="Open the ledger" onClick={() => open(code)}>{label}</button> : label}</td>
+    <td className="text-right">{code && open ? <button type="button" className="text-brand-700 hover:underline" aria-label={`Ledger of ${label}`} onClick={() => open(code)}>{fmt(v)}</button> : fmt(v)}</td></tr>
+);
+const Link = ({ code, open, children }: { code: string; open: (c: string) => void; children: React.ReactNode }) =>
+  <button type="button" className="hover:text-brand-700 hover:underline" onClick={() => open(code)}>{children}</button>;
+
+function ReportView({ rep, d, org, reload, level = 'ledger', openLedger, openSource }: { rep: string; d: any; org: Org; reload: () => void; level?: Level; openLedger: (code: string) => void; openSource: (l: any) => void }) {
+  if (rep === 'ledger') return <TableReport d={d} org={org} reload={reload} selectable={false} onLink={openSource} />;
   if (TABLE[rep]) return <TableReport d={d} org={org} reload={reload} selectable={['invw', 'billw', 'preg'].includes(rep)} />;
   if (rep === 'tb') return (
     <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead>
-      <tbody>{d.accounts.map((a: any) => <tr key={a.code} className="border-t border-slate-100"><td>{a.code} {a.name}</td><td className="text-right">{a.debit ? fmt(a.debit) : ''}</td><td className="text-right">{a.credit ? fmt(a.credit) : ''}</td></tr>)}
+      <tbody>{d.accounts.map((a: any) => <tr key={a.code} className="border-t border-slate-100"><td><Link code={a.code} open={openLedger}>{a.code} {a.name}</Link></td>
+        <td className="text-right">{a.debit ? <Link code={a.code} open={openLedger}>{fmt(a.debit)}</Link> : ''}</td><td className="text-right">{a.credit ? <Link code={a.code} open={openLedger}>{fmt(a.credit)}</Link> : ''}</td></tr>)}
         <tr className="border-t-2 font-semibold"><td>Total {d.balanced ? '✓' : '✗'}</td><td className="text-right" data-testid="tb-debit">{fmt(d.totalDebit)}</td><td className="text-right" data-testid="tb-credit">{fmt(d.totalCredit)}</td></tr></tbody></table>);
   if (rep === 'pnl') return (
     <table className="w-full text-sm"><tbody>
-      <tr><td className="pt-2 font-semibold text-slate-500">Income</td></tr>{d.income.items.map((i: any) => <Row key={i.code} label={`${i.code} ${i.name}`} v={i.amount} />)}<Row label="Total income" v={d.income.total} bold />
-      <tr><td className="pt-4 font-semibold text-slate-500">Expenses</td></tr>{d.expenses.items.map((i: any) => <Row key={i.code} label={`${i.code} ${i.name}`} v={i.amount} />)}<Row label="Total expenses" v={d.expenses.total} bold />
+      <tr><td className="pt-2 font-semibold text-slate-500">Income</td></tr>{rollUp(d.income.items, level).map((i) => <Row key={i.key} label={i.label} v={i.amount} code={i.code} open={openLedger} />)}<Row label="Total income" v={d.income.total} bold />
+      <tr><td className="pt-4 font-semibold text-slate-500">Expenses</td></tr>{rollUp(d.expenses.items, level).map((i) => <Row key={i.key} label={i.label} v={i.amount} code={i.code} open={openLedger} />)}<Row label="Total expenses" v={d.expenses.total} bold />
       <tr className="border-t-2 text-base font-bold"><td className="py-2">Net profit / (loss)</td><td className="text-right" data-testid="net-profit">{fmt(d.netProfit)}</td></tr></tbody></table>);
   if (rep === 'bs') return (
     <table className="w-full text-sm"><tbody>
       {(['assets', 'liabilities', 'equity'] as const).map((s) => (<Fragment key={s}>
         <tr><td className="pt-3 font-semibold capitalize text-slate-500">{s}</td></tr>
-        {d[s].items.map((i: any) => <Row key={s + i.code} label={`${i.code} ${i.name}`} v={i.amount} />)}
+        {rollUp(d[s].items, level).map((i) => <Row key={s + i.key} label={i.label} v={i.amount} code={i.code} open={openLedger} />)}
         {s === 'equity' && <Row label="Profit to date" v={d.equity.profitToDate} />}
         <Row label={`Total ${s}`} v={d[s].total} bold /></Fragment>))}
       <tr><td className="pt-3 text-sm">{d.balanced ? '✓ Assets = Liabilities + Equity' : '✗ Out of balance'}</td></tr></tbody></table>);
@@ -279,7 +387,8 @@ function TdsReport({ d }: { d: any }) {
 }
 
 /** A report built as a plain table. Document reports let you tick rows and archive or delete them. */
-function TableReport({ d, org, reload, selectable }: { d: any; org: Org; reload: () => void; selectable: boolean }) {
+function TableReport({ d, org, reload, selectable, onLink }: { d: any; org: Org; reload: () => void; selectable: boolean; onLink?: (l: any) => void }) {
+  const links: (any | null)[] = d.links ?? [];
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
@@ -312,7 +421,12 @@ function TableReport({ d, org, reload, selectable }: { d: any; org: Org; reload:
           <tbody>{d.rows.map((r: (string | number)[], ri: number) => (
             <tr key={ri} className={`border-t border-slate-100 ${bold.has(ri) ? 'font-semibold' : ''}`}>
               {selectable && <td>{ids[ri] != null && <input type="checkbox" aria-label={`Select ${r[0]}`} checked={picked.has(ids[ri] as number)} onChange={() => toggle(ids[ri] as number)} />}</td>}
-              {r.map((v, ci) => <td key={ci} className={d.columns[ci].type === 'money' ? 'text-right' : ''}>{d.columns[ci].type === 'money' ? (typeof v === 'number' ? fmt(v) : '') : String(v)}</td>)}
+              {r.map((v, ci) => {
+                const text = d.columns[ci].type === 'money' ? (typeof v === 'number' ? fmt(v) : '') : String(v);
+                const link = onLink && links[ri] && text && (links[ri].kind === 'account' ? ci === 1 : ci === 1 || d.columns[ci].type === 'money');
+                return <td key={ci} className={d.columns[ci].type === 'money' ? 'text-right' : ''}>{link
+                  ? <button type="button" className="text-left text-brand-700 hover:underline" title={links[ri].kind === 'account' ? 'Only this ledger' : links[ri].kind === 'journal' ? 'Open the journal entry' : 'Open the document'} onClick={() => onLink!(links[ri])}>{text}</button> : text}</td>;
+              })}
             </tr>))}</tbody></table>
         {d.rows.length === 0 && <p className="py-6 text-center text-slate-500">Nothing to show for these dates.</p>}
       </div>

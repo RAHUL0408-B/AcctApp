@@ -10,8 +10,17 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function Stat({ label, value, sub, tone = 'default', testId }: { label: string; value: string; sub?: string; tone?: 'default' | 'bad' | 'good'; testId?: string }) {
+export function Stat({ label, value, sub, tone = 'default', testId, onOpen, openLabel }: { label: string; value: string; sub?: string; tone?: 'default' | 'bad' | 'good'; testId?: string; onOpen?: () => void; openLabel?: string }) {
   const color = tone === 'bad' ? 'text-red-700' : tone === 'good' ? 'text-green-700' : 'text-slate-900';
+  if (onOpen) return (
+    <button type="button" onClick={onOpen} title={openLabel} aria-label={`${label}: ${value}. ${openLabel ?? 'Open the report'}`}
+      className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(16,24,40,0.05)] transition hover:border-brand-300 hover:shadow-md">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className={`mt-1 text-2xl font-semibold tracking-tight ${color}`} data-testid={testId}>{value}</p>
+      {sub && <p className="text-xs text-slate-500">{sub}</p>}
+      {openLabel && <p className="mt-1 text-[11px] font-medium text-brand-700">{openLabel} →</p>}
+    </button>
+  );
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
       <p className="text-xs font-medium text-slate-500">{label}</p>

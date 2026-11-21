@@ -1,18 +1,19 @@
 // Report queries. All amounts are integer paise. Call inside withOrg() so row-level security applies.
 import { PoolClient } from 'pg';
 import { naturalBalance } from '../ledger/ledger';
+import { fsliOf } from '../coa/structure';
 
 const n = (v: unknown) => Number(v);
 
 export async function accountBalances(c: PoolClient, opts: { from?: string; to?: string; types?: string[]; excludeClosing?: boolean }) {
   const rows = (await c.query(
-    `SELECT a.id, a.code, a.name, a.type, a.group_name AS "group", COALESCE(SUM(l.debit),0) AS debit, COALESCE(SUM(l.credit),0) AS credit
+    `SELECT a.id, a.code, a.name, a.type, a.group_name AS "group", a.sub_group, a.fsli, COALESCE(SUM(l.debit),0) AS debit, COALESCE(SUM(l.credit),0) AS credit
        FROM accounts a
        LEFT JOIN (SELECT jl.account_id, jl.debit, jl.credit FROM journal_lines jl JOIN journal_entries e ON e.id=jl.entry_id
                    WHERE ($1::date IS NULL OR e.entry_date >= $1::date) AND ($2::date IS NULL OR e.entry_date <= $2::date) AND (NOT $4 OR e.kind <> 'closing')) l ON l.account_id=a.id
       WHERE ($3::text[] IS NULL OR a.type = ANY($3))
       GROUP BY a.id ORDER BY a.code`, [opts.from ?? null, opts.to ?? null, opts.types ?? null, !!opts.excludeClosing])).rows;
-  return rows.map((r) => ({ id: n(r.id), code: r.code, name: r.name, type: r.type as string, group: r.group as string,
+  return rows.map((r) => ({ id: n(r.id), code: r.code, name: r.name, type: r.type as string, group: r.group as string, subGroup: (r.sub_group as string | null) ?? null, fsli: (r.fsli as string | null) ?? fsliOf(r.type, r.code),
     debit: n(r.debit), credit: n(r.credit), balance: naturalBalance(r.type, n(r.debit), n(r.credit)) }));
 }
 
@@ -20,7 +21,7 @@ export async function profitAndLoss(c: PoolClient, from: string, to: string) {
   const rows = await accountBalances(c, { from, to, types: ['income', 'expense'], excludeClosing: true });
   const section = (type: string) => {
     const items = rows.filter((r) => r.type === type && (r.debit || r.credit));
-    return { items: items.map(({ code, name, group, balance }) => ({ code, name, group, amount: balance })), total: items.reduce((s, r) => s + r.balance, 0) };
+    return { items: items.map(({ id, code, name, group, subGroup, fsli, balance }) => ({ id, code, name, group, subGroup, fsli, amount: balance })), total: items.reduce((s, r) => s + r.balance, 0) };
   };
   const income = section('income'), expenses = section('expense');
   return { from, to, income, expenses, netProfit: income.total - expenses.total };
@@ -30,7 +31,7 @@ export async function balanceSheet(c: PoolClient, asOf: string) {
   const rows = await accountBalances(c, { to: asOf });
   const section = (type: string) => {
     const items = rows.filter((r) => r.type === type && (r.debit || r.credit));
-    return { items: items.map(({ code, name, group, balance }) => ({ code, name, group, amount: balance })), total: items.reduce((s, r) => s + r.balance, 0) };
+    return { items: items.map(({ id, code, name, group, subGroup, fsli, balance }) => ({ id, code, name, group, subGroup, fsli, amount: balance })), total: items.reduce((s, r) => s + r.balance, 0) };
   };
   const assets = section('asset'), liabilities = section('liability'), equity = section('equity');
   const income = rows.filter((r) => r.type === 'income').reduce((s, r) => s + r.balance, 0);
@@ -50,12 +51,17 @@ export async function ledgerStatement(c: PoolClient, accountId: number, from: st
       WHERE l.account_id=$1 AND $2::date IS NOT NULL AND e.entry_date < $2::date`, [accountId, from])).rows[0];
   let running = sign * n(open.net);
   const lines = (await c.query(
-    `SELECT e.id AS entry_id, e.entry_date::text AS date, e.narration, e.reference, l.debit, l.credit
+    `SELECT e.id AS entry_id, e.entry_date::text AS date, e.narration, e.reference, e.voucher_no, l.debit, l.credit,
+            COALESCE(d.id, pd.id, vd.id) AS doc_id, COALESCE(d.doc_type, pd.doc_type, vd.doc_type) AS doc_type, COALESCE(d.number, pd.number, vd.number) AS doc_number
        FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
+       LEFT JOIN documents d ON d.journal_entry_id = e.id
+       LEFT JOIN payments p ON p.journal_entry_id = e.id LEFT JOIN documents pd ON pd.id = p.doc_id
+       LEFT JOIN documents vd ON vd.void_entry_id = e.id
       WHERE l.account_id=$1 AND ($2::date IS NULL OR e.entry_date >= $2::date) AND ($3::date IS NULL OR e.entry_date <= $3::date)
       ORDER BY e.entry_date, e.id, l.id`, [accountId, from, to])).rows.map((r) => {
     running += sign * (n(r.debit) - n(r.credit));
-    return { entryId: n(r.entry_id), date: r.date, narration: r.narration, reference: r.reference, debit: n(r.debit), credit: n(r.credit), balance: running };
+    return { entryId: n(r.entry_id), date: r.date, narration: r.narration, reference: r.reference ?? r.voucher_no ?? r.doc_number ?? null, debit: n(r.debit), credit: n(r.credit), balance: running,
+      source: r.doc_id ? { kind: 'document' as const, id: n(r.doc_id), docType: r.doc_type as string, number: r.doc_number as string } : { kind: 'journal' as const, id: n(r.entry_id), voucherNo: (r.voucher_no as string | null) ?? null } };
   });
   return { account: { id: n(acc.id), code: acc.code, name: acc.name, type: acc.type }, openingBalance: sign * n(open.net), lines, closingBalance: running };
 }

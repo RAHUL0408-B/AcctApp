@@ -4,13 +4,15 @@ import { itcTable, msmeTable } from '../compliance/checks';
 import { accountBalances, aged, balanceSheet, gstr1, gstr3b, ledgerStatement, profitAndLoss } from '../accounting/reports';
 
 export interface Col { header: string; type: 'text' | 'money' }
-export interface Table { title: string; subtitle: string; columns: Col[]; rows: (string | number)[][]; boldRows?: number[];
+/** What a row can open: the invoice, bill or journal behind a ledger line, or an account's ledger. */
+export type RowLink = { kind: 'document'; id: number; docType: string } | { kind: 'journal'; id: number; voucherNo: string | null } | { kind: 'account'; id: number; code: string };
+export interface Table { title: string; subtitle: string; columns: Col[]; rows: (string | number)[][]; boldRows?: number[]; links?: (RowLink | null)[];
   /** For document reports: the document behind each row (null for total rows), so the screen can archive or delete them. */
   rowIds?: (number | null)[]; }
 
 export const REPORTS = ['trial-balance', 'pnl', 'balance-sheet', 'aged-receivables', 'aged-payables', 'ledger', 'all-ledgers', 'gstr3b', 'gstr1-b2b', 'fixed-assets', 'invoice-wise', 'bill-wise', 'purchase-register', 'msme-43bh', 'itc-180'] as const;
 export type ReportName = (typeof REPORTS)[number];
-export interface ReportParams { from: string; to: string; asOf: string; accountId?: number; }
+export interface ReportParams { from: string; to: string; asOf: string; accountId?: number; /** all-ledgers: only accounts numbered in this range */ fromCode?: string; toCode?: string }
 
 const T = (s: string): Col => ({ header: s, type: 'text' });
 const M = (s: string): Col => ({ header: s, type: 'money' });
@@ -57,17 +59,21 @@ export async function buildTable(c: PoolClient, name: ReportName, p: ReportParam
     }
     case 'all-ledgers': {
       // Every account that has a balance or movement, one after another: header row, opening balance, lines, closing balance.
-      const accs = await accountBalances(c, { to: p.to });
-      const rows: (string | number)[][] = [], bold: number[] = [];
+      // From one account number to another (both optional: every account when left out), compared as numbers when they are numbers.
+      const key = (code: string) => (/^\d+$/.test(code) ? code.padStart(12, '0') : code.toLowerCase());
+      const accs = (await accountBalances(c, { to: p.to })).filter((a) => (!p.fromCode || key(a.code) >= key(p.fromCode)) && (!p.toCode || key(a.code) <= key(p.toCode)));
+      const rows: (string | number)[][] = [], bold: number[] = [], links: (RowLink | null)[] = [];
+      const one = !!p.fromCode && p.fromCode === p.toCode;
       for (const a of accs) {
         const l = await ledgerStatement(c, a.id, p.from, p.to);
-        if (!l || (!l.lines.length && !l.openingBalance)) continue;
-        bold.push(rows.length); rows.push(['', `${l.account.code} ${l.account.name}`, '', 0, 0, '']);
-        rows.push(['', 'Opening balance', '', 0, 0, l.openingBalance]);
-        for (const x of l.lines) rows.push([x.date, x.narration, x.reference ?? '', x.debit, x.credit, x.balance]);
-        bold.push(rows.length); rows.push(['', 'Closing balance', '', l.lines.reduce((s, x) => s + x.debit, 0), l.lines.reduce((s, x) => s + x.credit, 0), l.closingBalance]);
+        if (!l || (!one && !l.lines.length && !l.openingBalance)) continue;
+        bold.push(rows.length); rows.push(['', `${l.account.code} ${l.account.name}`, '', 0, 0, '']); links.push({ kind: 'account', id: l.account.id, code: l.account.code });
+        rows.push(['', 'Opening balance', '', 0, 0, l.openingBalance]); links.push(null);
+        for (const x of l.lines) { rows.push([x.date, x.narration, x.reference ?? '', x.debit, x.credit, x.balance]); links.push(x.source); }
+        bold.push(rows.length); rows.push(['', 'Closing balance', '', l.lines.reduce((s, x) => s + x.debit, 0), l.lines.reduce((s, x) => s + x.credit, 0), l.closingBalance]); links.push(null);
       }
-      return { title: 'All ledgers', subtitle: `${p.from} to ${p.to}`, columns: [T('Date'), T('Narration'), T('Reference'), M('Debit'), M('Credit'), M('Balance')], rows, boldRows: bold };
+      const range = p.fromCode || p.toCode ? `, accounts ${p.fromCode ?? 'first'} to ${p.toCode ?? 'last'}` : '';
+      return { title: one && accs[0] ? `Ledger: ${accs[0].code} ${accs[0].name}` : 'Ledgers', subtitle: `${p.from} to ${p.to}${range}`, columns: [T('Date'), T('Narration'), T('Reference'), M('Debit'), M('Credit'), M('Balance')], rows, boldRows: bold, links };
     }
     case 'fixed-assets': {
       const r = (await c.query(

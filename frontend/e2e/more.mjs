@@ -173,11 +173,11 @@ step('tracking category Branch (Mumbai, Pune) and a Rs 1,000/month revenue budge
 
 // ---- reports
 await nav('All reports');
-await btn('P&L by month').click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'P&L by month' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('grid-net').waitFor();
-await btn('Budget vs actual').click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Budget vs actual' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('bva').getByText('4000 Service Revenue').waitFor();
-await btn('GSTR-3B').click();
+await page.getByLabel('Report', { exact: true }).selectOption({ label: 'GSTR-3B' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('3.1(b) Zero-rated (exports, SEZ)').waitFor();
 await page.getByRole('cell', { name: '83,250.00' }).first().waitFor();
 step('P&L by month, budget vs actual and GSTR-3B with the zero-rated export');

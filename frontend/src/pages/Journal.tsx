@@ -31,7 +31,9 @@ function AccountInput({ label, accounts, value, onChange }: { label: string; acc
   </>);
 }
 
-export function Journal({ org, accounts, canPost, role = 'owner', go }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void }) {
+export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void; /** show only this entry (opened from a ledger) */ focusId?: number }) {
+  const [focus, setFocus] = useState<number | undefined>(focusId);
+  useEffect(() => { setFocus(focusId); }, [focusId]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const today = new Date().toISOString().slice(0, 10);
@@ -183,7 +185,8 @@ export function Journal({ org, accounts, canPost, role = 'owner', go }: { org: O
       <Card title="Posted entries">
         {canPost && <div className="mb-3 flex flex-wrap items-end gap-3"><div className="max-w-sm"><Field label="Reason used when reversing an entry" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
           {selected.size > 0 && <Button variant="danger" disabled={busy} onClick={bulkDelete}>Delete {selected.size} selected</Button>}</div>}
-        <DataTable id="journal" rows={entries} rowKey={(e) => e.id} orgId={org.id} exportTitle="Journal entries" searchLabel="Search journal entries (voucher, reference, text, account)" empty="Nothing posted yet."
+        {focus && <div className="mb-3"><Callout tone="info">Showing the entry opened from the ledger. <button type="button" className="font-medium underline" onClick={() => setFocus(undefined)}>Show all entries</button></Callout></div>}
+        <DataTable id="journal" rows={focus ? entries.filter((e) => e.id === focus || e.reversesId === focus) : entries} rowKey={(e) => e.id} orgId={org.id} exportTitle="Journal entries" searchLabel="Search journal entries (voucher, reference, text, account)" empty="Nothing posted yet."
           columns={journalColumns(accounts)}
           leadingHead={canPost && selectable.length > 0 ? <input type="checkbox" aria-label="Select all entries" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((e) => e.id)))} /> : undefined}
           leading={canPost ? (e) => (!e.reversesId ? <input type="checkbox" aria-label={`Select entry ${e.id}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /> : null) : undefined}

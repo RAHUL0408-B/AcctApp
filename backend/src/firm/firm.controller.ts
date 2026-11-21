@@ -15,6 +15,7 @@ import { aged } from '../accounting/reports';
 import { deadlinesBetween, Rule } from './deadlines';
 import { buildTable, InvoiceView, renderInvoicesPdf, renderPdfMulti, renderXlsxMulti, REPORTS, ReportName } from './exporter';
 import { optionsFor } from './styles';
+import { withoutHidden } from './render';
 import { templateConfigFor } from './templates';
 import { parseAccounts, parseContacts, parseVouchers } from './importer';
 import { loadInvoiceView } from '../extras/invoicepdf';
@@ -196,13 +197,13 @@ export class FirmController {
     for (const r of reports) if (!(REPORTS as readonly string[]).includes(r)) throw new NotFoundException(`Unknown report "${r}". Available: ${REPORTS.join(', ')}`);
     for (const k of ['from', 'to', 'asOf']) if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(q[k])) throw new BadRequestException(`${k} must be YYYY-MM-DD`);
     const fy = financialYearOf(today());
-    const params = { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined };
+    const params = { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined, fromCode: q.fromCode || undefined, toCode: q.toCode || undefined };
     return withOrg(orgId, async (c) => { const out = []; for (const r of reports) out.push(await buildTable(c, r as ReportName, params)); return out; })
       .catch((e) => { throw new BadRequestException(e.message); });
   }
 
   private sendFile(res: Response, fmt: string, name: string, data: Buffer) {
-    res.setHeader('Content-Type', fmt === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Type', fmt === 'pdf' || fmt === 'xlsx' ? TABLE_MIME[fmt] : TABLE_MIME[fmt as 'csv' | 'xml'] ?? 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${name}.${fmt}"`);
     res.send(data);
   }
@@ -233,11 +234,12 @@ export class FirmController {
   @Get('export/:report')
   async exportReport(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('report') report: string, @Query() q: Record<string, string>, @Res() res: Response) {
     await requireOrg(uid, orgId, 'read');
-    const fmt = q.format === 'xlsx' ? 'xlsx' : 'pdf';
+    const fmt = (['xlsx', 'csv', 'xml'] as const).find((f) => f === q.format) ?? 'pdf';
     const org = (await getPool().query('SELECT name FROM organizations WHERE id=$1', [orgId])).rows[0];
     const tables = await this.tablesFor(orgId, [report], q);
     const o = optionsFor(await withOrg(orgId, (c) => templateConfigFor(c, 'report')), q);
-    this.sendFile(res, fmt, report, fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : await renderXlsxMulti(tables, org.name, o));
+    const t = withoutHidden(tables[0], o.hide);
+    this.sendFile(res, fmt, report, fmt === 'pdf' ? await renderPdfMulti(tables, org.name, o) : fmt === 'xlsx' ? await renderXlsxMulti(tables, org.name, o) : fmt === 'csv' ? renderCsv(t) : renderXml(t, org.name));
   }
 
   /** Several reports in one PDF (each on its own pages) or one Excel workbook (one sheet each): ?reports=pnl,balance-sheet,trial-balance */
@@ -262,7 +264,7 @@ export class FirmController {
     if (!(REPORTS as readonly string[]).includes(report)) throw new NotFoundException(`Unknown report. Available: ${REPORTS.join(', ')}`);
     for (const k of ['from', 'to', 'asOf']) if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(q[k])) throw new BadRequestException(`${k} must be YYYY-MM-DD`);
     const fy = financialYearOf(today());
-    return withOrg(orgId, (c) => buildTable(c, report as ReportName, { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined }))
+    return withOrg(orgId, (c) => buildTable(c, report as ReportName, { from: q.from ?? fy.start, to: q.to ?? today(), asOf: q.asOf ?? today(), accountId: q.accountId ? Number(q.accountId) : undefined, fromCode: q.fromCode || undefined, toCode: q.toCode || undefined }))
       .catch((e) => { throw new BadRequestException(e.message); });
   }
 

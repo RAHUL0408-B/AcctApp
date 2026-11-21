@@ -156,7 +156,7 @@ await ok(/Transferred ₹8000/);
 step('receive Rs 50,000, spend Rs 12,000 on rent, transfer Rs 8,000 to ICICI');
 
 // ---- reports: short-term cash flow, snapshot, favourites
-await menu('Reporting', 'Short-term cash flow');
+await menu('Reporting', 'Short-term cash flow'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await heading('Reports');
 await page.getByTestId('stcf-projected').getByText('₹49,800.00').waitFor(); // 38,000 cash + 11,800 due in 15 days
 await btn('☆ Add to favourites').click();
@@ -164,7 +164,7 @@ await btn('★ Favourite').waitFor();
 await openSection('Reporting');
 await page.getByText('Favourite reports ★').waitFor();
 await page.keyboard.press('Escape');
-await menu('Reporting', 'Business snapshot');
+await menu('Reporting', 'Business snapshot'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('scorecard').getByText('Current ratio').waitFor();
 step('short-term cash flow projects Rs 49,800; starred report in the menu; business snapshot scorecard');
 
@@ -187,7 +187,7 @@ await page.getByLabel('Rate 1').fill('60000');
 await page.getByLabel('GST 1').selectOption({ index: 0 });
 await btn('Create').click();
 await ok(/TDS ₹6,000\.00/);
-await menu('Tax', 'TDS deducted');
+await menu('Tax', 'TDS deducted'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('tds-total').getByText('6,000.00').waitFor();
 step('TDS deducted report: Rs 6,000 under 194J');
 

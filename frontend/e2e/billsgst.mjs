@@ -143,11 +143,11 @@ await ok(`₹180.00 of input credit on ${old.number} claimed again.`);
 step('Rule 37: Rs 180 of credit on a 200-day-old unpaid bill reversed; claimed again after payment');
 
 // ---- GSTR-3B lines and the GSTR-1 JSON
-await menu('Tax', 'GSTR-3B');
+await menu('Tax', 'GSTR-3B'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('gstr3b').getByText('4(D)(1) Ineligible ITC, section 17(5) (not claimed)').waitFor();
 await page.getByTestId('gstr3b').getByText('4(B)(2) Credit reversed (Rule 37, unpaid 180 days)').waitFor();
 await page.getByTestId('gstr3b').getByText('4(A)(5) Credit claimed again (Rule 37, paid)').waitFor();
-await menu('Tax', 'GSTR-1');
+await menu('Tax', 'GSTR-1'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByLabel('GSTR-1 month').fill(month);
 const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON for the GST portal' }).click()]);
 assert.strictEqual(dl.suggestedFilename(), `GSTR1-${month}.json`);

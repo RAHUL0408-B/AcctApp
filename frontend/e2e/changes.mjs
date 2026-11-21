@@ -86,6 +86,7 @@ await page.getByLabel('Account holder name').fill('Kapoor Stores');
 await page.getByLabel('Bank name').fill('HDFC Bank');
 await page.getByLabel('Account number').fill('50100123456789');
 await page.getByLabel('IFSC code').fill('BAD');
+await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByRole('alert').first().waitFor();                       // bad IFSC is refused
 await page.getByLabel('IFSC code').fill('HDFC0000123');
@@ -94,14 +95,14 @@ await page.getByRole('cell', { name: 'Kapoor Stores' }).waitFor();
 await page.getByText('HDFC Bank ••6789').waitFor();
 step('contact saved with bank details; a malformed IFSC is rejected');
 
-await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: 'Edit' }).click();
+await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Edit' }).click();
 await page.getByLabel('Phone').fill('9822012345');
 await btn('Save changes').click();
 await page.getByRole('cell', { name: 'Kapoor Stores' }).waitFor();
-await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: 'Archive' }).click();
+await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Archive' }).click();
 await page.getByRole('cell', { name: 'Kapoor Stores' }).waitFor({ state: 'detached' });
 await page.getByLabel('Show archived').check();
-await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: 'Restore' }).click();
+await page.getByRole('row', { name: /Kapoor Stores/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Restore' }).click();
 await page.getByLabel('Show archived').uncheck();
 await page.getByRole('cell', { name: 'Kapoor Stores' }).waitFor();
 step('contact edited, archived (hidden) and restored');

@@ -2,6 +2,7 @@
 // tracking categories, budgets, new reports, year-end screen and the practice overview.
 // Needs the app running (API and web). Run: node e2e/more.mjs   (WEB_URL and STEP_TIMEOUT work as in full.mjs)
 import { chromium } from 'playwright-core';
+import assert from 'assert';
 
 const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -61,12 +62,14 @@ await page.getByRole('cell', { name: 'Acme Inc' }).waitFor();
 await btn('New customer').click();
 await page.getByLabel('Name', { exact: true }).fill('Local Co');
 await page.getByLabel('State').selectOption({ label: '27 Maharashtra' });
+await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByRole('cell', { name: 'Local Co' }).waitFor();
 await nav('Suppliers');
 await btn('New supplier').click();
 await page.getByLabel('Name', { exact: true }).fill('Widget Maker');
 await page.getByLabel('State').selectOption({ label: '27 Maharashtra' });
+await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByRole('cell', { name: 'Widget Maker' }).waitFor();
 
@@ -76,7 +79,7 @@ await btn('New invoice').click();
 await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Inc');
 await page.getByLabel('Supply type').selectOption({ label: 'Export under LUT (no GST)' });
-await page.getByLabel('Currency').fill('USD');
+await page.getByLabel('Currency').selectOption('USD');
 await page.getByLabel('Exchange rate').fill('83.25');
 await page.getByLabel('Description 1').fill('Software services');
 await page.getByLabel('Rate 1').fill('1000');
@@ -99,7 +102,7 @@ await nav('Bills');
 await btn('New bill').click();
 await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Widget Maker');
-await page.getByLabel('Add from catalogue').selectOption({ label: 'WID · Widget' });
+await page.getByLabel('Add from catalogue').fill('WID · Widget');
 await page.getByText('stock', { exact: true }).first().waitFor();
 await page.getByLabel('Qty 1').fill('10');
 await btn('Create').click();
@@ -119,8 +122,17 @@ await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Local Co');
 await page.getByLabel('Description 1').fill('Consulting');
 await page.getByLabel('Rate 1').fill('200');
-await btn('Submit for approval').click();
-await ok(/Sent for approval \(total ₹236\.00\)/);
+// Owners post directly: "Submit for approval" is only offered to staff when approvals are on (CA review point 26).
+assert.equal(await page.getByRole('button', { name: 'Submit for approval' }).count(), 0);
+await btn('Cancel').click();
+// A staff member's submission, made through the same API the staff screen uses.
+await page.evaluate(async () => {
+  const t = sessionStorage.getItem('token'), org = location.hash.match(/#\/o\/(\d+)/)[1];
+  const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` };
+  const c = (await (await fetch(`/api/orgs/${org}/contacts`, { headers: h })).json()).find((x) => x.name === 'Local Co');
+  const r = await fetch(`/api/orgs/${org}/drafts`, { method: 'POST', headers: h, body: JSON.stringify({ docType: 'invoice', contactId: c.id, issueDate: new Date().toISOString().slice(0, 10), lines: [{ description: 'Consulting', quantity: 1, rate: 20000, gstRateBp: 1800 }] }) });
+  if (!r.ok) throw new Error(await r.text());
+});
 await nav('Awaiting approval');
 await heading('Awaiting approval');
 await btn('Approve').click();

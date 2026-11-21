@@ -69,7 +69,7 @@ await btn('Check (dry run)').click();
 await ok('Looks good: 3 contact(s) ready to import.');
 await page.getByRole('button', { name: 'Import', exact: true }).last().click();
 await ok('Imported 3 contact(s).');
-f = await download(() => btn('Export').click());
+f = await download(async () => { await btn('Export').click(); await page.getByRole('menuitem', { name: 'CSV (.csv)' }).click(); });
 assert.match(f.text, /Karnataka Retail/);
 item(2, 'three contacts imported from one CSV (blank template downloaded first), then exported');
 
@@ -82,24 +82,25 @@ await page.getByLabel('Bank name').fill('SBI');
 await page.getByLabel('Account number').fill('30001234567');
 await page.getByLabel('IFSC code').fill('SBIN0001234');
 await page.getByLabel('Default purchase account').selectOption({ index: 1 });
+await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByText('SBI ••4567').waitFor();
 item(3, 'bank account details saved on a contact');
 const purchaseName = (await page.getByRole('row', { name: /Stationery Co/ }).innerText());
 assert(!/—\s*$/.test(purchaseName.trim()), 'default purchase account shown');
 item(4, 'default purchase account saved on a contact (default sales account is the same field for customers)');
-await page.getByRole('row', { name: /Stationery Co/ }).getByRole('button', { name: 'Edit' }).click();
+await page.getByRole('row', { name: /Stationery Co/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Edit' }).click();
 await page.getByLabel('Phone').fill('9822000000');
 await btn('Save changes').click();
 await ok('Contact updated.');
-await page.getByRole('row', { name: /Local Buyer/ }).getByRole('button', { name: 'Archive' }).click();
+await page.getByRole('row', { name: /Local Buyer/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Archive' }).click();
 await page.getByRole('cell', { name: 'Local Buyer' }).waitFor({ state: 'detached' });
-await page.getByRole('row', { name: /Paper Mart/ }).getByRole('button', { name: 'Delete' }).click();
+await page.getByRole('row', { name: /Paper Mart/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Delete' }).click();
 await ok('Paper Mart deleted.');
 item(5, 'contact edited, archived and deleted');
 
 // 6. Statement for chosen dates
-await page.getByRole('row', { name: /Karnataka Retail/ }).getByRole('button', { name: 'Statement' }).click();
+await page.getByRole('row', { name: /Karnataka Retail/ }).getByRole('button', { name: /^Actions for/ }).click(); await page.getByRole('menuitem', { name: 'Statement' }).click();
 await page.getByLabel('From', { exact: true }).fill(`${fy}-04-01`);
 await page.getByLabel('To', { exact: true }).fill(`${fy + 1}-03-31`);
 await btn('Update').click();
@@ -128,7 +129,7 @@ await page.getByLabel('Contact', { exact: true }).fill('Karnataka Retail');
 item(21, 'customer name typed into the invoice');
 await page.getByLabel('Document number').fill('MT/001');
 item(14, 'invoice number suggested automatically and changed by hand');
-await page.getByLabel('Add from catalogue').selectOption({ label: 'DESK · Office desk' });
+await page.getByLabel('Add from catalogue').fill('DESK · Office desk');
 assert(await page.getByLabel('Interstate supply').isChecked(), 'IGST chosen from the GSTIN state');
 await page.getByText(/Output IGST/).first().waitFor();
 await page.getByText('Total invoice value').waitFor();
@@ -136,7 +137,7 @@ await page.getByText('₹11,800.00').first().waitFor();
 item(13, 'taxable value, GST and total shown on the form: 10,000 + 18% = 11,800');
 dialogs = [];
 await page.getByLabel('Intrastate supply').check();
-assert(dialogs.some((d) => /has a GST number/.test(d)), 'warned before changing a registered party');
+await page.getByText(/CGST \+ SGST does not match the customer's state/).waitFor(); // warned in the page, not a pop-up (CA review point 28)
 await page.getByText(/Output CGST/).first().waitFor();
 await page.getByLabel('Interstate supply').check();
 await page.getByText(/Output IGST/).first().waitFor();
@@ -227,7 +228,7 @@ await menu('Purchases', 'Purchase orders');
 await page.getByRole('button', { name: /New purchase order/ }).click();
 await contactsLoaded();
 await page.getByLabel('Contact', { exact: true }).fill('Stationery Co');
-await page.getByLabel('Add from catalogue').selectOption({ label: 'DESK · Office desk' }); // its purchase price is used on purchases
+await page.getByLabel('Add from catalogue').fill('DESK · Office desk'); // its purchase price is used on purchases
 await btn('Create').click();
 await ok(/Created PO-0001/);
 item(10, 'products and services on purchases (purchase order and bill)');

@@ -163,7 +163,7 @@ await ok('USD saved at ₹83.5.');
 await page.getByTestId('currency-rows').getByRole('cell', { name: 'USD', exact: true }).waitFor();
 await menu('Sales', 'Invoices');
 await btn('New invoice').click();
-await page.getByLabel('Currency').fill('USD');
+await page.getByLabel('Currency').selectOption('USD');
 await valueIs(page.getByLabel('Exchange rate'), '83.5');
 await back().click();
 step('USD added at Rs 83.50; a new invoice in USD starts from that rate');

@@ -8,7 +8,7 @@ import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account, TrackingCategory } from './Lines';
 
 interface Entry { id: number; date: string; narration: string; reference?: string | null; reversesId: number | null; voucherNo?: string | null; createdBy?: string | null; reversed?: boolean; lines: { accountId: number; debit: number; credit: number }[] }
-interface Rule { id: number; name: string; narration: string; frequency: string; nextDate: string; endDate: string | null; active: boolean; runs: number; lastRun: string | null; lines: { accountId: number; debit: number; credit: number }[] }
+interface Rule { id: number; name: string; narration: string; frequency: string; nextDate: string; endDate: string | null; active: boolean; runs: number; lastRun: string | null; isArchived?: boolean; lines: { accountId: number; debit: number; credit: number; trackingOptionId?: number }[] }
 interface Attachment { id: number; name: string }
 
 const safe = (s: string) => { try { return toPaise(s); } catch { return 0; } };
@@ -44,6 +44,8 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   const [rows, setRows] = useState(blankRows());
   const [files, setFiles] = useState<File[]>([]);
   const [rule, setRule] = useState({ on: false, name: '', frequency: 'monthly', endDate: '' });
+  const [editingRule, setEditingRule] = useState<number | null>(null);
+  const [showArchivedRules, setShowArchivedRules] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [open, setOpen] = useState<Record<number, Attachment[] | undefined>>({});
   const { error, busy, run, setError } = useAction();
@@ -59,7 +61,18 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   const name = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
   const totalD = rows.reduce((s, r) => s + (r.debit ? safe(r.debit) : 0), 0), totalC = rows.reduce((s, r) => s + (r.credit ? safe(r.credit) : 0), 0);
   const apiLines = () => rows.filter((r) => r.accountId).map((r) => ({ accountId: Number(r.accountId), ...(r.debit ? { debit: toPaise(r.debit) } : {}), ...(r.credit ? { credit: toPaise(r.credit) } : {}), ...(r.cc ? { trackingOptionId: Number(r.cc) } : {}) }));
-  const clear = () => { setNarration(''); setReference(''); setVoucher(''); setVoucherTouched(false); setRows(blankRows()); setFiles([]); setRule({ on: false, name: '', frequency: 'monthly', endDate: '' }); };
+  const clear = () => { setNarration(''); setReference(''); setVoucher(''); setVoucherTouched(false); setRows(blankRows()); setFiles([]); setRule({ on: false, name: '', frequency: 'monthly', endDate: '' }); setEditingRule(null); };
+  /** Open a rule in the form above to change it. */
+  const editRule = (r: Rule) => {
+    setOk(''); setEditingRule(r.id); setDate(r.nextDate); setNarration(r.narration); setRule({ on: true, name: r.name, frequency: r.frequency, endDate: r.endDate ?? '' });
+    setRows(r.lines.map((l) => ({ accountId: String(l.accountId), debit: l.debit ? String(l.debit / 100) : '', credit: l.credit ? String(l.credit / 100) : '', cc: l.trackingOptionId ? String(l.trackingOptionId) : '' })));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const archiveRule = (r: Rule) => run(async () => { await api(`/orgs/${org.id}/journal-rules/${r.id}/archive`, { body: { archived: !r.isArchived } }); setOk(r.isArchived ? 'Rule restored.' : 'Rule archived: it stops and is hidden.'); loadRules(); });
+  const deleteRule = (r: Rule) => run(async () => {
+    if (!window.confirm(`Delete the rule "${r.name}"? No more entries will be posted from it. The ${r.runs} entr${r.runs === 1 ? 'y' : 'ies'} it already posted stay in the books: they are NOT reversed.`)) return;
+    await api(`/orgs/${org.id}/journal-rules/${r.id}`, { method: 'DELETE' }); setOk('Rule deleted. Entries posted earlier are still in the books.'); loadRules();
+  });
   // Staff can send a journal to an accountant; when the organisation asks for approval, that is the only way.
   const staff = role === 'staff';
   const mustReview = staff && needsReview;
@@ -74,7 +87,9 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
     setOk('');
     if (rule.on) {
       // A rule posts this entry on its schedule, starting on the date above. Anything already due is posted straight away.
-      await api(`/orgs/${org.id}/journal-rules`, { body: { name: rule.name || narration, narration, lines: apiLines(), frequency: rule.frequency, startDate: date, ...(rule.endDate ? { endDate: rule.endDate } : {}) } });
+      const ruleBody = { name: rule.name || narration, narration, lines: apiLines(), frequency: rule.frequency, startDate: date, ...(rule.endDate ? { endDate: rule.endDate } : {}) };
+      if (editingRule) await api(`/orgs/${org.id}/journal-rules/${editingRule}`, { method: 'PUT', body: ruleBody });
+      else await api(`/orgs/${org.id}/journal-rules`, { body: ruleBody });
       const r = await api(`/orgs/${org.id}/journal-rules/run`, { body: {} });
       setOk(`Rule saved. ${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted so far; the rest post automatically on their dates.`); clear(); load(); loadRules(); return;
     }
@@ -157,12 +172,13 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
                   <Field label="Rule name" placeholder="e.g. Insurance write-off" value={rule.name} onChange={(e) => setRule({ ...rule, name: e.target.value })} />
                   <Select label="Repeat" aria-label="Rule frequency" value={rule.frequency} onChange={(e) => setRule({ ...rule, frequency: e.target.value })}>{FREQ.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
                   <Field label="Stop after (optional)" type="date" value={rule.endDate} onChange={(e) => setRule({ ...rule, endDate: e.target.value })} />
-                  <p className="col-span-full text-xs text-slate-500">The first entry is dated as the date above, then it repeats. Use it for things like monthly insurance or prepaid expense write-offs.</p>
+                  <p className="col-span-full text-xs text-slate-500">The first entry is dated as the date above (a past date posts the runs already due), then it repeats. In the narration, {'{month}'}, {'{date}'}, {'{period}'}, {'{quarter}'} and {'{fy}'} are filled in on each run: "Being insurance for {'{month}'}" reads "Being insurance for Nov-26".</p>
                 </div>)}
             </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            {!mustReview && <Button onClick={submit} disabled={busy || !accounts.length}>{rule.on ? 'Save rule' : 'Post entry'}</Button>}
+            {!mustReview && <Button onClick={submit} disabled={busy || !accounts.length}>{rule.on ? (editingRule ? 'Save changes to rule' : 'Save rule') : 'Post entry'}</Button>}
+            {editingRule && <Button variant="ghost" onClick={clear}>Cancel editing the rule</Button>}
             {staff && !rule.on && <Button variant={mustReview ? 'primary' : 'ghost'} onClick={sendForReview} disabled={busy || !accounts.length}>Send for review</Button>}
             {!accounts.length && <p className="text-xs text-slate-500">Loading accounts…</p>}
             {mustReview && <p className="text-xs text-slate-500">Your organisation asks an accountant to review journals before they are posted.</p>}
@@ -171,13 +187,18 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
         </Card>
       )}
 
-      <Card title="Journal rules">
-        {rules.length === 0 ? <Empty text="No rules yet. Tick “Post this entry automatically” above to make one." /> : (
+      <Card title="Journal rules" actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchivedRules} onChange={(e) => setShowArchivedRules(e.target.checked)} />Show archived</label>}>
+        {rules.filter((r) => showArchivedRules || !r.isArchived).length === 0 ? <Empty text="No rules yet. Tick “Post this entry automatically” above to make one." /> : (
           <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Rule</th><th>Repeats</th><th>Next entry</th><th>Ends</th><th>Posted</th><th>Status</th><th /></tr></thead>
-            <tbody>{rules.map((r) => (
+            <tbody>{rules.filter((r) => showArchivedRules || !r.isArchived).map((r) => (
               <tr key={r.id} className="border-t border-slate-100"><td className="py-2"><b>{r.name}</b><span className="block text-xs text-slate-500">{r.narration}: {r.lines.map((l) => `${l.debit ? 'Dr' : 'Cr'} ${name(l.accountId)} ${fmt(l.debit || l.credit)}`).join(' · ')}</span></td>
-                <td>{r.frequency}</td><td>{r.active ? r.nextDate : '—'}</td><td>{r.endDate ?? '—'}</td><td>{r.runs}{r.lastRun ? ` (last ${r.lastRun})` : ''}</td><td><Badge text={r.active ? 'active' : 'done'} /></td>
-                <td className="whitespace-nowrap text-right">{canPost && r.active && <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/journal-rules/${r.id}/stop`, { body: {} }); loadRules(); })}>Stop</Button>}</td></tr>))}</tbody></table>
+                <td>{r.frequency}</td><td>{r.active ? r.nextDate : '—'}</td><td>{r.endDate ?? '—'}</td><td>{r.runs}{r.lastRun ? ` (last ${r.lastRun})` : ''}</td><td><Badge text={r.isArchived ? 'archived' : r.active ? 'active' : 'done'} /></td>
+                <td className="whitespace-nowrap text-right">{canPost && <RowMenu label={`Actions for rule ${r.name}`} actions={[
+                  { label: 'Edit', icon: 'edit', onClick: () => editRule(r), hidden: !!r.isArchived },
+                  { label: 'Stop', icon: 'lock', onClick: () => run(async () => { await api(`/orgs/${org.id}/journal-rules/${r.id}/stop`, { body: {} }); loadRules(); }), hidden: !r.active },
+                  { label: r.isArchived ? 'Restore' : 'Archive', icon: r.isArchived ? 'restore' : 'archive', onClick: () => archiveRule(r) },
+                  { label: 'Delete', icon: 'trash', onClick: () => deleteRule(r), danger: true },
+                ]} />}</td></tr>))}</tbody></table>
         )}
         {canPost && rules.some((r) => r.active) && <div className="mt-3"><Button variant="ghost" disabled={busy} onClick={() => run(async () => { const r = await api(`/orgs/${org.id}/journal-rules/run`, { body: {} }); setOk(`${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted.`); load(); loadRules(); })}>Post anything due now</Button></div>}
       </Card>

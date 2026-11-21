@@ -121,6 +121,8 @@ export class InsightsController {
       const one = async (sql: string, p: unknown[] = []) => Number((await c.query(sql, p)).rows[0].n);
       const drafts = await one("SELECT COUNT(*) AS n FROM document_drafts WHERE status='submitted'");
       add('approvals', drafts, `${drafts} invoice(s) or bill(s) awaiting approval`, 'approvals', 'warn');
+      const dueRuns = (await c.query("SELECT r.doc_type, COUNT(*)::int AS n FROM recurring_due d JOIN recurring_invoices r ON r.id=d.recurring_id WHERE d.status='pending' GROUP BY r.doc_type")).rows;
+      for (const x of dueRuns) add(`recurring-due-${x.doc_type}`, x.n, `${x.n} repeating ${x.doc_type}(s) due for posting: open, check and post`, x.doc_type === 'bill' ? 'recurring-bills' : 'recurring', 'warn');
       const claims = await one("SELECT COUNT(*) AS n FROM expense_claims WHERE status='submitted'");
       add('claims', claims, `${claims} expense claim(s) to approve`, 'expenses', 'warn');
       const repay = await one("SELECT COUNT(*) AS n FROM expense_claims WHERE status='approved'");

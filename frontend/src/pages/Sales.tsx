@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
+import { DataTable, RowMenu, type Column } from '../table';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Contact } from './Contacts';
 import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, linesToApi } from './Lines';
@@ -90,77 +91,175 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
         </Card>
       )}
       <Card>
-        {list.length === 0 ? <Empty text="Nothing here yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Number</th><th>Contact</th><th>Date</th><th className="text-right">Total</th><th>Status</th><th /></tr></thead>
-            <tbody>{list.map((p) => (
-              <tr key={p.id} className="border-t border-slate-100"><td className="py-2 font-medium">{p.number}</td><td>{p.contactName}</td><td>{p.issueDate}</td><td className="text-right">{fmt(p.total)}</td><td><Badge text={p.status} /></td>
-                <td className="space-x-1 whitespace-nowrap text-right">{canPost && p.status !== 'converted' && <Button variant="ghost" onClick={() => startEdit(p)}>Edit</Button>}
-                  {canPost && p.status !== 'converted' && p.status !== 'declined' && <>
-                  {p.status === 'draft' && <Button variant="ghost" onClick={() => status(p.id, 'sent')}>Mark sent</Button>}
-                  {(p.status === 'draft' || p.status === 'sent') && sales && <Button variant="ghost" onClick={() => status(p.id, 'accepted')}>Accepted</Button>}
-                  {sales && <Button variant="ghost" onClick={() => status(p.id, 'declined')}>Declined</Button>}
-                  <Button disabled={busy} onClick={() => startConvert(p)}>{sales ? 'Convert to invoice' : 'Convert to bill'}</Button></>}</td></tr>))}</tbody></table>
-        )}
+        <DataTable id={`pre-${kind}`} rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle={sales ? 'Quotes' : 'Purchase orders'} empty="Nothing here yet."
+          searchLabel={`Search ${sales ? 'quotes' : 'purchase orders'}`}
+          columns={[
+            { key: 'number', label: 'Number', value: (p) => p.number, render: (p) => (canPost && p.status !== 'converted'
+              ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => startEdit(p)}>{p.number}</button> : <b>{p.number}</b>) },
+            { key: 'contact', label: sales ? 'Customer' : 'Supplier', value: (p) => p.contactName },
+            { key: 'date', label: 'Date', value: (p) => p.issueDate },
+            { key: 'expiry', label: sales ? 'Valid until' : 'Delivery by', value: (p) => p.expiryDate, hidden: true },
+            { key: 'total', label: 'Total', value: (p) => p.total, money: true, noSearch: true },
+            { key: 'status', label: 'Status', value: (p) => p.status, render: (p) => <Badge text={p.status} /> },
+          ]}
+          trailing={(p) => canPost && p.status !== 'converted' ? (
+            <span className="inline-flex items-center gap-1">
+              {p.status !== 'declined' && <Button variant="ghost" className="!px-3 !py-1.5" disabled={busy} onClick={() => startConvert(p)}>{sales ? 'Convert to invoice' : 'Convert to bill'}</Button>}
+              <RowMenu label={`Actions for ${p.number}`} actions={[
+                { label: 'Edit', icon: 'edit', onClick: () => startEdit(p) },
+                { label: 'Mark sent', icon: 'mail', onClick: () => status(p.id, 'sent'), hidden: p.status !== 'draft' },
+                { label: 'Accepted', icon: 'check', onClick: () => status(p.id, 'accepted'), hidden: !sales || !(p.status === 'draft' || p.status === 'sent') },
+                { label: 'Declined', icon: 'trash', onClick: () => status(p.id, 'declined'), hidden: !sales || p.status === 'declined', danger: true },
+              ]} />
+            </span>) : null} />
       </Card>
     </>
   );
 }
 
-interface Rec { id: number; contactName: string; frequency: string; nextDate: string; endDate: string | null; autoEmail: boolean; active: boolean; tdsSection?: string | null; made?: number; postedTotal?: number }
+interface Rec { id: number; contactId: number; contactName: string; frequency: string; nextDate: string; endDate: string | null; autoEmail: boolean; active: boolean; tdsSection?: string | null; made?: number; postedTotal?: number;
+  dueDays: number; notes: string | null; lines: any[]; postMode: 'auto' | 'review'; supplyType: string; isArchived?: boolean }
+interface Due { id: number; recurringId: number; dueDate: string; notes: string | null; docType: string; contactName: string; lines: any[] }
+
+/** Placeholders a narration can use; filled in on each run. */
+const PLACEHOLDERS: [string, string][] = [['{month}', 'Nov-26'], ['{month_long}', 'November 2026'], ['{date}', 'DD-MM-YYYY'], ['{period}', '01-11-2026 to 30-11-2026'], ['{quarter}', 'Q3 2026-27'], ['{fy}', '2026-27'], ['{year}', '2026']];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** What the first narration will read, the way the server fills it in (monthly runs). */
+const preview = (t: string, on: string) => {
+  const y = Number(on.slice(0, 4)), m = Number(on.slice(5, 7)) - 1, fy = m >= 3 ? y : y - 1, fyl = `${fy}-${String((fy + 1) % 100).padStart(2, '0')}`;
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(), mm = on.slice(5, 7);
+  const v: Record<string, string> = { '{month}': `${MON[m]}-${String(y % 100).padStart(2, '0')}`, '{month_long}': `${MONTH[m]} ${y}`, '{date}': `${on.slice(8, 10)}-${mm}-${y}`, '{year}': String(y), '{fy}': fyl,
+    '{quarter}': `Q${Math.floor(((m + 9) % 12) / 3) + 1} ${fyl}`, '{period}': `01-${mm}-${y} to ${last}-${mm}-${y}` };
+  return t.replace(/\{[a-z_]+\}/g, (k) => v[k] ?? k);
+};
+const SUPPLY_OPTS = { invoice: [['regular', 'Regular'], ['export_lut', 'Export under LUT (no GST)'], ['export_igst', 'Export with IGST'], ['sez_lut', 'SEZ under LUT (no GST)'], ['sez_igst', 'SEZ with IGST']],
+  bill: [['regular', 'Regular'], ['reverse_charge', 'Reverse charge (you pay the GST)'], ['unregistered', 'Supply from unregistered dealer (no GST)']] } as const;
 
 /** Repeating invoices, or (kind="bill") repeating bills such as rent, maintenance contracts and subscriptions. */
-export function Recurring({ org, canPost, accounts, kind = 'invoice' }: { org: Org; canPost: boolean; accounts: Account[]; kind?: 'invoice' | 'bill' }) {
+export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { org: Org; canPost: boolean; accounts: Account[]; kind?: 'invoice' | 'bill'; go?: (p: string) => void }) {
   const bill = kind === 'bill';
+  const noun = bill ? 'bill' : 'invoice';
+  const blank = () => ({ contactId: '', frequency: 'monthly', nextDate: today(), endDate: '', dueDays: '15', autoEmail: false, tdsSection: '', notes: '', postMode: bill ? 'review' : 'auto', supplyType: 'regular' });
   const [list, setList] = useState<Rec[]>([]);
+  const [due, setDue] = useState<Due[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [tds, setTds] = useState<{ code: string; description: string }[]>([]);
   const [show, setShow] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [ok, setOk] = useState('');
-  const [f, setF] = useState({ contactId: '', frequency: 'monthly', nextDate: today(), endDate: '', dueDays: '15', autoEmail: false, tdsSection: '', notes: '' });
+  const [f, setF] = useState(blank());
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
-  const { error, busy, run } = useAction();
-  const load = useCallback(() => api<Rec[]>(`/orgs/${org.id}/recurring${bill ? '?type=bill' : ''}`).then(setList), [org.id, bill]);
+  const { error, run } = useAction();
+  const form = useAction();
+  const load = useCallback(() => {
+    api<Rec[]>(`/orgs/${org.id}/recurring${bill ? '?type=bill' : ''}`).then(setList);
+    api<Due[]>(`/orgs/${org.id}/recurring-due`).then((d) => setDue(d.filter((x) => x.docType === kind))).catch(() => setDue([]));
+  }, [org.id, bill, kind]);
   useEffect(() => {
     load();
     api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind !== (bill ? 'customer' : 'supplier'))));
     if (bill) api('/config/tds-sections').then(setTds);
-  }, [load, org.id, bill]);
-  const create = () => run(async () => {
-    await api(`/orgs/${org.id}/recurring`, { body: { docType: kind, contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays),
-      autoEmail: !bill && f.autoEmail, ...(bill && f.tdsSection ? { tdsSection: f.tdsSection } : {}), ...(f.notes ? { notes: f.notes } : {}), lines: linesToApi(lines) } });
-    setLines([emptyLine()]); setShow(false); setOk(`Saved. The first ${bill ? 'bill' : 'invoice'} is created on ${f.nextDate}.`); load();
+    // Arrived from "Make it repeating" on an invoice or bill: start from its details.
+    try {
+      const raw = sessionStorage.getItem('repeat-from');
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.kind === kind) {
+          sessionStorage.removeItem('repeat-from');
+          setF({ ...blank(), contactId: d.contactId ?? '', notes: d.notes ?? '', tdsSection: d.tdsSection ?? '', supplyType: d.supplyType ?? 'regular' });
+          if (Array.isArray(d.lines) && d.lines.length) setLines(d.lines);
+          setShow(true);
+        }
+      }
+    } catch { /* storage may be off */ }
+  }, [load, org.id, bill]); // eslint-disable-line react-hooks/exhaustive-deps
+  const contact = contacts.find((c) => String(c.id) === f.contactId);
+  const reset = () => { setF(blank()); setLines([emptyLine()]); setEditing(null); setShow(false); form.setError(''); };
+  const save = () => form.run(async () => {
+    if (!f.contactId) throw new Error(`Choose the ${bill ? 'supplier' : 'customer'}.`);
+    const body = { docType: kind, contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays),
+      autoEmail: !bill && f.postMode === 'auto' && f.autoEmail, ...(bill && f.tdsSection ? { tdsSection: f.tdsSection } : {}), ...(f.notes ? { notes: f.notes } : {}),
+      postMode: f.postMode, supplyType: f.supplyType, lines: linesToApi(lines) };
+    if (editing) await api(`/orgs/${org.id}/recurring/${editing}`, { method: 'PUT', body });
+    else await api(`/orgs/${org.id}/recurring`, { body });
+    // Anything already due (a start date today or in the past) is made now rather than at the next daily run.
+    const made = f.nextDate <= today() ? (await api(`/orgs/${org.id}/recurring/run`, { body: {} }).catch(() => ({ created: 0 }))).created : 0;
+    setOk(editing ? 'Schedule saved.' : `Saved. ${f.postMode === 'review' ? `Each ${noun} waits under "Due for posting" (and on the dashboard) for you to check and post.` : made ? `${made} ${noun}(s) already due were posted.` : `The first ${noun} is created on ${f.nextDate}.`}`);
+    reset(); load();
   });
-  const noun = bill ? 'bill' : 'invoice';
+  const edit = (r: Rec) => {
+    setOk(''); setEditing(r.id); setShow(true);
+    setF({ contactId: String(r.contactId), frequency: r.frequency, nextDate: r.nextDate, endDate: r.endDate ?? '', dueDays: String(r.dueDays ?? 15), autoEmail: r.autoEmail, tdsSection: r.tdsSection ?? '', notes: r.notes ?? '', postMode: r.postMode, supplyType: r.supplyType ?? 'regular' });
+    setLines(linesFromApi(r.lines)); window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const archive = (r: Rec) => run(async () => { await api(`/orgs/${org.id}/recurring/${r.id}/archive`, { body: { archived: !r.isArchived } }); setOk(r.isArchived ? 'Schedule restored.' : 'Schedule archived: it stops and is hidden.'); load(); });
+  const remove = (r: Rec) => run(async () => {
+    if (!window.confirm(`Delete the repeating ${noun} for ${r.contactName}? No more ${noun}s will be made. The ${r.made ?? 0} ${noun}(s) already posted from it stay in the books: they are NOT reversed.`)) return;
+    await api(`/orgs/${org.id}/recurring/${r.id}`, { method: 'DELETE' }); setOk('Schedule deleted. The ones posted earlier are still in the books.'); load();
+  });
+  const skip = (d: Due) => run(async () => { if (!window.confirm(`Skip the ${noun} for ${d.contactName} dated ${d.dueDate}? Nothing is posted for it.`)) return; await api(`/orgs/${org.id}/recurring-due/${d.id}`, { body: { status: 'skipped' } }); load(); });
+  const shown = list.filter((r) => showArchived || !r.isArchived);
+  const columns: Column<Rec>[] = [
+    { key: 'contact', label: bill ? 'Supplier' : 'Customer', value: (r) => r.contactName },
+    { key: 'freq', label: 'Repeats', value: (r) => r.frequency },
+    { key: 'next', label: `Next ${noun}`, value: (r) => (r.active ? r.nextDate : null) },
+    { key: 'end', label: 'Ends', value: (r) => r.endDate },
+    { key: 'mode', label: 'Posting', value: (r) => (r.postMode === 'review' ? 'Waits for review' : 'Automatic') },
+    { key: 'extra', label: bill ? 'TDS' : 'Email', value: (r) => (bill ? r.tdsSection ?? 'No' : r.autoEmail ? 'Yes' : 'No') },
+    { key: 'notes', label: 'Narration', value: (r) => r.notes, hidden: true },
+    { key: 'made', label: 'Made', value: (r) => r.made ?? 0, noSearch: true },
+    { key: 'total', label: 'Posted total', value: (r) => r.postedTotal ?? 0, money: true, noSearch: true },
+    { key: 'status', label: 'Status', value: (r) => (r.isArchived ? 'archived' : r.active ? 'active' : 'done'), render: (r) => <Badge text={r.isArchived ? 'archived' : r.active ? 'active' : 'done'} /> },
+  ];
   return (
     <>
-      <PageHeader title={bill ? 'Repeating bills' : 'Repeating invoices'} subtitle={bill ? 'Bills posted automatically on a schedule: rent, maintenance contracts, subscriptions. TDS is worked out on each one.' : 'Invoices created automatically on a schedule, and optionally emailed to the customer.'}
-        actions={canPost && <Button onClick={() => setShow(!show)}>{show ? 'Close' : `New repeating ${noun}`}</Button>} />
+      <PageHeader title={bill ? 'Repeating bills' : 'Repeating invoices'} subtitle={bill ? 'Rent, maintenance contracts, subscriptions. Each bill waits for you to add the supplier’s bill number or copy and post it, unless you choose automatic posting.' : 'Invoices made on a schedule: posted automatically (and emailed if you like), or kept for you to review first.'}
+        actions={canPost && <Button onClick={() => (show ? reset() : (setEditing(null), setShow(true)))}>{show ? 'Close' : `New repeating ${noun}`}</Button>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      {due.length > 0 && (
+        <Card title={`Due for posting (${due.length})`}>
+          <table className="w-full text-sm" data-testid="recurring-due"><thead><tr className="text-left"><th>Date</th><th>{bill ? 'Supplier' : 'Customer'}</th><th>Narration</th><th /></tr></thead>
+            <tbody>{due.map((d) => <tr key={d.id}><td>{d.dueDate}</td><td>{d.contactName}</td><td>{d.notes ?? '—'}</td>
+              <td className="space-x-1 whitespace-nowrap text-right">{canPost && <><Button onClick={() => go?.(`${bill ? 'bills' : 'invoices'}/new-from-due-${d.id}`)}>Open and post</Button><Button variant="ghost" onClick={() => skip(d)}>Skip</Button></>}</td></tr>)}</tbody></table>
+        </Card>)}
       {show && (
-        <Card title={`New repeating ${noun}`}>
-          <div className="grid gap-3 md:grid-cols-3">
-            <ContactPicker label={bill ? 'Supplier' : 'Customer'} contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
+        <Card title={editing ? `Edit repeating ${noun}` : `New repeating ${noun}`}>
+          <div className="grid gap-3 md:grid-cols-4">
+            <ContactPicker label={bill ? 'Supplier' : 'Customer'} contacts={contacts} value={f.contactId} onChange={(id) => { const c = contacts.find((x) => String(x.id) === id); setF({ ...f, contactId: id, ...(bill && c && !editing ? { tdsSection: c.defaultTdsSection ?? f.tdsSection, supplyType: c.rcmDefault ? 'reverse_charge' : !c.gstin ? 'unregistered' : 'regular' } : {}) }); }} />
             <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x}>{x}</option>)}</Select>
-            <Field label={`First ${noun} date`} type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
+            <div><Field label={`First ${noun} date`} type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
+              {f.nextDate < today() && <p className="mt-1 text-xs text-amber-700">A past date: the runs already due (up to 12) are made as soon as you save.</p>}</div>
             <Field label="Stop after (optional)" type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
             <Field label="Payment due (days)" value={f.dueDays} onChange={(e) => setF({ ...f, dueDays: e.target.value })} />
-            {bill
-              ? <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>
-              : <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={f.autoEmail} onChange={(e) => setF({ ...f, autoEmail: e.target.checked })} /> Email each invoice automatically</label>}
-            {bill && <Field label="Note on each bill (optional)" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="e.g. Office rent, Andheri" />}
+            <Select label="Supply type" aria-label="Supply type" value={f.supplyType} onChange={(e) => setF({ ...f, supplyType: e.target.value })}>{SUPPLY_OPTS[kind].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
+            {bill && <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>}
+            <fieldset className="text-sm md:col-span-2"><legend className="mb-1 font-medium text-slate-600">Posting</legend>
+              <label className="mr-4 inline-flex items-center gap-2"><input type="radio" name="post-mode" checked={f.postMode === 'review'} onChange={() => setF({ ...f, postMode: 'review', autoEmail: false })} />Wait for me to review and post</label>
+              <label className="inline-flex items-center gap-2"><input type="radio" name="post-mode" checked={f.postMode === 'auto'} onChange={() => setF({ ...f, postMode: 'auto' })} />Post automatically</label></fieldset>
+            {!bill && f.postMode === 'auto' && <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={f.autoEmail} onChange={(e) => setF({ ...f, autoEmail: e.target.checked })} /> Email each invoice automatically</label>}
           </div>
-          <LinesEditor org={org} lines={lines} setLines={setLines} sales={!bill} accounts={accounts} />
-          <div className="mt-4"><Button disabled={busy} onClick={create}>Save schedule</Button></div>
+          <div className="mt-3">
+            <Field label="Narration on each one (printed as the notes)" aria-label="Narration" placeholder={`e.g. Being ${bill ? 'office rent' : 'retainer fees'} for {month}`} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-xs"><span className="text-slate-500">Insert:</span>
+              {PLACEHOLDERS.map(([k, ex]) => <button key={k} type="button" title={`e.g. ${ex}`} className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono hover:bg-slate-50" onClick={() => setF({ ...f, notes: `${f.notes}${f.notes && !f.notes.endsWith(' ') ? ' ' : ''}${k}` })}>{k}</button>)}</div>
+            {f.notes.includes('{') && <p className="mt-1 text-xs text-slate-600" data-testid="narration-preview">First one reads: <b>{preview(f.notes, f.nextDate || today())}</b></p>}
+          </div>
+          <LinesEditor org={org} lines={lines} setLines={setLines} sales={!bill} accounts={accounts} contactDefaultId={bill ? contact?.defaultPurchaseAccountId : contact?.defaultSalesAccountId} />
+          <div className="mt-4 flex flex-wrap gap-3"><Button disabled={form.busy} onClick={save}>{editing ? 'Save changes' : 'Save schedule'}</Button><Button variant="ghost" onClick={reset}>Cancel</Button></div>
+          <div className="mt-2"><ErrorMsg msg={form.error} /></div>
         </Card>
       )}
       <Card>
-        {list.length === 0 ? <Empty text={`No repeating ${noun}s yet.`} /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>{bill ? 'Supplier' : 'Customer'}</th><th>Repeats</th><th>Next {noun}</th><th>Ends</th><th>{bill ? 'TDS' : 'Email'}</th>{bill && <th className="text-right">Made</th>}<th>Status</th><th /></tr></thead>
-            <tbody>{list.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100"><td className="py-2">{r.contactName}</td><td>{r.frequency}</td><td>{r.nextDate}</td><td>{r.endDate ?? '—'}</td><td>{bill ? r.tdsSection ?? 'No' : r.autoEmail ? 'Yes' : 'No'}</td>
-                {bill && <td className="text-right">{r.made ?? 0} · ₹{fmt(r.postedTotal ?? 0)}</td>}<td><Badge text={r.active ? 'active' : 'done'} /></td>
-                <td className="text-right">{canPost && r.active && <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/recurring/${r.id}/stop`, { method: 'POST', body: {} }); load(); })}>Stop</Button>}</td></tr>))}</tbody></table>
-        )}
+        <DataTable id={`recurring-${kind}`} rows={shown} columns={columns} rowKey={(r) => r.id} orgId={org.id} exportTitle={bill ? 'Repeating bills' : 'Repeating invoices'} empty={`No repeating ${noun}s yet.`}
+          toolbar={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}
+          trailing={(r) => (canPost ? <RowMenu label={`Actions for ${r.contactName} schedule`} actions={[
+            { label: 'Edit', icon: 'edit', onClick: () => edit(r), hidden: !!r.isArchived },
+            { label: 'Stop', icon: 'lock', onClick: () => run(async () => { await api(`/orgs/${org.id}/recurring/${r.id}/stop`, { method: 'POST', body: {} }); load(); }), hidden: !r.active },
+            { label: r.isArchived ? 'Restore' : 'Archive', icon: r.isArchived ? 'restore' : 'archive', onClick: () => archive(r) },
+            { label: 'Delete', icon: 'trash', onClick: () => remove(r), danger: true },
+          ]} /> : null)} />
       </Card>
     </>
   );

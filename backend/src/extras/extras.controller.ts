@@ -1,7 +1,8 @@
 // Features that round out the product: settings, items, quotes and POs, repeating invoices, bank rules, fixed assets, dashboard.
-import { ForbiddenException, BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ForbiddenException, BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { UQC } from '../tax/gst';
+import { fillNarration } from './narration';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
@@ -11,7 +12,7 @@ import { ASSET_GROUPS } from './assetgroups';
 import { PoolClient } from 'pg';
 import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
 import { aged } from '../accounting/reports';
-import { createDocument, DocLineInput, priceLines } from '../accounting/documents.controller';
+import { createDocument, DocLineInput, docSchema, priceLines } from '../accounting/documents.controller';
 import { isValidGstin } from '../tax/gst';
 import { queueMail } from '../firm/mailer';
 import { formatPaise } from '../money';
@@ -92,6 +93,27 @@ export async function runAutoReminders() {
 
 /** GST unit quantity code (UQC) such as NOS, KGS, MTR, HRS. */
 const UNIT = z.string().trim().toUpperCase().refine((u) => (UQC as readonly string[]).includes(u), 'Unit must be a GST unit quantity code (UQC) such as NOS, PCS, KGS, LTR or OTH');
+
+/** A repeating invoice or bill: everything a normal one has, plus the schedule. Bills wait for review unless asked otherwise. */
+const recurringSchema = z.object({
+  docType: z.enum(['invoice', 'bill']).default('invoice'), contactId: z.number().int().positive(), frequency: z.enum(['weekly', 'monthly', 'quarterly', 'yearly']), nextDate: date, endDate: date.optional(),
+  dueDays: z.number().int().min(0).max(120).default(15), autoEmail: z.boolean().default(false), tdsSection: z.string().max(20).optional(),
+  /** Narration printed on each one; {month}, {date}, {period}… are filled in for each run. */ notes: z.string().max(300).optional(),
+  postMode: z.enum(['auto', 'review']).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge', 'unregistered']).default('regular'),
+  lines: docSchema.shape.lines,
+}).transform((b) => ({ ...b, postMode: b.postMode ?? (b.docType === 'bill' ? 'review' as const : 'auto' as const) }));
+type RecurringBody = z.infer<typeof recurringSchema>;
+function checkRecurring(b: RecurringBody) {
+  if (b.docType === 'bill' && b.autoEmail) throw new BadRequestException('Bills are not emailed; turn off "email automatically"');
+  if (b.docType === 'invoice' && b.tdsSection) throw new BadRequestException('TDS is deducted on bills, not on invoices');
+  if (b.endDate && b.endDate < b.nextDate) throw new BadRequestException('The end date is before the first date');
+  if (b.autoEmail && b.postMode === 'review') throw new BadRequestException('An invoice waiting for review cannot be emailed automatically');
+}
+/** Validate now, so the schedule cannot fail later for bad data. */
+async function validateRecurring(c: PoolClient, orgId: number, b: RecurringBody) {
+  await priceLines(c, orgId, b.docType === 'invoice', b.contactId, b.nextDate, b.lines, undefined, b.supplyType);
+  if (b.tdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1 AND valid_to IS NULL', [b.tdsSection])).rowCount) throw new BadRequestException('Unknown TDS section');
+}
 
 const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer' }, purchase_order: { prefix: 'PO', docType: 'bill', contactKinds: 'supplier' } } as const;
 
@@ -296,27 +318,103 @@ export class ExtrasController {
     await requireOrg(uid, orgId, 'read');
     const docType = type === 'bill' ? 'bill' : 'invoice';
     return withOrg(orgId, async (c) => (await c.query(
-      `SELECT r.id,ct.name AS "contactName",r.frequency,r.next_date AS "nextDate",r.end_date AS "endDate",r.auto_email AS "autoEmail",r.active,
-              r.doc_type AS "docType",r.tds_section AS "tdsSection",r.due_days AS "dueDays",
+      `SELECT r.id,ct.name AS "contactName",r.contact_id AS "contactId",r.frequency,r.next_date::text AS "nextDate",r.end_date::text AS "endDate",r.auto_email AS "autoEmail",r.active,
+              r.doc_type AS "docType",r.tds_section AS "tdsSection",r.due_days AS "dueDays",r.reference_note AS "notes",r.lines,r.post_mode AS "postMode",r.supply_type AS "supplyType",
+              r.is_archived AS "isArchived",
               (SELECT COALESCE(SUM(x.total),0) FROM documents x WHERE x.recurring_id=r.id AND x.status='posted')::float8 AS "postedTotal",
               (SELECT COUNT(*) FROM documents x WHERE x.recurring_id=r.id)::int AS "made"
-         FROM recurring_invoices r JOIN contacts ct ON ct.id=r.contact_id WHERE r.doc_type=$1 ORDER BY r.id DESC`, [docType])).rows.map((r) => num(r, 'id')));
+         FROM recurring_invoices r JOIN contacts ct ON ct.id=r.contact_id WHERE r.doc_type=$1 AND r.deleted_at IS NULL ORDER BY r.id DESC`, [docType])).rows.map((r) => num(r, 'id', 'contactId')));
+  }
+
+  /** Change a schedule: every field, including its lines. Invoices or bills already made are not touched. */
+  @Put('recurring/:id')
+  async editRecurring(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(recurringSchema, body);
+    checkRecurring(b);
+    return withOrg(orgId, async (c) => {
+      const before = (await c.query('SELECT doc_type FROM recurring_invoices WHERE id=$1 AND deleted_at IS NULL', [id])).rows[0];
+      if (!before) throw new NotFoundException('Schedule not found');
+      if (before.doc_type !== b.docType) throw new BadRequestException('A repeating invoice cannot become a bill (or the other way round): make a new one');
+      await validateRecurring(c, orgId, b);
+      await c.query(`UPDATE recurring_invoices SET contact_id=$2,lines=$3,frequency=$4,next_date=$5,end_date=$6,due_days=$7,auto_email=$8,tds_section=$9,reference_note=$10,post_mode=$11,supply_type=$12,
+          active = ($6::date IS NULL OR $5::date <= $6::date) WHERE id=$1`,
+        [id, b.contactId, JSON.stringify(b.lines), b.frequency, b.nextDate, b.endDate ?? null, b.dueDays, b.autoEmail, b.tdsSection ?? null, b.notes ?? null, b.postMode, b.supplyType]);
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: b.docType === 'bill' ? 'recurring_bill' : 'recurring_invoice', entityId: id, after: { ...b, lines: b.lines.length }, ip });
+      return { ok: true };
+    });
+  }
+
+  /** Archive (stop and hide) or restore a schedule. */
+  @Post('recurring/:id/archive')
+  async archiveRecurring(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ archived: z.boolean().default(true) }), body ?? {});
+    return withOrg(orgId, async (c) => {
+      const r = await c.query('UPDATE recurring_invoices SET is_archived=$2, active = CASE WHEN $2 THEN false ELSE (end_date IS NULL OR next_date <= end_date) END WHERE id=$1 AND deleted_at IS NULL', [id, b.archived]);
+      if (!r.rowCount) throw new NotFoundException('Schedule not found');
+      await writeAudit(c, { orgId, userId: uid, action: b.archived ? 'archive' : 'unarchive', entity: 'recurring_invoice', entityId: id, ip });
+      return { ok: true };
+    });
+  }
+
+  /** Delete a schedule. Invoices and bills it already made stay in the books (they are not reversed). */
+  @Delete('recurring/:id')
+  async deleteRecurring(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    return withOrg(orgId, async (c) => {
+      const r = await c.query('UPDATE recurring_invoices SET deleted_at=now(), active=false WHERE id=$1 AND deleted_at IS NULL', [id]);
+      if (!r.rowCount) throw new NotFoundException('Schedule not found');
+      await c.query("UPDATE recurring_due SET status='skipped' WHERE recurring_id=$1 AND status='pending'", [id]);
+      await writeAudit(c, { orgId, userId: uid, action: 'delete', entity: 'recurring_invoice', entityId: id, ip });
+      return { ok: true };
+    });
+  }
+
+  /** Make whatever is due now (posted, or listed for review) instead of waiting for the daily run. */
+  @Post('recurring/run')
+  async runRecurringNow(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'post');
+    return { created: await runRecurringFor(orgId) };
+  }
+
+  /** Runs of "review first" schedules that are due: open one, add the supplier's bill number or copy, and post it. */
+  @Get('recurring-due')
+  async recurringDue(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    return withOrg(orgId, async (c) => (await c.query(
+      `SELECT d.id, d.recurring_id AS "recurringId", d.due_date::text AS "dueDate", d.notes, r.doc_type AS "docType", r.contact_id AS "contactId", ct.name AS "contactName",
+              r.lines, r.tds_section AS "tdsSection", r.supply_type AS "supplyType", r.due_days AS "dueDays"
+         FROM recurring_due d JOIN recurring_invoices r ON r.id=d.recurring_id JOIN contacts ct ON ct.id=r.contact_id
+        WHERE d.status='pending' ORDER BY d.due_date, d.id`)).rows.map((r) => num(r, 'id', 'recurringId', 'contactId')));
+  }
+
+  /** Mark a due run as posted (with the bill made from it) or skipped. */
+  @Post('recurring-due/:id')
+  async recurringDone(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ status: z.enum(['posted', 'skipped']), documentId: z.number().int().positive().optional() }), body);
+    return withOrg(orgId, async (c) => {
+      if (b.documentId) {
+        const d = (await c.query('SELECT r.recurring_id FROM recurring_due r WHERE r.id=$1', [id])).rows[0];
+        if (!d) throw new NotFoundException('Not found');
+      }
+      const r = await c.query("UPDATE recurring_due SET status=$2, document_id=$3 WHERE id=$1 AND status='pending'", [id, b.status, b.documentId ?? null]);
+      if (!r.rowCount) throw new ConflictException('Already done');
+      await writeAudit(c, { orgId, userId: uid, action: b.status, entity: 'recurring_due', entityId: id, after: b, ip });
+      return { ok: true };
+    });
   }
 
   @Post('recurring')
   async addRecurring(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    const b = parse(z.object({ docType: z.enum(['invoice', 'bill']).default('invoice'), contactId: z.number().int().positive(), frequency: z.enum(['weekly', 'monthly', 'quarterly', 'yearly']), nextDate: date, endDate: date.optional(),
-      dueDays: z.number().int().min(0).max(120).default(15), autoEmail: z.boolean().default(false), tdsSection: z.string().max(20).optional(), notes: z.string().max(200).optional(),
-      lines: z.array(lineSchema).min(1).max(50) }), body);
-    if (b.docType === 'bill' && b.autoEmail) throw new BadRequestException('Bills are not emailed; turn off "email automatically"');
-    if (b.docType === 'invoice' && b.tdsSection) throw new BadRequestException('TDS is deducted on bills, not on invoices');
-    if (b.endDate && b.endDate < b.nextDate) throw new BadRequestException('The end date is before the first date');
+    const b = parse(recurringSchema, body);
+    checkRecurring(b);
     return withOrg(orgId, async (c) => {
-      await priceLines(c, orgId, b.docType === 'invoice', b.contactId, b.nextDate, b.lines); // validate now so the schedule cannot fail later for bad data
-      if (b.tdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1 AND valid_to IS NULL', [b.tdsSection])).rowCount) throw new BadRequestException('Unknown TDS section');
-      const r = (await c.query('INSERT INTO recurring_invoices(org_id,contact_id,lines,frequency,next_date,end_date,due_days,auto_email,created_by,doc_type,tds_section,reference_note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',
-        [orgId, b.contactId, JSON.stringify(b.lines), b.frequency, b.nextDate, b.endDate ?? null, b.dueDays, b.autoEmail, uid, b.docType, b.tdsSection ?? null, b.notes ?? null])).rows[0];
+      await validateRecurring(c, orgId, b);
+      const r = (await c.query('INSERT INTO recurring_invoices(org_id,contact_id,lines,frequency,next_date,end_date,due_days,auto_email,created_by,doc_type,tds_section,reference_note,post_mode,supply_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id',
+        [orgId, b.contactId, JSON.stringify(b.lines), b.frequency, b.nextDate, b.endDate ?? null, b.dueDays, b.autoEmail, uid, b.docType, b.tdsSection ?? null, b.notes ?? null, b.postMode, b.supplyType])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: b.docType === 'bill' ? 'recurring_bill' : 'recurring_invoice', entityId: r.id, after: { ...b, lines: b.lines.length }, ip });
       return { id: Number(r.id) };
     });
@@ -628,18 +726,32 @@ export class ExtrasController {
 export async function runRecurring(today = new Date().toISOString().slice(0, 10)) {
   const orgs = (await getPool().query('SELECT id FROM organizations')).rows;
   let created = 0;
-  for (const o of orgs) {
-    const orgId = Number(o.id);
-    const due = await withOrg(orgId, async (c) => (await c.query('SELECT * FROM recurring_invoices WHERE active AND next_date <= $1::date ORDER BY id', [today])).rows);
+  for (const o of orgs) created += await runRecurringFor(Number(o.id), today);
+  return { created };
+}
+
+/** Make the due invoices and bills of one organisation (or list them for review). Returns how many were posted. */
+export async function runRecurringFor(orgId: number, today = new Date().toISOString().slice(0, 10)) {
+  let created = 0;
+  {
+    const due = await withOrg(orgId, async (c) => (await c.query('SELECT *, next_date::text AS next_date, end_date::text AS end_date FROM recurring_invoices WHERE active AND deleted_at IS NULL AND NOT is_archived AND next_date <= $1::date ORDER BY id', [today])).rows);
     for (const r of due) {
       let next: string = r.next_date;
       const anchor = Number(String(r.next_date).slice(8, 10));
       for (let i = 0; i < 12 && next <= today && (!r.end_date || next <= r.end_date); i++) {
         const issue = next;
         const due_date = new Date(Date.parse(issue) + r.due_days * 86400000).toISOString().slice(0, 10);
+        const notes = r.reference_note ? fillNarration(r.reference_note, issue, r.frequency) : null;
+        if (r.post_mode === 'review') {
+          // Not posted: listed on the dashboard as due, to be opened, completed and posted by a person.
+          await withOrg(orgId, (c) => c.query('INSERT INTO recurring_due(org_id,recurring_id,due_date,notes) VALUES ($1,$2,$3,$4) ON CONFLICT (recurring_id,due_date) DO NOTHING', [orgId, r.id, issue, notes]));
+          next = nextDate(next, r.frequency, anchor);
+          await withOrg(orgId, (c) => c.query('UPDATE recurring_invoices SET next_date=$2, active = ($3::date IS NULL OR $2::date <= $3::date) WHERE id=$1', [r.id, next, r.end_date]));
+          continue;
+        }
         const made = await withOrg(orgId, async (c) => {
           const doc = await createDocument(c, orgId, Number(r.created_by), { docType: r.doc_type ?? 'invoice', contactId: Number(r.contact_id), issueDate: issue, dueDate: due_date, lines: r.lines,
-            ...(r.tds_section ? { tdsSection: r.tds_section } : {}), ...(r.reference_note ? { notes: r.reference_note } : {}) } as any, undefined, { recurringId: Number(r.id) });
+            supplyType: r.supply_type ?? 'regular', ...(r.tds_section ? { tdsSection: r.tds_section } : {}), ...(notes ? { notes } : {}) } as any, undefined, { recurringId: Number(r.id) });
           await c.query('UPDATE recurring_invoices SET last_doc_id=$2 WHERE id=$1', [r.id, doc.id]);
           return doc;
         }).catch(async (e) => {
@@ -664,5 +776,5 @@ export async function runRecurring(today = new Date().toISOString().slice(0, 10)
       }
     }
   }
-  return { created };
+  return created;
 }

@@ -1,6 +1,8 @@
 // Things that save typing: saved invoice/bill templates, journal rules that post themselves on a schedule, and bulk actions.
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { fillNarration } from '../extras/narration';
+import { voucherFor } from '../ledger/ledger.controller';
 import { getPool, withOrg } from '../db/db';
 import { writeAudit } from '../audit/audit';
 import { AuthGuard, Ip, UserId, parse } from '../common/guard';
@@ -11,6 +13,8 @@ import { nextDate } from '../extras/calc';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 const lineSchema = z.object({ accountId: z.number().int().positive(), debit: z.number().int().min(0).default(0), credit: z.number().int().min(0).default(0), memo: z.string().max(200).optional(), trackingOptionId: z.number().int().positive().optional() });
+const ruleSchema = z.object({ name: z.string().trim().min(1).max(80), narration: z.string().trim().min(1).max(300), lines: z.array(lineSchema).min(2).max(50),
+  frequency: z.enum(['weekly', 'monthly', 'quarterly', 'yearly']), startDate: date, endDate: date.optional() });
 const num = (r: any, ...ks: string[]) => { for (const k of ks) if (r[k] != null) r[k] = Number(r[k]); return r; };
 
 @Controller('orgs/:orgId')
@@ -49,14 +53,54 @@ export class AutomationController {
   @Get('journal-rules')
   async rules(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireOrg(uid, orgId, 'read');
-    return withOrg(orgId, async (c) => (await c.query(`SELECT id,name,narration,lines,frequency,next_date::text AS "nextDate",end_date::text AS "endDate",active,runs,last_run::text AS "lastRun" FROM journal_rules ORDER BY active DESC, id DESC`)).rows.map((r) => num(r, 'id', 'runs')));
+    return withOrg(orgId, async (c) => (await c.query(`SELECT id,name,narration,lines,frequency,next_date::text AS "nextDate",end_date::text AS "endDate",active,runs,last_run::text AS "lastRun",is_archived AS "isArchived"
+      FROM journal_rules WHERE deleted_at IS NULL ORDER BY active DESC, id DESC`)).rows.map((r) => num(r, 'id', 'runs')));
+  }
+
+  /** Change a journal rule: name, narration (placeholders such as {month} allowed), lines and schedule. */
+  @Put('journal-rules/:id')
+  async editRule(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(ruleSchema, body);
+    if (b.endDate && b.endDate < b.startDate) throw new BadRequestException('The end date is before the start date');
+    try { validateLines(b.lines); } catch (e) { if (e instanceof LedgerError) throw new BadRequestException(e.message); throw e; }
+    return withOrg(orgId, async (c) => {
+      const ids = [...new Set(b.lines.map((l) => l.accountId))];
+      if ((await c.query('SELECT id FROM accounts WHERE id = ANY($1) AND is_active', [ids])).rowCount !== ids.length) throw new BadRequestException('Every line needs an active account');
+      const r = await c.query('UPDATE journal_rules SET name=$2, narration=$3, lines=$4, frequency=$5, next_date=$6, end_date=$7, active = ($7::date IS NULL OR $6::date <= $7::date) AND NOT is_archived WHERE id=$1 AND deleted_at IS NULL',
+        [id, b.name, b.narration, JSON.stringify(b.lines), b.frequency, b.startDate, b.endDate ?? null]);
+      if (!r.rowCount) throw new NotFoundException('Rule not found');
+      await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'journal_rule', entityId: id, after: { name: b.name, frequency: b.frequency }, ip });
+      return { ok: true };
+    });
+  }
+
+  @Post('journal-rules/:id/archive')
+  async archiveRule(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    const b = parse(z.object({ archived: z.boolean().default(true) }), body ?? {});
+    return withOrg(orgId, async (c) => {
+      if (!(await c.query('UPDATE journal_rules SET is_archived=$2, active = CASE WHEN $2 THEN false ELSE (end_date IS NULL OR next_date <= end_date) END WHERE id=$1 AND deleted_at IS NULL', [id, b.archived])).rowCount) throw new NotFoundException('Rule not found');
+      await writeAudit(c, { orgId, userId: uid, action: b.archived ? 'archive' : 'unarchive', entity: 'journal_rule', entityId: id, ip });
+      return { ok: true };
+    });
+  }
+
+  /** Delete a rule. Entries it already posted stay in the books (they are not reversed). */
+  @Delete('journal-rules/:id')
+  async deleteRule(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'post');
+    return withOrg(orgId, async (c) => {
+      if (!(await c.query('UPDATE journal_rules SET deleted_at=now(), active=false WHERE id=$1 AND deleted_at IS NULL', [id])).rowCount) throw new NotFoundException('Rule not found');
+      await writeAudit(c, { orgId, userId: uid, action: 'delete', entity: 'journal_rule', entityId: id, ip });
+      return { ok: true };
+    });
   }
 
   @Post('journal-rules')
   async addRule(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     await requireOrg(uid, orgId, 'post');
-    const b = parse(z.object({ name: z.string().trim().min(1).max(80), narration: z.string().trim().min(1).max(300), lines: z.array(lineSchema).min(2).max(50),
-      frequency: z.enum(['weekly', 'monthly', 'quarterly', 'yearly']), startDate: date, endDate: date.optional() }), body);
+    const b = parse(ruleSchema, body);
     if (b.endDate && b.endDate < b.startDate) throw new BadRequestException('The end date is before the start date');
     try { validateLines(b.lines); } catch (e) { if (e instanceof LedgerError) throw new BadRequestException(e.message); throw e; }
     return withOrg(orgId, async (c) => {
@@ -132,14 +176,14 @@ export class AutomationController {
 /** Post every due run of every active rule in one organisation. Catches up at most 24 missed runs per rule. */
 export async function runJournalRulesFor(orgId: number, today = new Date().toISOString().slice(0, 10)) {
   let created = 0;
-  const due = await withOrg(orgId, async (c) => (await c.query('SELECT * FROM journal_rules WHERE active AND next_date <= $1::date ORDER BY id', [today])).rows);
+  const due = await withOrg(orgId, async (c) => (await c.query('SELECT *, next_date::text AS next_date, end_date::text AS end_date FROM journal_rules WHERE active AND deleted_at IS NULL AND NOT is_archived AND next_date <= $1::date ORDER BY id', [today])).rows);
   for (const r of due) {
     let next: string = r.next_date;
     const anchor = Number(String(r.next_date).slice(8, 10));
     for (let i = 0; i < 24 && next <= today && (!r.end_date || next <= r.end_date); i++) {
       const on = next;
       const ok = await withOrg(orgId, async (c) => {
-        await insertEntry(c, orgId, Number(r.created_by), on, r.narration, `RULE-${r.id}`, null, validateLines(r.lines));
+        await insertEntry(c, orgId, Number(r.created_by), on, fillNarration(r.narration, on, r.frequency), `RULE-${r.id}`, null, validateLines(r.lines), 'normal', await voucherFor(c, orgId, on));
         await c.query('UPDATE journal_rules SET last_run=$2, runs=runs+1 WHERE id=$1', [r.id, on]);
         return true;
       }).catch(async (e) => {

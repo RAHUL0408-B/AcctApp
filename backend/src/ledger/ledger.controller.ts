@@ -28,7 +28,7 @@ export async function peekJournalNumber(c: PoolClient, orgId: number, on: string
   return jvNumber(prefix, fy.label, n);
 }
 /** Take the next voucher number, or check a typed one is free. */
-async function voucherFor(c: PoolClient, orgId: number, on: string, typed?: string) {
+export async function voucherFor(c: PoolClient, orgId: number, on: string, typed?: string) {
   if (typed) {
     if ((await c.query('SELECT 1 FROM journal_entries WHERE lower(voucher_no)=lower($1)', [typed])).rowCount) throw new ConflictException(`Voucher ${typed} is already used. Choose another number.`);
     return typed;

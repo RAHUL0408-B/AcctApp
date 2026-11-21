@@ -95,7 +95,7 @@ await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Add from catalogue').fill('CONS-01 · Consulting');
 await btn('Create').click();
 await page.getByText('Created QU-0001: total ₹590.00').waitFor();
-await btn('Accepted').click();
+await page.getByRole('button', { name: /^Actions for QU-0001/ }).click(); await page.getByRole('menuitem', { name: 'Accepted' }).click();
 await page.getByText('accepted', { exact: true }).waitFor();
 await btn('Convert to invoice').click();
 await btn('Post invoice').click(); // the new review step before posting

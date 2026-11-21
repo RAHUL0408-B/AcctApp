@@ -53,7 +53,7 @@ describe('repeating bills, batch payments, access and GST details', () => {
     await post('/recurring', { docType: 'bill', contactId: supplier, frequency: 'monthly', nextDate: first, dueDays: 10, autoEmail: true, lines: [line(5000000, { gstRateBp: 1800 })] }).expect(400); // bills are not emailed
     await post('/recurring', { docType: 'invoice', contactId: customer, frequency: 'monthly', nextDate: first, tdsSection: sec, lines: [line(100000)] }).expect(400);
     await post('/recurring', { docType: 'bill', contactId: customer, frequency: 'monthly', nextDate: first, lines: [line(100000)] }).expect(400);         // a customer, not a supplier
-    const id = (await post('/recurring', { docType: 'bill', contactId: supplier, frequency: 'monthly', nextDate: first, dueDays: 10, tdsSection: sec, notes: 'Maintenance contract', lines: [line(5000000)] }).expect(201)).body.id;
+    const id = (await post('/recurring', { docType: 'bill', contactId: supplier, frequency: 'monthly', nextDate: first, dueDays: 10, tdsSection: sec, notes: 'Maintenance contract', postMode: 'auto', lines: [line(5000000)] }).expect(201)).body.id;
     expect((await get('/recurring?type=bill').expect(200)).body.map((r: any) => r.id)).toEqual([id]);
     expect((await get('/recurring').expect(200)).body).toEqual([]);                  // the invoice list does not show bills
     const r = await runRecurring(today);

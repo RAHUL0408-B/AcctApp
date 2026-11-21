@@ -5,7 +5,10 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { inflateSync } from 'zlib';
-import { auth, boot, mkGstin } from './helpers';
+import { auth, boot, mkGstin, pw } from './helpers';
+import { runRecurringFor } from '../src/extras/extras.controller';
+import { fillNarration } from '../src/extras/narration';
+import { nextCode } from '../src/coa/structure';
 import { getPool } from '../src/db/db';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'acctapp-data-'));
@@ -142,5 +145,130 @@ describe('CA review: contacts, invoices and exports', () => {
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
     await post('/export-table', { ...table, format: 'docx' }).expect(400);
     await post('/export-table', { ...table, columns: [], format: 'csv' }).expect(400);
+  });
+  it('chart of accounts: statement line, group and sub-group, the next number suggested, archive and delete', async () => {
+    expect(nextCode(['5300', '5350'], 5000, 6000)).toBe('5360');
+    expect(nextCode([], 5800, 5899)).toBe('5800');
+    expect(nextCode(['5890', '5899'], 5800, 5899)).toBe('5800');
+    const tree = (await get('/account-structure').expect(200)).body;
+    const cl = tree.find((f: any) => f.key === 'cl');
+    expect(cl.name).toBe('Current Liabilities');
+    expect(cl.groups.find((g: any) => g.name === 'Duties & Taxes').sub.map((x: any) => x.name)).toEqual(expect.arrayContaining(['Output Tax Liability', 'TDS Payable']));
+    const out = (await get('/accounts').expect(200)).body.find((a: any) => a.code === '2100');
+    expect(out).toMatchObject({ fsli: 'cl', subGroup: 'Output Tax Liability', system: true });
+    // Next number in Indirect Expenses > Administrative and Other Expenses follows the last one used there.
+    const next = (await get('/accounts-next-code?fsli=ie&group=Administrative%20and%20Other%20Expenses').expect(200)).body;
+    expect(Number(next.code)).toBeGreaterThanOrEqual(5500);
+    const made = (await post('/accounts', { fsli: 'ie', group: 'Administrative and Other Expenses', name: 'Staff Welfare' }).expect(201)).body;
+    expect(made.code).toBe(next.code);
+    await post('/accounts', { fsli: 'ie', group: 'Administrative and Other Expenses', name: 'Dup', code: made.code }).expect(400);
+    // A new group with its own number range, and a sub-group in it.
+    await post('/account-groups', { fsli: 'ie', name: 'Vehicle Running', codeFrom: 5900, codeTo: 5949 }).expect(201);
+    await post('/account-groups', { fsli: 'ie', name: 'Vehicle Running' }).expect(409);
+    await post('/account-groups', { fsli: 'ie', name: 'Fuel', parent: 'Vehicle Running', codeFrom: 5900, codeTo: 5909 }).expect(201);
+    expect((await get('/accounts-next-code?fsli=ie&group=Vehicle%20Running&subGroup=Fuel').expect(200)).body.code).toBe('5900');
+    const fuel = (await post('/accounts', { fsli: 'ie', group: 'Vehicle Running', subGroup: 'Fuel', name: 'Diesel', itcBlocked: true }).expect(201)).body;
+    expect(fuel.code).toBe('5900');
+    expect((await get('/accounts').expect(200)).body.find((a: any) => a.id === fuel.id)).toMatchObject({ itcBlocked: true, group: 'Vehicle Running', subGroup: 'Fuel', type: 'expense' });
+    // Edit, archive, delete.
+    await put(`/accounts/${fuel.id}`, { name: 'Diesel and Petrol', fsli: 'ca', group: 'Inventories' }).expect(200);    // no entries yet: it may change type
+    await put(`/accounts/${fuel.id}`, { name: 'Diesel and Petrol', fsli: 'ie', group: 'Vehicle Running', subGroup: 'Fuel' }).expect(200);
+    await post(`/accounts/${out.id}/archive`, { archived: true }).expect(400);                                        // used by the software
+    await ctx.http().delete(`${base()}/accounts/${out.id}`).set(auth(t)).expect(400);
+    await post(`/accounts/${fuel.id}/archive`, { archived: true }).expect(201);
+    expect((await get('/accounts').expect(200)).body.find((a: any) => a.id === fuel.id).isActive).toBe(false);
+    await post(`/accounts/${fuel.id}/archive`, { archived: false }).expect(201);
+    await ctx.http().delete(`${base()}/accounts/${fuel.id}`).set(auth(t)).expect(200);
+    const cash = (await get('/accounts').expect(200)).body.find((a: any) => a.code === '1000').id, welfare = made.id;
+    await post('/journal', { date: today, narration: 'Tea', lines: [{ accountId: welfare, debit: 5000 }, { accountId: cash, credit: 5000 }] }).expect(201);
+    expect((await ctx.http().delete(`${base()}/accounts/${welfare}`).set(auth(t)).expect(409)).body.message).toMatch(/Archive it instead/);
+  });
+
+  it('journals get a voucher number with its own prefix; staff send them for review when approval is on', async () => {
+    const acc = await ctx.accounts(t, org);
+    const lines = [{ accountId: acc('5550'), debit: 10000 }, { accountId: acc('1000'), credit: 10000 }];
+    const next = (await get(`/journal-next-number?date=${today}`).expect(200)).body.number;
+    expect(next).toMatch(/^JV\/\d\d-\d\d\/\d{4}$/);
+    const a = (await post('/journal', { date: today, narration: 'Office tea', reference: 'BILL-77', lines }).expect(201)).body;
+    expect(a.voucherNo).toBe(next);
+    await post('/journal', { date: today, narration: 'Clash', voucherNo: next.toLowerCase(), lines }).expect(409);
+    const own = (await post('/journal', { date: today, narration: 'Own number', voucherNo: 'ADJ/1', lines }).expect(201)).body;
+    expect(own.voucherNo).toBe('ADJ/1');
+    const listed = (await get('/journal').expect(200)).body.find((e: any) => e.id === a.id);
+    expect(listed).toMatchObject({ voucherNo: next, reference: 'BILL-77' });
+    await ctx.http().put(`${base()}/org-settings`).set(auth(t)).send({ prefixes: { journal: 'jnl' } }).expect(200);
+    expect((await get(`/journal-next-number?date=${today}`).expect(200)).body.number).toMatch(/^JNL\//);
+    // A staff member, with approval required: review first.
+    await ctx.register('staff@review.com');
+    await ctx.http().post('/api/members').set(auth(t)).send({ firmId, email: 'staff@review.com', role: 'staff' }).expect(201);
+    const staffT = (await ctx.http().post('/api/auth/login').send({ email: 'staff@review.com', password: pw }).expect(200)).body.token;
+    await put('/settings', { requireApproval: true }).expect(200);
+    expect((await post('/journal', { date: today, narration: 'Staff', lines }, staffT)).status).toBe(403);
+    const d = (await post('/journal-drafts', { date: today, narration: 'Staff accrual', lines }, staffT).expect(201)).body;
+    await post(`/journal-drafts/${d.id}/approve`, {}, staffT).expect(403);                       // staff cannot approve
+    const ap = (await post(`/journal-drafts/${d.id}/approve`).expect(201)).body;
+    expect(ap.voucherNo).toMatch(/^JNL\//);
+    await post(`/journal-drafts/${d.id}/approve`).expect(409);
+    await put('/settings', { requireApproval: false }).expect(200);
+  });
+
+  it('lock dates: your password to lock, and only the owner unlocks', async () => {
+    await ctx.register('acct@review.com');
+    await ctx.http().post('/api/members').set(auth(t)).send({ firmId, email: 'acct@review.com', role: 'accountant' }).expect(201);
+    const acT = (await ctx.http().post('/api/auth/login').send({ email: 'acct@review.com', password: pw }).expect(200)).body.token;
+    await put('/lock-dates', { lockThrough: '2025-03-31' }, acT).expect(400);
+    await put('/lock-dates', { lockThrough: '2025-03-31', password: 'nope' }, acT).expect(401);
+    await put('/lock-dates', { lockThrough: '2025-03-31', password: pw }, acT).expect(200);       // an accountant may lock
+    await put('/lock-dates', { lockThrough: '2025-06-30', password: pw }, acT).expect(200);       // and lock further
+    expect((await put('/lock-dates', { lockThrough: '2025-01-31', password: pw }, acT).expect(403)).body.message).toMatch(/Only the owner/);
+    await put('/lock-dates', { lockThrough: null, password: pw }, acT).expect(403);
+    await put('/lock-dates', { lockThrough: null, password: pw }).expect(200);                     // the owner unlocks
+  });
+
+  it('repeating bills wait for review, with the month in the narration; a schedule can be edited, archived and deleted', async () => {
+    expect(fillNarration('Being milk supply bill posted for {month}', '2026-11-05')).toBe('Being milk supply bill posted for Nov-26');
+    expect(fillNarration('{period} / {fy} / {quarter} / {date} / {unknown}', '2026-11-05')).toBe('01-11-2026 to 30-11-2026 / 2026-27 / Q3 2026-27 / 05-11-2026 / {unknown}');
+    expect(fillNarration('Rent {period}', '2027-02-01', 'quarterly')).toBe('Rent 01-01-2027 to 31-03-2027');
+    const sup = (await post('/contacts', { kind: 'supplier', name: 'Dairy Co', stateCode: '27' }).expect(201)).body.id;
+    const start = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10);
+    const id = (await post('/recurring', { docType: 'bill', contactId: sup, frequency: 'monthly', nextDate: start, supplyType: 'unregistered', notes: 'Being milk supply bill posted for {month}', lines: [line(300000, { gstRateBp: 0 })] }).expect(201)).body.id;
+    const listed = (await get('/recurring?type=bill').expect(200)).body.find((r: any) => r.id === id);
+    expect(listed).toMatchObject({ postMode: 'review', supplyType: 'unregistered' });
+    expect(await runRecurringFor(org)).toBe(0);                                                   // nothing posted by itself
+    const due = (await get('/recurring-due').expect(200)).body.filter((d: any) => d.recurringId === id);
+    expect(due.length).toBe(2);                                                                    // 40 days ago and 10 days ago
+    expect(due[0].notes).toMatch(/^Being milk supply bill posted for [A-Z][a-z]{2}-\d\d$/);
+    // The person opens one, adds the supplier's bill number and posts it.
+    const doc = (await post('/documents', { docType: 'bill', contactId: sup, issueDate: due[0].dueDate, supplierRef: 'MILK-1', supplyType: 'unregistered', notes: due[0].notes, lines: due[0].lines }).expect(201)).body;
+    await post(`/recurring-due/${due[0].id}`, { status: 'posted', documentId: doc.id }).expect(201);
+    await post(`/recurring-due/${due[0].id}`, { status: 'posted', documentId: doc.id }).expect(409);
+    await post(`/recurring-due/${due[1].id}`, { status: 'skipped' }).expect(201);
+    expect((await get('/recurring-due').expect(200)).body.filter((d: any) => d.recurringId === id)).toEqual([]);
+    // Edit, archive, delete.
+    await put(`/recurring/${id}`, { docType: 'bill', contactId: sup, frequency: 'quarterly', nextDate: listed.nextDate, supplyType: 'unregistered', postMode: 'auto', notes: 'Milk {period}', lines: [line(350000, { gstRateBp: 0 })] }).expect(200);
+    expect((await get('/recurring?type=bill').expect(200)).body.find((r: any) => r.id === id)).toMatchObject({ frequency: 'quarterly', postMode: 'auto', notes: 'Milk {period}' });
+    await put(`/recurring/${id}`, { docType: 'invoice', contactId: sup, frequency: 'monthly', nextDate: listed.nextDate, lines: [line(1000)] }).expect(400);
+    await post(`/recurring/${id}/archive`, { archived: true }).expect(201);
+    expect((await get('/recurring?type=bill').expect(200)).body.find((r: any) => r.id === id)).toMatchObject({ isArchived: true, active: false });
+    await ctx.http().delete(`${base()}/recurring/${id}`).set(auth(t)).expect(200);
+    expect((await get('/recurring?type=bill').expect(200)).body.find((r: any) => r.id === id)).toBeUndefined();
+    expect((await get(`/documents/${doc.id}`).expect(200)).body.status).toBe('posted');            // what was posted stays
+  });
+
+  it('a ledger for a range of accounts, with the source of each line; reports export as CSV and XML', async () => {
+    const all = (await get('/report-table/all-ledgers?from=2020-01-01&fromCode=1000&toCode=1000').expect(200)).body;
+    expect(all.title).toMatch(/^Ledger: 1000 /);
+    const kinds = new Set(all.links.filter(Boolean).map((l: any) => l.kind));
+    expect(kinds.has('account')).toBe(true);
+    expect(kinds.has('journal')).toBe(true);
+    const range = (await get('/report-table/all-ledgers?from=2020-01-01&fromCode=1000&toCode=1999').expect(200)).body;
+    expect(range.rows.filter((_: any, i: number) => range.links[i]?.kind === 'account').every((r: any) => /^1\d{3} /.test(r[1]))).toBe(true);
+    const bin = (res: any, cb: any) => { const ch: Buffer[] = []; res.on('data', (d: Buffer) => ch.push(d)); res.on('end', () => cb(null, Buffer.concat(ch))); };
+    const csv = (await get('/export/trial-balance?format=csv').buffer(true).parse(bin).expect(200)).body.toString('utf8');
+    expect(csv).toMatch(/^﻿Code,Account,Debit,Credit\r\n/);
+    const xml = (await get('/export/all-ledgers?format=xml&fromCode=1000&toCode=1000').buffer(true).parse(bin).expect(200)).body.toString('utf8');
+    expect(xml).toContain('<Report organisation="Pune Works"');
+    const pnl = (await get('/reports/pnl?from=2020-01-01').expect(200)).body;
+    expect(pnl.expenses.items[0]).toEqual(expect.objectContaining({ fsli: expect.any(String), group: expect.any(String) }));
   });
 });

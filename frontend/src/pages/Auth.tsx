@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api, setToken } from '../api';
-import { APP_NAME, Button, ErrorMsg, Field, Logo, useAction } from '../ui';
+import { APP_NAME, Button, Callout, ErrorMsg, Field, Logo, useAction } from '../ui';
 import { LandingFooter, LandingSections, PAGE_LINKS } from './Landing';
 
 /** An illustration of the product: a dashboard with figures, a chart, an invoice list and two floating status cards. */
@@ -157,7 +157,7 @@ export function AuthScreen({ onDone }: { onDone: () => void }) {
               <h1 className="text-3xl font-bold tracking-tight">{temp ? 'Two-step verification' : mode === 'login' ? 'Log in' : mode === 'forgot' ? 'Reset your password' : mode === 'reset' ? 'Choose a new password' : mode === 'invite' ? (invite?.hasAccount ? 'Log in to accept' : 'Join your team') : 'Create your firm account'}</h1>
               <p className="mt-2 text-indigo-100">{temp ? 'One more step to keep your clients’ books safe.' : mode === 'login' ? 'Welcome back. Log in to see your clients’ books.' : mode === 'forgot' ? 'Enter your email and we will send you a link to choose a new password.' : mode === 'reset' ? 'Use at least 10 characters. Logging in again is needed afterwards on every device.' : mode === 'invite' ? (inviteError || (invite ? `You have been invited to ${invite.orgName ? `${invite.orgName} at ` : ''}${invite.firmName} as ${invite.roleText}.` : 'Checking your invitation…')) : 'Free for 14 days. No card needed.'}</p>
               <form onSubmit={submit} className="mt-6 space-y-4 rounded-2xl border border-white/20 bg-white p-6 text-slate-900 shadow-2xl">
-                {note && <p role="status" className="rounded bg-green-50 px-3 py-2 text-sm text-green-800">{note}</p>}
+                {note && <Callout tone="success" role="status">{note}</Callout>}
                 {mode === 'forgot' && !temp ? (
                   <Field label="Email" type="email" value={f.email} onChange={set('email')} required autoComplete="username" placeholder="you@yourfirm.com" />
                 ) : mode === 'reset' && !temp ? (

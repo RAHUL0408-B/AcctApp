@@ -9,11 +9,11 @@ import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, lin
 
 interface Doc { id: number; docType: string; number: string; contactId: number; contactName: string; issueDate: string; dueDate: string | null; total: number; subtotal: number; cgst: number; sgst: number; igst: number; cess: number;
   tdsAmount: number; tdsSection: string | null; netPayable: number; status: string; outstanding?: number; paid?: number; currency: string; foreignTotal: number | null; supplyType: string; isArchived?: boolean;
-  supplierRef: string | null; placeOfSupply: string | null; notes: string | null; originalDocId: number | null }
+  supplierRef: string | null; placeOfSupply: string | null; notes: string | null; originalDocId: number | null; bookedCode: string | null }
 interface Payment { id: number; date: string; amount: number; reference?: string | null; batchId?: number | null }
 interface Template { id: number; name: string; docType: string; payload: any }
 interface Attachment { id: number; name: string; size: number }
-interface OrgSettings { stateCode: string | null; lutNumber: string | null; lutTo: string | null; requireApproval: boolean; invoiceDueDays: number | null; billDueDays: number | null }
+interface OrgSettings { stateCode: string | null; lutNumber: string | null; lutTo: string | null; requireApproval: boolean; invoiceDueDays: number | null; billDueDays: number | null; customsDuty?: boolean; strictInvoiceChecks?: boolean }
 
 const SUPPLY = {
   sales: [['regular', 'Regular'], ['export_lut', 'Export under LUT (no GST)'], ['export_igst', 'Export with IGST'], ['sez_lut', 'SEZ under LUT (no GST)'], ['sez_igst', 'SEZ with IGST']],
@@ -53,6 +53,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const [dueTouched, setDueTouched] = useState(false);
   const [original, setOriginal] = useState<(Doc & { payments: Payment[] }) | null>(null);
   const [tdsPreview, setTdsPreview] = useState<{ section: string; amount: number } | null>(null);
+  const [issues, setIssues] = useState<{ text: string; block: boolean }[]>([]);
   const [quickContact, setQuickContact] = useState<Contact | null>(null);
   const [allDocs, setAllDocs] = useState(false);
   useEffect(() => { if (startNew) { setShowForm(true); if (startType && types.some(([t]) => t === startType)) setDocType(startType); } }, [startNew, startType]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -149,6 +150,18 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     }, 300);
     return () => clearTimeout(t);
   }, [org.id, docType, f.tdsSection, f.contactId, f.issueDate, subtotal, foreign, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Particulars the law asks for on a tax invoice (Rule 46) that are still missing: shown while filling the form.
+  useEffect(() => {
+    setIssues([]);
+    if (!showForm || !sales || !f.contactId || (docType !== 'invoice' && docType !== 'credit_note') || !lines.some((l) => l.description.trim())) return;
+    const t = setTimeout(() => {
+      api(`/orgs/${org.id}/documents-check`, { body: { docType, contactId: Number(f.contactId), supplyType: f.supplyType, issueDate: f.issueDate, total: taxSummary(lines, intra, noTax).total,
+        lines: lines.filter((l) => l.description.trim()).map((l) => ({ description: l.description, hsnSac: l.hsnSac || undefined, unit: l.unit || undefined })) } })
+        .then((r) => setIssues(r.issues ?? [])).catch(() => setIssues([]));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [org.id, showForm, sales, docType, f.contactId, f.supplyType, f.issueDate, lines, intra, noTax, contacts, settings.strictInvoiceChecks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const numberToSend = numberTouched ? f.number.trim() : '';
   const body = () => ({
@@ -363,7 +376,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     { key: 'gst', label: 'GST', value: (d) => d.cgst + d.sgst + d.igst, money: true, hidden: true, noSearch: true },
     { key: 'cess', label: 'Cess', value: (d) => d.cess, money: true, hidden: true, noSearch: true },
     { key: 'total', label: 'Total', value: (d) => d.total, money: true, render: (d) => (
-      <span>{canEdit(d) ? <button type="button" className="font-medium text-brand-700 hover:underline" aria-label={`Edit ${d.number}`} onClick={() => startEdit(d)}>{fmt(d.total)}</button> : fmt(d.total)}
+      <span>{go && d.bookedCode ? <button type="button" className="font-medium text-brand-700 hover:underline" title={`Open the ledger ${d.bookedCode} this was booked to`} aria-label={`Ledger of ${d.number}`} onClick={() => go(`reports/ledger-${d.bookedCode}`)}>{fmt(d.total)}</button> : fmt(d.total)}
         {d.currency !== 'INR' && d.foreignTotal != null && <span className="block text-xs text-slate-500">{d.currency} {fmt(d.foreignTotal)}</span>}</span>) },
     ...(!sales ? [{ key: 'tds', label: 'TDS', value: (d: Doc) => d.tdsAmount || null, money: true, noSearch: true } as Column<Doc>] : []),
     { key: 'outstanding', label: 'Outstanding', value: (d) => ((d.docType === 'invoice' || d.docType === 'bill') && d.status === 'posted' ? d.outstanding ?? null : null), money: true, noSearch: true },
@@ -458,7 +471,16 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
           )}
           {f.supplyType === 'unregistered' && <div className="mt-3"><Callout tone="info">Supply from an unregistered dealer: no GST is charged and no input credit is claimed. (Notified services under section 9(4) are under reverse charge instead.)</Callout></div>}
 
+          {issues.length > 0 && (
+            <div className="mt-3" data-testid="rule46-issues">
+              <Callout tone="warning" title={settings.strictInvoiceChecks ? 'Details the law requires are missing: this invoice cannot be issued yet' : 'Details a tax invoice must show are missing (Rule 46, CGST Rules)'}>
+                <ul className="list-disc space-y-0.5 pl-5">{issues.map((x, i) => <li key={i}>{x.text}</li>)}</ul>
+                {!settings.strictInvoiceChecks && <p className="mt-1 text-xs">You can still issue it. The owner can make this a hard stop under Settings, Duties and taxes.</p>}
+              </Callout>
+            </div>)}
+
           <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} currency={f.currency} intra={intra} noTax={noTax}
+            dutyOk={sales && !!settings.customsDuty && (f.supplyType.startsWith('export') || f.supplyType.startsWith('sez'))}
             contactDefaultId={sales ? contact?.defaultSalesAccountId : contact?.defaultPurchaseAccountId} tds={docType === 'bill' ? tdsPreview : null} />
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">

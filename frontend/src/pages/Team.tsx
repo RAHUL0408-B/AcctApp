@@ -16,7 +16,7 @@ const LABEL: Record<string, string> = { owner: 'Owner', accountant: 'Accountant'
 /** These roles always belong to one client; the others can cover the whole firm. */
 const ONE_CLIENT = new Set(['client', 'sales', 'employee']);
 /** Roles that can be limited area by area (owners always have everything; sales and employee already see a few pages). */
-const LIMITABLE = new Set(['staff', 'client']); // owners and accountants always have full access
+const LIMITABLE = new Set(['staff', 'client', 'sales', 'employee']); // owners and accountants always have full access
 const AREA_NAME: Record<string, string> = { sales: 'Sales', purchases: 'Purchases', bank: 'Bank', accounting: 'Accounting', reports: 'Reports', tax: 'Tax and compliance', contacts: 'Contacts', projects: 'Projects', settings: 'Settings' };
 /** Ready-made access sets, like Xero's "bank only" and "read only" users. */
 const PRESETS: [string, (a: string) => Level][] = [

@@ -4,8 +4,9 @@ import { api, download, fileToBase64, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { useEditing } from '../editmode';
+import { DataTable, RowMenu } from '../table';
 import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
-import type { Account, Item } from './Lines';
+import { UNITS, type Account, type Item } from './Lines';
 import { OrgDetailsMore } from './Settings';
 
 export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; accounts: Account[] }) {
@@ -13,7 +14,7 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
   const [rates, setRates] = useState<{ rateBp: number; label: string }[]>([]);
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
-  const blank = { code: '', name: '', kind: 'service', hsnSac: '', saleRate: '', purchaseRate: '', gstRateBp: '1800', salesAccountId: '', purchaseAccountId: '', trackStock: false };
+  const blank = { code: '', name: '', kind: 'service', hsnSac: '', unit: '', saleRate: '', purchaseRate: '', gstRateBp: '1800', salesAccountId: '', purchaseAccountId: '', trackStock: false };
   const [f, setF] = useState(blank);
   const { error, busy, run } = useAction();
   const load = useCallback(() => api<Item[]>(`/orgs/${org.id}/items`).then(setItems), [org.id]);
@@ -24,15 +25,15 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
   const save = () => run(async () => {
     const common = { name: f.name, gstRateBp: Number(f.gstRateBp), saleRate: f.saleRate ? toPaise(f.saleRate) : 0, purchaseRate: f.purchaseRate ? toPaise(f.purchaseRate) : 0 };
     if (editing) {
-      await api(`/orgs/${org.id}/items/${editing}`, { method: 'PUT', body: { ...common, hsnSac: f.hsnSac || null, salesAccountId: f.salesAccountId ? Number(f.salesAccountId) : null, purchaseAccountId: f.purchaseAccountId ? Number(f.purchaseAccountId) : null } });
+      await api(`/orgs/${org.id}/items/${editing}`, { method: 'PUT', body: { ...common, hsnSac: f.hsnSac || null, unit: f.unit || null, salesAccountId: f.salesAccountId ? Number(f.salesAccountId) : null, purchaseAccountId: f.purchaseAccountId ? Number(f.purchaseAccountId) : null } });
     } else {
-      await api(`/orgs/${org.id}/items`, { body: { ...common, code: f.code, kind: f.kind, ...(f.hsnSac ? { hsnSac: f.hsnSac } : {}), ...(f.salesAccountId ? { salesAccountId: Number(f.salesAccountId) } : {}),
+      await api(`/orgs/${org.id}/items`, { body: { ...common, code: f.code, kind: f.kind, ...(f.unit ? { unit: f.unit } : {}), ...(f.hsnSac ? { hsnSac: f.hsnSac } : {}), ...(f.salesAccountId ? { salesAccountId: Number(f.salesAccountId) } : {}),
         ...(f.purchaseAccountId ? { purchaseAccountId: Number(f.purchaseAccountId) } : {}), trackStock: f.kind === 'goods' && f.trackStock } });
     }
     reset(); load();
   });
   const edit = (i: Item) => {
-    setF({ code: i.code, name: i.name, kind: i.kind, hsnSac: i.hsnSac ?? '', saleRate: i.saleRate ? String(i.saleRate / 100) : '', purchaseRate: i.purchaseRate ? String(i.purchaseRate / 100) : '', gstRateBp: String(i.gstRateBp),
+    setF({ code: i.code, name: i.name, kind: i.kind, hsnSac: i.hsnSac ?? '', unit: i.unit ?? '', saleRate: i.saleRate ? String(i.saleRate / 100) : '', purchaseRate: i.purchaseRate ? String(i.purchaseRate / 100) : '', gstRateBp: String(i.gstRateBp),
       salesAccountId: i.salesAccountId ? String(i.salesAccountId) : '', purchaseAccountId: i.purchaseAccountId ? String(i.purchaseAccountId) : '', trackStock: !!i.trackStock });
     setEditing(i.id); setShow(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -47,6 +48,8 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
             <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
             <Select label="Kind" aria-label="Item kind" value={f.kind} disabled={!!editing} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="service">Service</option><option value="goods">Goods</option></Select>
             <Field label="HSN / SAC" value={f.hsnSac} onChange={(e) => setF({ ...f, hsnSac: e.target.value })} />
+            <Select label="Unit of measurement (UQC)" aria-label="Item unit" value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })}>
+              <option value="">{f.kind === 'service' ? 'None (printed as OTH)' : 'None (printed as NOS)'}</option>{UNITS.map(([c, n]) => <option key={c} value={c}>{c} · {n}</option>)}</Select>
             <Field label="Sale price (₹)" value={f.saleRate} onChange={(e) => setF({ ...f, saleRate: e.target.value })} />
             <Field label="Purchase price (₹)" value={f.purchaseRate} onChange={(e) => setF({ ...f, purchaseRate: e.target.value })} />
             <Select label="GST rate" aria-label="Item GST rate" value={f.gstRateBp} onChange={(e) => setF({ ...f, gstRateBp: e.target.value })}>{rates.map((r) => <option key={r.rateBp} value={r.rateBp}>{r.label}</option>)}</Select>
@@ -59,13 +62,23 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
         </Card>
       )}
       <Card>
-        {items.length === 0 ? <Empty text="No products or services yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Code</th><th>Name</th><th>Kind</th><th>HSN/SAC</th><th className="text-right">Sale</th><th className="text-right">Purchase</th><th className="text-right">GST</th><th>Sales a/c</th><th>Purchase a/c</th><th /></tr></thead>
-            <tbody>{items.map((i) => (
-              <tr key={i.id} className="border-t border-slate-100"><td className="py-2 font-medium">{i.code}</td><td>{i.name}</td><td>{i.kind}{i.trackStock && <span className="ml-1 rounded bg-brand-50 px-1.5 text-xs text-brand-700">stock</span>}</td><td>{i.hsnSac ?? ''}</td><td className="text-right">{fmt(i.saleRate)}</td><td className="text-right">{fmt(i.purchaseRate)}</td><td className="text-right">{i.gstRateBp / 100}%</td>
-                <td>{acct(i.salesAccountId)}</td><td>{acct(i.purchaseAccountId)}</td>
-                <td className="whitespace-nowrap text-right">{canPost && <><Button variant="ghost" onClick={() => edit(i)}>Edit</Button> <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/items/${i.id}/archive`, { method: 'POST', body: {} }); load(); })}>Archive</Button></>}</td></tr>))}</tbody></table>
-        )}
+        <DataTable id="items" rows={items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Products and services" empty="No products or services yet." searchLabel="Search products and services (name, code, HSN)"
+          columns={[
+            { key: 'code', label: 'Code', value: (i) => i.code, render: (i) => <b>{i.code}</b> },
+            { key: 'name', label: 'Name', value: (i) => i.name },
+            { key: 'kind', label: 'Kind', value: (i) => i.kind, render: (i) => <span className="capitalize">{i.kind}{i.trackStock && <span className="ml-1 rounded bg-brand-50 px-1.5 text-xs normal-case text-brand-700">stock</span>}</span> },
+            { key: 'hsn', label: 'HSN/SAC', value: (i) => i.hsnSac },
+            { key: 'unit', label: 'Unit', value: (i) => i.unit },
+            { key: 'sale', label: 'Sale', value: (i) => i.saleRate, money: true, noSearch: true },
+            { key: 'purchase', label: 'Purchase', value: (i) => i.purchaseRate, money: true, noSearch: true },
+            { key: 'gst', label: 'GST', value: (i) => `${i.gstRateBp / 100}%`, noSearch: true },
+            { key: 'sales', label: 'Sales a/c', value: (i) => (i.salesAccountId ? acct(i.salesAccountId) : null) },
+            { key: 'purch', label: 'Purchase a/c', value: (i) => (i.purchaseAccountId ? acct(i.purchaseAccountId) : null) },
+          ]}
+          trailing={(i) => (canPost ? <RowMenu label={`Actions for ${i.name}`} actions={[
+            { label: 'Edit', icon: 'edit', onClick: () => edit(i) },
+            { label: 'Archive', icon: 'archive', onClick: () => run(async () => { await api(`/orgs/${org.id}/items/${i.id}/archive`, { method: 'POST', body: {} }); load(); }) },
+          ]} /> : null)} />
       </Card>
     </>
   );
@@ -197,14 +210,19 @@ export function FixedAssets({ org, canManage, accounts = [] }: { org: Org; canMa
         </Card>
       )}
       <Card title={`Register (book value of active assets ₹${fmt(totalBook)})`}>
-        {list.length === 0 ? <Empty text="No assets yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Code</th><th>Asset</th><th>Group</th><th>Bought</th><th>Method</th><th className="text-right">Cost</th><th className="text-right">Accumulated</th><th className="text-right">Book value</th><th>Status</th><th /></tr></thead>
-            <tbody>{list.map((a) => (
-              <tr key={a.id} className="border-t border-slate-100"><td className="py-2">{a.code}</td><td className="font-medium">{a.name}</td><td>{a.group ?? '—'}</td><td>{a.purchaseDate.slice(0, 10)}</td><td>{methodText(a)}{a.dayBasis === 'actual_days' ? ' · days' : ''}</td>
-                <td className="text-right">{fmt(a.cost)}</td><td className="text-right">{fmt(a.accumulated)}</td><td className="text-right">{fmt(a.bookValue)}</td>
-                <td><Badge text={a.status} />{a.status === 'disposed' && a.disposalGain != null && <span className={`block text-xs ${a.disposalGain >= 0 ? 'text-green-700' : 'text-red-700'}`}>{a.disposalGain >= 0 ? 'profit' : 'loss'} ₹{fmt(Math.abs(a.disposalGain))}</span>}</td>
-                <td className="whitespace-nowrap text-right">{canManage && a.status === 'active' && <><Button variant="ghost" onClick={() => edit(a)}>Edit</Button> <Button variant="ghost" onClick={() => setDisposing({ id: a.id, name: a.name, date: today(), proceeds: '', accountId: '', preview: null })}>Dispose</Button></>}</td></tr>))}</tbody></table>
-        )}
+        <DataTable id="assets" rows={list} rowKey={(a) => a.id} orgId={org.id} exportTitle="Fixed asset register" empty="No assets yet." searchLabel="Search assets"
+          columns={[
+            { key: 'code', label: 'Code', value: (a) => a.code },
+            { key: 'name', label: 'Asset', value: (a) => a.name, render: (a) => <b>{a.name}</b> },
+            { key: 'group', label: 'Group', value: (a) => a.group },
+            { key: 'bought', label: 'Bought', value: (a) => a.purchaseDate.slice(0, 10) },
+            { key: 'method', label: 'Method', value: (a) => `${methodText(a)}${a.dayBasis === 'actual_days' ? ' · days' : ''}` },
+            { key: 'cost', label: 'Cost', value: (a) => a.cost, money: true, noSearch: true },
+            { key: 'acc', label: 'Accumulated', value: (a) => a.accumulated, money: true, noSearch: true },
+            { key: 'book', label: 'Book value', value: (a) => a.bookValue, money: true, noSearch: true },
+            { key: 'status', label: 'Status', value: (a) => a.status, render: (a) => <span><Badge text={a.status} />{a.status === 'disposed' && a.disposalGain != null && <span className={`block text-xs ${a.disposalGain >= 0 ? 'text-green-700' : 'text-red-700'}`}>{a.disposalGain >= 0 ? 'profit' : 'loss'} ₹{fmt(Math.abs(a.disposalGain))}</span>}</span> },
+          ]}
+          trailing={(a) => (canManage && a.status === 'active' ? <><Button variant="ghost" onClick={() => edit(a)}>Edit</Button> <Button variant="ghost" onClick={() => setDisposing({ id: a.id, name: a.name, date: today(), proceeds: '', accountId: '', preview: null })}>Dispose</Button></> : null)} />
         <p className="mt-3 text-xs text-slate-500">Cost, dates and depreciation settings lock once depreciation is posted. The Income Tax half-rate rule for assets used under 180 days is not applied.</p>
       </Card>
     </>

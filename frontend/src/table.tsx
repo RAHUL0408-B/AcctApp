@@ -167,6 +167,8 @@ export interface Column<T> {
 interface View { order: string[]; hidden: string[]; sort?: { key: string; dir: 1 | -1 } }
 const readView = (id: string): View | null => { try { const v = localStorage.getItem(`view:${id}`); return v ? JSON.parse(v) : null; } catch { return null; } };
 const writeView = (id: string, v: View | null) => { try { if (v) localStorage.setItem(`view:${id}`, JSON.stringify(v)); else localStorage.removeItem(`view:${id}`); } catch { /* storage may be off */ } };
+/** A plain lowercase word ("monthly", "customer", "posted") starts with a capital letter, on screen and in exports. */
+const nice = (v: string) => (/^[a-z][a-z ]*$/.test(v) ? v.charAt(0).toUpperCase() + v.slice(1) : v);
 const fmtMoney = (p: number) => { const neg = p < 0, a = Math.abs(p), r = Math.floor(a / 100).toString(), rest = r.slice(0, -3); return `${neg ? '-' : ''}${rest ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' : ''}${r.slice(-3)}.${String(a % 100).padStart(2, '0')}`; };
 
 /**
@@ -215,7 +217,7 @@ export function DataTable<T>({ id, rows, columns, rowKey, orgId, exportTitle, ex
   const build = (): ExportTable => ({
     title: exportTitle ?? 'Export', subtitle: [exportSubtitle, q ? `Search: "${q}"` : ''].filter(Boolean).join(' · '),
     columns: visible.map((c) => ({ header: c.label, money: c.money })),
-    rows: sorted.map((r) => visible.map((c) => { const v = c.value(r); return v == null ? null : c.money ? (typeof v === 'number' ? v : null) : String(v); })),
+    rows: sorted.map((r) => visible.map((c) => { const v = c.value(r); return v == null ? null : c.money ? (typeof v === 'number' ? v : null) : nice(String(v)); })),
   });
 
   return (
@@ -264,7 +266,7 @@ export function DataTable<T>({ id, rows, columns, rowKey, orgId, exportTitle, ex
           <tbody>{sorted.map((r) => (
             <tr key={rowKey(r)} className={rowClass?.(r) ?? ''}>
               {leading && <td>{leading(r)}</td>}
-              {visible.map((c) => <td key={c.key} className={`${c.money ? 'whitespace-nowrap text-right tabular-nums' : ''} ${c.className ?? ''}`}>{c.render ? c.render(r) : (() => { const v = c.value(r); return v == null || v === '' ? '—' : c.money && typeof v === 'number' ? fmtMoney(v) : String(v); })()}</td>)}
+              {visible.map((c) => <td key={c.key} className={`${c.money ? 'whitespace-nowrap text-right tabular-nums' : ''} ${c.className ?? ''}`}>{c.render ? c.render(r) : (() => { const v = c.value(r); return v == null || v === '' ? '—' : c.money && typeof v === 'number' ? fmtMoney(v) : nice(String(v)); })()}</td>)}
               {trailing && <td aria-label="Row actions" className="whitespace-nowrap text-right">{trailing(r)}</td>}
             </tr>))}</tbody>
         </table>

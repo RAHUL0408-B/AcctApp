@@ -193,8 +193,9 @@ await page.locator('datalist option').first().waitFor({ state: 'attached' });
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Monthly retainer');
 await page.getByLabel('Rate 1').fill('2000');
+await page.getByLabel('First invoice date').fill(new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10)); // starts later, so nothing is posted yet
 await btn('Save schedule').click();
-await page.getByRole('cell', { name: 'monthly' }).waitFor();
+await page.getByRole('cell', { name: 'Monthly' }).waitFor();
 step('repeating invoice scheduled');
 
 // ---- dashboard

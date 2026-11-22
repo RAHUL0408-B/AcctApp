@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Empty, PageHeader, Select, Stat } from '../kit';
+import { DataTable } from '../table';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
 interface StockItem { id: number; code: string; name: string; quantity: number; value: number; averageCost: number }
@@ -33,12 +34,15 @@ export function Inventory({ org, canManage }: { org: Org; canManage: boolean }) 
         <Stat label="Stock agrees with the ledger" value={s.agrees ? 'Yes' : 'No'} tone={s.agrees ? 'good' : 'bad'} />
       </div>
       <Card title="Stock on hand">
-        {s.items.length === 0 ? <Empty text="No tracked items. Turn on stock tracking when you add a goods item under Products and services." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left"><th>Code</th><th>Item</th><th className="text-right">Quantity</th><th className="text-right">Average cost</th><th className="text-right">Value</th><th /></tr></thead>
-            <tbody>{s.items.map((i) => (
-              <tr key={i.id}><td className="font-medium">{i.code}</td><td>{i.name}</td><td className="text-right">{i.quantity}</td><td className="text-right">{fmt(i.averageCost)}</td>
-                <td className="text-right">{fmt(i.value)}</td><td className="text-right"><Button variant="ghost" onClick={() => open(i)}>History</Button></td></tr>))}</tbody></table>
-        )}
+        <DataTable id="stock" rows={s.items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Stock on hand" empty="No tracked items. Turn on stock tracking when you add a goods item under Products and services." searchLabel="Search stock"
+          columns={[
+            { key: 'code', label: 'Code', value: (i) => i.code, render: (i) => <b>{i.code}</b> },
+            { key: 'name', label: 'Item', value: (i) => i.name },
+            { key: 'qty', label: 'Quantity', value: (i) => i.quantity, noSearch: true, className: 'text-right' },
+            { key: 'avg', label: 'Average cost', value: (i) => i.averageCost, money: true, noSearch: true },
+            { key: 'value', label: 'Value', value: (i) => i.value, money: true, noSearch: true },
+          ]}
+          trailing={(i) => <Button variant="ghost" onClick={() => open(i)}>History</Button>} />
       </Card>
       {moves && (
         <Card title={`Movements: ${moves.item.name}`} actions={<button className="text-sm text-brand-700 underline" onClick={() => setMoves(null)}>Close</button>}>

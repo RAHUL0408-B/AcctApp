@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Org } from '../App';
 import { Badge, Select } from '../kit';
-import { DataTable, Icon, RowMenu, type Column } from '../table';
+import { DataTable, ExportMenu, Icon, RowMenu, type Column } from '../table';
 import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Account } from './Lines';
 
@@ -130,7 +130,10 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
       <Card actions={<div className="flex flex-wrap items-center gap-3 text-sm">
         <div role="group" aria-label="View" className="inline-flex overflow-hidden rounded-md border border-slate-300">
           {(['tree', 'list'] as const).map((v) => <button key={v} type="button" aria-pressed={view === v} onClick={() => changeView(v)} className={`px-3 py-1.5 ${view === v ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{v === 'tree' ? 'By statement line and group' : 'List'}</button>)}</div>
-        <label className="flex items-center gap-2 text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label></div>}>
+        <label className="flex items-center gap-2 text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>
+        {view === 'tree' && <ExportMenu orgId={org.id} disabled={!shown.length} build={() => ({ title: 'Chart of accounts', subtitle: 'By statement line, group and sub-group',
+          columns: ['Code', 'Ledger', 'Statement line', 'Group', 'Sub-group', 'Type', '17(5) blocked', 'Status'].map((h) => ({ header: h })),
+          rows: [...shown].sort((a, b) => a.code.localeCompare(b.code, 'en', { numeric: true })).map((a) => [a.code, a.name, fsliName(a.fsli), a.group, a.subGroup, a.type, a.itcBlocked ? 'Yes' : '', a.isActive ? 'Active' : 'Archived']) })} />}</div>}>
         {view === 'list'
           ? <DataTable id="coa" rows={shown} columns={columns} rowKey={(a) => a.id} orgId={org.id} exportTitle="Chart of accounts" searchLabel="Search by number, name or group" trailing={actions} initialSort={{ key: 'code', dir: 1 }} />
           : <div className="space-y-5" data-testid="coa-tree">{tree.map((x) => {

@@ -271,4 +271,46 @@ describe('CA review: contacts, invoices and exports', () => {
     const pnl = (await get('/reports/pnl?from=2020-01-01').expect(200)).body;
     expect(pnl.expenses.items[0]).toEqual(expect.objectContaining({ fsli: expect.any(String), group: expect.any(String) }));
   });
+  it('Rule 46: missing particulars are listed, and strict mode stops the invoice until they are added', async () => {
+    const buyer = (await post('/contacts', { kind: 'customer', name: 'Registered Buyer', gstin: mkGstin('27AAACB7777B1Z'), stateCode: '27' }).expect(201)).body.id;
+    const body = { docType: 'invoice', contactId: buyer, issueDate: today, supplyType: 'regular', total: 118000, lines: [{ description: 'Goods', unit: 'NOS' }] };
+    const warn = (await post('/documents-check', body).expect(201)).body;
+    expect(warn.strict).toBe(false);
+    expect(warn.issues.map((x: any) => x.text).join(' ')).toMatch(/business address is missing/);
+    expect(warn.issues.map((x: any) => x.text).join(' ')).toMatch(/Registered Buyer has a GSTIN but no address/);
+    expect(warn.issues.map((x: any) => x.text).join(' ')).toMatch(/no HSN\/SAC code/);
+    // Off by default: the invoice is issued with a warning only.
+    const line = { description: 'Goods', quantity: 1, rate: 100000, gstRateBp: 1800 };
+    await post('/documents', { docType: 'invoice', contactId: buyer, issueDate: today, lines: [line] }).expect(201);
+    await put('/settings', { strictInvoiceChecks: true }).expect(200);
+    const blocked = await post('/documents', { docType: 'invoice', contactId: buyer, issueDate: today, lines: [line] }).expect(400);
+    expect(blocked.body.message).toMatch(/not issued.*business address is missing.*no address/s);
+    // Credit and debit notes against bills are not checked; fix each problem and the invoice goes through.
+    await ctx.http().put(`${base()}/org-settings`).set(auth(t)).send({ addressLine1: '1 FC Road', city: 'Pune', pincode: '411004' }).expect(200);
+    await put(`/contacts/${buyer}`, { kind: 'customer', name: 'Registered Buyer', gstin: mkGstin('27AAACB7777B1Z'), stateCode: '27', addressLine1: '9 MG Road', city: 'Pune', pincode: '411001' }).expect(200);
+    const missingHsn = await post('/documents', { docType: 'invoice', contactId: buyer, issueDate: today, lines: [line] }).expect(400);
+    expect(missingHsn.body.message).toMatch(/no HSN\/SAC code/);
+    await post('/documents', { docType: 'invoice', contactId: buyer, issueDate: today, lines: [{ ...line, hsnSac: '8708' }] }).expect(201);
+    await put('/settings', { strictInvoiceChecks: false }).expect(200);
+  });
+
+  it('customs duty: a duty ledger line on an export invoice, only when the organisation says duty applies', async () => {
+    const duty = (await post('/accounts', { fsli: 'cl', group: 'Duties & Taxes', subGroup: 'Other Statutory Dues', name: 'Customs Duty Payable' }).expect(201)).body;
+    const buyer = (await post('/contacts', { kind: 'customer', name: 'Dubai Trading LLC', country: 'AE' }).expect(201)).body.id;
+    const goods = { description: 'Spares', quantity: 1, rate: 1000000, gstRateBp: 1800, hsnSac: '8708' };
+    const dutyLine = { description: 'Customs duty', quantity: 1, rate: 50000, gstRateBp: 0, accountId: duty.id };
+    const make = (extra: object = {}) => post('/documents', { docType: 'invoice', contactId: buyer, issueDate: today, supplyType: 'export_igst', lines: [goods, dutyLine], ...extra });
+    expect((await make().expect(400)).body.message).toMatch(/duty ledger can only be used.*turned on/);        // not turned on
+    await put('/settings', { customsDuty: true }).expect(200);
+    expect((await get('/settings').expect(200)).body.customsDuty).toBe(true);
+    expect((await make({ lines: [goods, { ...dutyLine, gstRateBp: 1800 }] }).expect(400)).body.message).toMatch(/carries no GST/);
+    expect((await make({ supplyType: 'regular' }).expect(400)).body.message).toMatch(/duty ledger can only be used/);   // not an export
+    const inv = (await make().expect(201)).body;
+    expect(inv.total).toBe(1000000 + 180000 + 50000);                                                            // goods + IGST + duty
+    const tb = (await get('/trial-balance').expect(200)).body.accounts.find((a: any) => a.code === duty.code);
+    expect(tb.credit - tb.debit).toBe(50000);                                                                    // duty is a liability, not income
+    const listed = (await get('/documents').expect(200)).body.find((d: any) => d.id === inv.id);
+    expect(listed.bookedCode).toMatch(/^\d{4}$/);
+    await put('/settings', { customsDuty: false }).expect(200);
+  });
 });

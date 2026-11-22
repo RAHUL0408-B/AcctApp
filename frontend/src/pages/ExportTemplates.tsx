@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, previewPdf } from '../api';
 import type { Org } from '../App';
 import { Empty, PageHeader } from '../kit';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
 interface Config {
   accent: string; headColour?: string; textColour: string; font: 'sans' | 'serif' | 'mono'; fontSize: number;
@@ -99,7 +99,7 @@ export function ExportTemplates({ org, role }: { org: Org; role: string }) {
       <PageHeader title="Export templates" subtitle="How every PDF and Excel file from this organisation looks: reports, invoices and bills. Choose one template for all reports and one for all invoices, or design your own."
         actions={owner && !draft && <Button onClick={() => startFrom(data.presets[0].config)}>New template</Button>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
-      {!owner && <p className="mb-4 rounded bg-amber-50 px-3 py-2 text-sm text-amber-900">Only the owner can change export templates. Everything you export uses the choices below.</p>}
+      {!owner && <div className="mb-4"><Callout tone="info">Only the owner can change export templates. Everything you export uses the choices below.</Callout></div>}
 
       {draft && cfg && (
         <Card title={draft.id ? `Edit template: ${draft.name}` : 'Design a template'} actions={<Button variant="ghost" onClick={() => { setDraft(null); setPdf(null); }}>Cancel</Button>}>

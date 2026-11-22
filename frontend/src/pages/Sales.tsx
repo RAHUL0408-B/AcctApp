@@ -4,7 +4,7 @@ import { api, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { DataTable, RowMenu, type Column } from '../table';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Contact } from './Contacts';
 import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, linesToApi } from './Lines';
 
@@ -77,7 +77,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
       )}
       {conv && (
         <Card title={`Review before posting: ${conv.number} becomes ${sales ? 'an invoice' : 'a bill'}`} actions={<Button variant="ghost" onClick={() => setConv(null)}>Cancel</Button>}>
-          <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-900">Nothing is in the books yet. Change anything below, then post. The {sales ? 'invoice' : 'bill'} is posted with the lines as they are here.</p>
+          <div className="mb-3"><Callout tone="warning" title="Nothing is in the books yet">Change anything below, then post. The {sales ? 'invoice' : 'bill'} is posted with the lines as they are here.</Callout></div>
           <div className="grid gap-3 md:grid-cols-4">
             <ContactPicker label={sales ? 'Customer' : 'Supplier'} contacts={contacts} value={conv.contactId} onChange={(id) => setConv({ ...conv, contactId: id })} />
             <Field label="Date" type="date" value={conv.issueDate} onChange={(e) => setConv({ ...conv, issueDate: e.target.value })} />
@@ -228,7 +228,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
         <Card title={editing ? `Edit repeating ${noun}` : `New repeating ${noun}`}>
           <div className="grid gap-3 md:grid-cols-4">
             <ContactPicker label={bill ? 'Supplier' : 'Customer'} contacts={contacts} value={f.contactId} onChange={(id) => { const c = contacts.find((x) => String(x.id) === id); setF({ ...f, contactId: id, ...(bill && c && !editing ? { tdsSection: c.defaultTdsSection ?? f.tdsSection, supplyType: c.rcmDefault ? 'reverse_charge' : !c.gstin ? 'unregistered' : 'regular' } : {}) }); }} />
-            <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x}>{x}</option>)}</Select>
+            <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x} value={x}>{x.charAt(0).toUpperCase() + x.slice(1)}</option>)}</Select>
             <div><Field label={`First ${noun} date`} type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
               {f.nextDate < today() && <p className="mt-1 text-xs text-amber-700">A past date: the runs already due (up to 12) are made as soon as you save.</p>}</div>
             <Field label="Stop after (optional)" type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />

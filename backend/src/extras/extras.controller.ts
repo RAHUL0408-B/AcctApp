@@ -125,7 +125,7 @@ export class ExtrasController {
   async settings(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
     await requireAnyOrg(uid, orgId, ['read', 'sales']); // sales people need the state code to choose CGST+SGST or IGST
     const o = (await getPool().query(`SELECT id,name,gstin,pan,state_code AS "stateCode",fy_start_month AS "fyStartMonth",gst_scheme AS "gstScheme",
-      lut_number AS "lutNumber",lut_from::text AS "lutFrom",lut_to::text AS "lutTo",tan,
+      lut_number AS "lutNumber",lut_from::text AS "lutFrom",lut_to::text AS "lutTo",tan,strict_invoice_checks AS "strictInvoiceChecks",customs_duty_applicable AS "customsDuty",
       require_approval AS "requireApproval",invoice_due_days AS "invoiceDueDays",bill_due_days AS "billDueDays",invoice_terms AS "invoiceTerms"
       FROM organizations WHERE id=$1`, [orgId])).rows[0];
     return num(o, 'id');
@@ -142,23 +142,25 @@ export class ExtrasController {
       lutNumber: z.string().min(5).max(40).nullable().optional(),
       lutFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), lutTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
       tan: z.string().trim().toUpperCase().regex(/^[A-Z]{4}\d{5}[A-Z]$/, 'TAN looks like PNEA12345B').nullable().optional(),
+      strictInvoiceChecks: z.boolean().optional(), customsDuty: z.boolean().optional(),
       requireApproval: z.boolean().optional(),
       invoiceDueDays: z.number().int().min(0).max(365).nullable().optional(),
       billDueDays: z.number().int().min(0).max(365).nullable().optional(),
       invoiceTerms: z.string().max(500).nullable().optional(),
     }), body);
     if (b.lutFrom && b.lutTo && b.lutTo < b.lutFrom) throw new BadRequestException('The LUT end date is before its start date');
-    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,lut_from::text AS lut_from,lut_to::text AS lut_to,tan,require_approval,invoice_due_days,bill_due_days,invoice_terms FROM organizations WHERE id=$1', [orgId])).rows[0];
+    const before = (await getPool().query('SELECT name,gstin,pan,state_code,gst_scheme,lut_number,lut_from::text AS lut_from,lut_to::text AS lut_to,tan,strict_invoice_checks,customs_duty_applicable,require_approval,invoice_due_days,bill_due_days,invoice_terms FROM organizations WHERE id=$1', [orgId])).rows[0];
     const keep = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
     const next = { name: b.name ?? before.name, gstin: keep(b.gstin, before.gstin), pan: keep(b.pan, before.pan),
       gstScheme: b.gstScheme ?? before.gst_scheme, lutNumber: keep(b.lutNumber, before.lut_number), requireApproval: b.requireApproval ?? before.require_approval,
       invoiceDueDays: keep(b.invoiceDueDays, before.invoice_due_days), billDueDays: keep(b.billDueDays, before.bill_due_days), invoiceTerms: keep(b.invoiceTerms, before.invoice_terms) || null,
-      lutFrom: keep(b.lutFrom, before.lut_from), lutTo: keep(b.lutTo, before.lut_to), tan: keep(b.tan, before.tan) };
+      lutFrom: keep(b.lutFrom, before.lut_from), lutTo: keep(b.lutTo, before.lut_to), tan: keep(b.tan, before.tan),
+      strict: b.strictInvoiceChecks ?? before.strict_invoice_checks, customs: b.customsDuty ?? before.customs_duty_applicable };
     const state = next.gstin ? next.gstin.slice(0, 2) : before.state_code;
     return withOrg(orgId, async (c) => {
       await c.query(`UPDATE organizations SET name=$2, gstin=$3, pan=$4, state_code=$5, gst_scheme=$6, lut_number=$7, require_approval=$8,
-                       invoice_due_days=$9, bill_due_days=$10, invoice_terms=$11, lut_from=$12, lut_to=$13, tan=$14 WHERE id=$1`,
-        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval, next.invoiceDueDays, next.billDueDays, next.invoiceTerms, next.lutFrom, next.lutTo, next.tan]);
+                       invoice_due_days=$9, bill_due_days=$10, invoice_terms=$11, lut_from=$12, lut_to=$13, tan=$14, strict_invoice_checks=$15, customs_duty_applicable=$16 WHERE id=$1`,
+        [orgId, next.name, next.gstin, next.pan, state, next.gstScheme, next.lutNumber, next.requireApproval, next.invoiceDueDays, next.billDueDays, next.invoiceTerms, next.lutFrom, next.lutTo, next.tan, next.strict, next.customs]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: 'organization', entityId: orgId, before, after: next, ip });
       return { ok: true, stateCode: state };
     });

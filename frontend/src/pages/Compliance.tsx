@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Empty, PageHeader } from '../kit';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 
 const TABS = [['2b', 'GSTR-2B match'], ['msme', 'MSME payments (43B(h))'], ['itc180', 'ITC 180-day rule']] as const;
 const fyStartOf = (iso: string) => { const y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7)); return m >= 4 ? y : y - 1; };
@@ -158,9 +158,9 @@ function Msme({ org, go }: { org: Org; go: (p: string) => void }) {
       {r && (
         <>
           {r.suppliersWithoutStatus.length > 0 && (
-            <p className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="msme-missing">
+            <Callout tone="warning" testId="msme-missing">
               {r.suppliersWithoutStatus.length} supplier(s) have no MSME status, so their bills are not checked: {r.suppliersWithoutStatus.slice(0, 6).map((s) => s.name).join(', ')}{r.suppliersWithoutStatus.length > 6 ? '…' : ''}. Ask them for their Udyam certificate and set it on the supplier. <button className="font-medium underline" onClick={() => go('suppliers')}>Open suppliers</button>
-            </p>)}
+            </Callout>)}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="msme-summary">
             <Tile label="Bills from micro and small suppliers" value={String(r.totals.bills)} note={`₹${fmt(r.totals.paidOnTime)} of ₹${fmt(r.totals.payable)} paid on time`} />
             <Tile label="Overdue: pay now" value={`₹${fmt(r.totals.overdue)}`} tone={r.totals.overdue ? 'red' : 'green'} />

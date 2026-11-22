@@ -81,8 +81,9 @@ export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
 
 type ItemForm = { id?: number; code: string; name: string; kind: string; hsnSac: string; unit: string; rate: string; gstRateBp: string; accountId: string; line?: number };
 
-export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds }:
+export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds, dutyOk = false }:
   { org: Org; lines: Line[]; setLines: (l: Line[]) => void; sales: boolean; accounts: Account[]; currency?: string; intra?: boolean; noTax?: boolean;
+    /** Customs duty may be added as a line (export and SEZ invoices, when the organisation says duty applies). */ dutyOk?: boolean;
     /** The chosen contact's default sales or purchase account, shown as what "Default" means. */ contactDefaultId?: number | null;
     /** TDS this bill will carry, to show the balance payable after it. */ tds?: { section: string; amount: number } | null }) {
   const [rates, setRates] = useState<{ rateBp: number; label: string }[]>([]);
@@ -98,6 +99,7 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
   const [extra, setExtra] = useState(false);
   const showExtra = extra || lines.some((l) => Number(l.cess) > 0 || l.itcBlocked === '1');
   const options = accounts.filter((a) => (sales ? a.type === 'income' : a.type === 'expense' || a.type === 'asset'));
+  const dutyLedgers = dutyOk ? accounts.filter((a) => a.type === 'liability' && /duties/i.test(a.group ?? '')) : [];
   const set = (i: number, k: keyof Line, v: string) => setLines(lines.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const total = (l: Line) => lineAmount(l.quantity, l.rate);
   const rowFor = (it: Item): Line => {
@@ -214,7 +216,8 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
             <td className="pr-1"><select aria-label={`GST ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.gstRateBp} onChange={(e) => set(i, 'gstRateBp', e.target.value)}>
               {rates.map((r) => <option key={r.rateBp} value={r.rateBp}>{r.label}</option>)}</select></td>
             <td className="pr-1"><select aria-label={`Account ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.accountId} onChange={(e) => set(i, 'accountId', e.target.value)}>
-              <option value="">Default: {defaultFor(l)}</option>{options.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</select></td>
+              <option value="">Default: {defaultFor(l)}</option>{options.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
+              {dutyLedgers.length > 0 && <optgroup label="Duties and taxes (customs duty)">{dutyLedgers.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</optgroup>}</select></td>
             {trackingOptions.length > 0 && <td className="pr-1"><select aria-label={`Cost centre ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.trackingOptionId ?? ''} onChange={(e) => set(i, 'trackingOptionId', e.target.value)}>
               <option value="">—</option>{trackingOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></td>}
             {showExtra && <td className="pr-1"><input aria-label={`Cess ${i + 1}`} inputMode="decimal" placeholder="0" className="w-full rounded border border-slate-300 px-2 py-1 text-right" value={l.cess ?? ''} onChange={(e) => set(i, 'cess', e.target.value)} /></td>}
@@ -224,6 +227,7 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
           </tr>))}</tbody>
       </table>
       <button type="button" className="mt-2 text-sm text-brand-700 underline" onClick={() => setLines([...lines, emptyLine()])}>+ Add line</button>
+      {dutyOk && <button type="button" className="ml-4 mt-2 text-sm text-brand-700 underline" onClick={() => setLines([...lines, { ...emptyLine(), description: 'Customs duty', gstRateBp: '0', accountId: dutyLedgers[0] ? String(dutyLedgers[0].id) : '' }])}>+ Add customs duty</button>}
 
       <div className="mt-4 flex justify-end">
         <table className="w-full max-w-md text-sm" data-testid="doc-totals">

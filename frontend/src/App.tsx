@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, getToken, setToken, SessionEnded, wakeServer } from './api';
-import { APP_NAME, ErrorBoundary, Logo } from './ui';
+import { APP_NAME, Callout, ErrorBoundary, Logo } from './ui';
 import { AuthScreen } from './pages/Auth';
 import { Clients } from './pages/Clients';
 import { areaOfPage, NAV, NavItem, OrgPage, PageKey } from './pages/OrgWorkspace';
@@ -274,7 +274,7 @@ export function App() {
             {route === '/clients' && <Clients me={me} orgs={orgs} firmRole={firmRole?.role} onOpen={(id) => navigate(`/o/${id}/dashboard`)} onChanged={load} />}
             {m && org && (allowed({ key: page, sub, label: '' })
               ? <OrgPage key={org.id} org={org} role={role} page={page} sub={sub} go={goOrg} onOrgChanged={load} lastLogin={me.lastLogin?.at} canTeam={canTeam} />
-              : <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900"><p className="font-semibold">You do not have access to this part of {org.name}'s books.</p><p className="mt-1">The firm owner has limited what you can open here. Ask them if you need it.</p></div>)}
+              : <Callout tone="warning" role="alert" title={`You do not have access to this part of ${org.name}'s books.`}>The firm owner has limited what you can open here. Ask them if you need it.</Callout>)}
             {m && !org && <p className="text-sm text-slate-600">That client was not found, or you do not have access.</p>}
             {route === '/practice' && <PracticeOverview onOpen={(id) => navigate(`/o/${id}/dashboard`)} />}
             {route === '/security' && <Security me={me} onChanged={load} />}
@@ -402,7 +402,7 @@ function InviteAccept({ me, token, onDone }: { me: Me; token: string; onDone: ()
   const [info, setInfo] = useState<{ email: string; firmName: string; orgName: string | null; roleText: string } | null>(null);
   const [error, setError] = useState('');
   useEffect(() => { api(`/auth/invitations/${token}`).then(setInfo).catch((e) => setError((e as Error).message)); }, [token]);
-  if (error) return <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>;
+  if (error) return <Callout tone="error">{error}</Callout>;
   if (!info) return <p className="text-sm text-slate-500">Checking your invitation…</p>;
   const mine = info.email.toLowerCase() === me.email.toLowerCase();
   return (

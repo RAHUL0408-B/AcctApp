@@ -13,6 +13,7 @@ import { accountIdByCode, ensureAccount, insertEntry } from '../ledger/post';
 import { UQC, computeGst, isValidGstin, stateOfGstin, supplyRules, SupplyType, TaxLine, toRupees, totals } from '../tax/gst';
 import { issueCost, onHand, recordMove } from '../inventory/stock';
 import { computeTds } from '../tax/tds';
+import { rule46Issues } from '../tax/rule46';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 const PREFIX = { invoice: 'INV', bill: 'BILL', credit_note: 'CN', debit_note: 'DN' } as const;
@@ -104,6 +105,7 @@ export const docSchema = z.object({
 
 export const OUTSTANDING_SQL = `
   SELECT d.*, c.name AS contact_name,
+         (SELECT a.code FROM document_lines l JOIN accounts a ON a.id=l.account_id WHERE l.doc_id=d.id ORDER BY l.id LIMIT 1) AS booked_code,
          d.net_payable - COALESCE(p.paid,0) - COALESCE(n.noted,0) AS outstanding, COALESCE(p.paid,0) AS paid
     FROM documents d JOIN contacts c ON c.id = d.contact_id
     LEFT JOIN (SELECT doc_id, SUM(amount) paid FROM payments GROUP BY doc_id) p ON p.doc_id = d.id
@@ -118,7 +120,7 @@ const shapeDoc = (r: any) => ({
   notes: r.notes ?? null, replacedBy: r.replaced_by ? Number(r.replaced_by) : null,
   rcm: { cgst: Number(r.rcm_cgst ?? 0), sgst: Number(r.rcm_sgst ?? 0), igst: Number(r.rcm_igst ?? 0) },
   currency: r.currency ?? 'INR', fxRate: Number(r.fx_rate ?? 1), foreignTotal: r.foreign_total == null ? null : Number(r.foreign_total),
-  isArchived: !!r.is_archived,
+  isArchived: !!r.is_archived, bookedCode: r.booked_code ?? null,
   paid: r.paid !== undefined ? Number(r.paid) : undefined, outstanding: r.outstanding !== undefined ? Number(r.outstanding) : undefined,
 });
 
@@ -327,6 +329,15 @@ export class DocumentsController {
     return withOrg(orgId, async (c) => ({ number: await peekNumber(c, orgId, type as DocType, d) }));
   }
 
+  /** Rule 46 particulars still missing from an invoice being filled in, shown as warnings on the form. */
+  @Post('orgs/:orgId/documents-check')
+  async docCheck(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown) {
+    await requireAnyOrg(uid, orgId, ['read', 'sales']);
+    const b = parse(z.object({ docType: z.string(), contactId: z.number().int().positive(), supplyType: z.string().default('regular'), issueDate: date, total: z.number().int().min(0).default(0),
+      lines: z.array(z.object({ description: z.string().max(300).default(''), hsnSac: z.string().max(8).optional(), unit: z.string().max(8).optional() })).max(200) }), body);
+    return withOrg(orgId, async (c) => ({ issues: await rule46Issues(c, orgId, b.contactId, b), strict: !!(await c.query('SELECT strict_invoice_checks FROM organizations WHERE id=$1', [orgId])).rows[0]?.strict_invoice_checks }));
+  }
+
   /** Is this number free for this type? Checked as soon as it is typed, so the clash shows before saving. */
   @Get('orgs/:orgId/documents-number-check')
   async numberCheck(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Query('type') type: string, @Query('number') number: string, @Query('except') except?: string) {
@@ -436,7 +447,7 @@ export type DocLineInput = { description: string; hsnSac?: string; unit?: string
  * so they always agree on tax. Amounts are in the document's own currency (paise for rupees).
  */
 export async function priceLines(c: PoolClient, orgId: number, isSales: boolean, contactId: number, issueDate: string, lines: DocLineInput[], placeOfSupply?: string, supplyType: SupplyType = 'regular') {
-  const org = (await c.query('SELECT gstin,state_code,gst_scheme,lut_number,lut_to::text AS lut_to FROM organizations WHERE id=$1', [orgId])).rows[0];
+  const org = (await c.query('SELECT gstin,state_code,gst_scheme,lut_number,lut_to::text AS lut_to,customs_duty_applicable FROM organizations WHERE id=$1', [orgId])).rows[0];
   const contact = (await c.query('SELECT * FROM contacts WHERE id=$1', [contactId])).rows[0];
   if (!contact) throw new BadRequestException('Contact not found');
   if (contact.kind !== 'both' && contact.kind !== (isSales ? 'customer' : 'supplier')) throw new BadRequestException(`This contact is a ${contact.kind}; ${isSales ? 'sales' : 'purchase'} documents need a ${isSales ? 'customer' : 'supplier'}`);
@@ -445,6 +456,7 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
   if (rules.needsLut && !org.lut_number) throw new BadRequestException('Add your Letter of Undertaking (LUT) number in Settings, Duties and taxes, before making zero-rated supplies');
   if (rules.needsLut && org.lut_to && issueDate > org.lut_to) throw new BadRequestException(`Your LUT ${org.lut_number} ended on ${org.lut_to}. Enter the new LUT in Settings, Duties and taxes, or charge IGST.`);
   const isExport = supplyType.startsWith('export');
+  const isExportOrSez = isExport || supplyType.startsWith('sez');
   if (isExport && contact.country === 'IN') throw new BadRequestException('Exports need a customer outside India: set the country on the contact');
 
   // Who supplies, and where is the supply made? (drives CGST+SGST vs IGST)
@@ -473,12 +485,15 @@ export async function priceLines(c: PoolClient, orgId: number, isSales: boolean,
   });
   const wanted = isSales ? ['income'] : ['expense', 'asset'];
   const accIds = [...new Set(resolved.map((l) => l.accountId).filter((x): x is number => !!x))];
-  const accRows = (await c.query('SELECT id,type,itc_blocked FROM accounts WHERE id = ANY($1) AND is_active', [accIds])).rows;
+  const accRows = (await c.query('SELECT id,type,group_name,itc_blocked FROM accounts WHERE id = ANY($1) AND is_active', [accIds])).rows;
   resolved.forEach((l, i) => {
     if (!slabs.has(l.gstRateBp)) throw new BadRequestException(`Line ${i + 1}: ${l.gstRateBp / 100}% is not a configured GST rate`);
     const row = accRows.find((r) => Number(r.id) === l.accountId);
     if (!l.accountId || !row) throw new BadRequestException(`Line ${i + 1}: choose a valid account`);
-    if (!wanted.includes(row.type)) throw new BadRequestException(`Line ${i + 1}: account must be ${wanted.join(' or ')} type`);
+    // Customs duty collected on an export invoice goes to a Duties & Taxes ledger instead of income, when the organisation says it applies.
+    const duty = isSales && isExportOrSez && org.customs_duty_applicable && row.type === 'liability' && /duties/i.test(row.group_name ?? '');
+    if (duty && l.gstRateBp) throw new BadRequestException(`Line ${i + 1}: customs duty carries no GST: set its GST rate to 0%`);
+    if (!duty && !wanted.includes(row.type)) throw new BadRequestException(`Line ${i + 1}: account must be ${wanted.join(' or ')} type${row.type === 'liability' && isSales ? ' (a duty ledger can only be used on an export or SEZ invoice, and only when customs duty is turned on in Settings, Duties and taxes)' : ''}`);
   });
 
   // Blocked credit (section 17(5)) comes from the line, or from its account when the line does not say.
@@ -553,6 +568,11 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
 
   const priced = await priceLines(c, orgId, isSales, b.contactId, b.issueDate, b.lines, b.placeOfSupply, supplyType);
   const { contact, pos, rules } = priced;
+  // Optional strict mode: a tax invoice that misses what Rule 46 asks for is not issued.
+  if ((type === 'invoice' || type === 'credit_note') && (await c.query('SELECT strict_invoice_checks FROM organizations WHERE id=$1', [orgId])).rows[0]?.strict_invoice_checks) {
+    const open = (await rule46Issues(c, orgId, b.contactId, { docType: type, supplyType, issueDate: b.issueDate, total: priced.t.total, lines: b.lines })).filter((x) => x.block);
+    if (open.length) throw new BadRequestException(`This ${type === 'invoice' ? 'tax invoice' : 'credit note'} is missing details the law requires, so it was not issued: ${open.map((x) => x.text).join(' ')}`);
+  }
   const conv = (l: TaxLine): TaxLine => (foreign
     ? { ...l, rate: toRupees(l.rate, fxRate), taxable: toRupees(l.taxable, fxRate), cgst: toRupees(l.cgst, fxRate), sgst: toRupees(l.sgst, fxRate), igst: toRupees(l.igst, fxRate), cess: toRupees(l.cess, fxRate) }
     : l);

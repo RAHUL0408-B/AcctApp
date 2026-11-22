@@ -47,7 +47,7 @@ async function kindOf(orgId: number, sql: string, id: number): Promise<string | 
 export async function areaOf(orgId: number, method: string, rest: string, body: any, query: any): Promise<Area | Area[] | null> {
   const read = method === 'GET' || method === 'HEAD';
   const p = rest.replace(/\/+$/, '');
-  if (read && /^(settings|org-settings|accounts|contacts|items|currencies|tracking|notifications|search|setup-guide|dashboard|numbering|documents-next-number|documents-number-check|tds-preview|account-structure|accounts-next-code|upi-sample|portal|tasks|files(\/\d+\/download)?|doc-templates|export-settings|export-columns\/[\w-]+|asset-groups|fixed-assets-next-code)$/.test(p)) return null;
+  if (read && /^(settings|org-settings|accounts|contacts|items|currencies|tracking|notifications|search|setup-guide|dashboard|numbering|documents-next-number|documents-number-check|tds-preview|documents-check|account-structure|accounts-next-code|upi-sample|portal|tasks|files(\/\d+\/download)?|doc-templates|export-settings|export-columns\/[\w-]+|asset-groups|fixed-assets-next-code)$/.test(p)) return null;
   if (/^(compliance\/|reports\/(gstr1|gstr3b|gstr1-json|tds)$)/.test(p)) return 'tax';
   if (/^reports\/|^export(\/|-multi)|^report-table\/|^trial-balance$/.test(p)) return 'reports';
   if (/^overview\/sales$/.test(p)) return 'sales';

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
-import { Button, Callout, Card, ErrorMsg, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Ok, useAction } from '../ui';
 import { FORMATS, Icon, exportTable, type ExportFormat, type ExportTable } from '../table';
 import { CombinePanel } from '../export';
 
@@ -49,9 +49,16 @@ export function rollUp(items: Item[], level: Level): { key: string; label: strin
 
 export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string; go?: (p: string) => void }) {
   // "reports/ar-run" (from a dashboard figure) opens the report already run; a menu link waits for Run.
-  const known = (k?: string) => { const x = k === 'alll' ? 'ledger' : k?.replace(/-run$/, ''); return x && REPORTS.some(([r]) => r === x) ? x : undefined; };
+  const known = (k?: string) => { const x = k === 'alll' || k?.startsWith('ledger-') ? 'ledger' : k?.replace(/-run$/, ''); return x && REPORTS.some(([r]) => r === x) ? x : undefined; };
   const [rep, setRep] = useState<string>(known(initial) ?? 'pnl');
-  useEffect(() => { const k = known(initial); if (k) { setRep(k); setData(null); if (initial?.endsWith('-run')) load(k); } }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const k = known(initial);
+    if (!k) return;
+    setRep(k); setData(null);
+    const one = /^ledger-(.+)$/.exec(initial ?? '');        // "reports/ledger-5000": that account's ledger, already run
+    if (one) { setFromCode(one[1]); setToCode(one[1]); load('ledger', { fromCode: one[1], toCode: one[1] }); }
+    else if (initial?.endsWith('-run')) load(k);
+  }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
   const [days, setDays] = useState('30');
   const [, setFavTick] = useState(0);
   const isFav = favouriteReports().some((f) => f.key === rep);
@@ -415,7 +422,7 @@ function TableReport({ d, org, reload, selectable, onLink }: { d: any; org: Org;
           <Button variant="danger" disabled={busy} onClick={() => act('delete')}>Delete selected</Button>
           <Button variant="ghost" disabled={busy} onClick={() => act('archive')}>Archive selected</Button>
           <Button variant="ghost" onClick={() => setPicked(new Set())}>Clear</Button></div>)}
-      <div className="mb-2 space-y-2"><ErrorMsg msg={error} />{ok && <p className="rounded bg-green-50 px-3 py-2 text-green-800">{ok}</p>}</div>
+      <div className="mb-2 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       <div className="overflow-x-auto">
         <table className="w-full" data-testid="table-report"><thead><tr className="text-left text-slate-500">{selectable && <th className="w-8" />}{d.columns.map((c: any, i: number) => <th key={i} className={c.type === 'money' ? 'text-right' : ''}>{c.header}</th>)}</tr></thead>
           <tbody>{d.rows.map((r: (string | number)[], ri: number) => (

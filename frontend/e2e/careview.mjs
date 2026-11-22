@@ -137,6 +137,7 @@ await btn('Use IGST as worked out').click();
 await page.getByLabel('Description 1').fill('Steel pipes');
 await page.getByLabel('Rate 1').fill('10000');
 await page.getByText('IGST @ 18% on ₹10,000.00').waitFor();
+await page.getByTestId('rule46-issues').getByText(/business address is missing/).waitFor();      // Rule 46 particulars missing are shown while filling the form
 await btn('Create').click();
 await ok(/Created INV\/\d\d-\d\d\/0001: total ₹11,800\.00/);
 await btn('New invoice').click();
@@ -178,6 +179,26 @@ await page.getByRole('columnheader', { name: 'Supply type' }).waitFor();
 const csv = await download(async () => { await page.locator('main').getByRole('button', { name: /^Export/ }).last().click(); await page.getByRole('menuitem', { name: 'CSV (.csv)' }).click(); });
 assert.match(csv.buf.toString('utf8'), /Supply type/);
 step('credit note copies the invoice and shows the balance left; payment in a dialog; status "Paid"; search, saved column view, CSV export; reminder for one invoice from the ⋮ menu');
+
+// ---- 23: an amount opens the ledger it was booked to
+await page.getByRole('button', { name: /^Ledger of INV/ }).first().click();
+await heading('Reports');
+await page.getByTestId('table-report').waitFor();
+step('an invoice amount opens the ledger it was booked to');
+
+// ---- 11: unit of measurement on a product, shown in its list
+await menu('Sales', 'Products and services');
+await heading('Products and services');
+await btn('New item').click();
+await page.getByLabel('Code', { exact: true }).fill('PIPE-1');
+await page.getByLabel('Name', { exact: true }).fill('Steel pipe');
+await page.getByLabel('Kind').selectOption('goods');
+await page.getByLabel('Item unit').selectOption('MTR');
+await btn('Save item').click();
+await page.getByRole('row', { name: /PIPE-1/ }).getByText('Mtr', { exact: false }).or(page.getByRole('row', { name: /PIPE-1/ }).getByText('MTR')).first().waitFor();
+await page.getByLabel('Search products and services (name, code, HSN)').fill('pipe');
+await page.getByRole('cell', { name: 'PIPE-1' }).waitFor();
+step('product with a unit of measurement; searchable list');
 
 // ---- 6, 7, 18, 19, 24: chart of accounts
 await menu('Accounting', 'Chart of accounts');

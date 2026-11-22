@@ -27,7 +27,7 @@ export function Tasks({ org, canPost }: { org: Org; canPost: boolean }) {
       <Card>
         <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Task</th><th>Due</th><th>Status</th><th /></tr></thead>
           <tbody>{tasks.map((t) => (
-            <tr key={t.id} className="border-t border-slate-100"><td>{t.title}</td><td className={t.status === 'open' && t.dueDate < today() ? 'text-red-700' : ''}>{t.dueDate}</td><td>{t.status}</td>
+            <tr key={t.id} className="border-t border-slate-100"><td>{t.title}</td><td className={t.status === 'open' && t.dueDate < today() ? 'text-red-700' : ''}>{t.dueDate}</td><td className="capitalize">{t.status}</td>
               <td className="text-right">{canPost && t.status === 'open' && <Button variant="ghost" onClick={() => run(async () => { await api(`/orgs/${org.id}/tasks/${t.id}/complete`, { method: 'POST', body: {} }); load(); })}>Done</Button>}</td></tr>))}</tbody></table>
       </Card>
     </>

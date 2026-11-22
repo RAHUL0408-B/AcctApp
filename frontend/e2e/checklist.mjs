@@ -200,7 +200,7 @@ await page.getByLabel('Description 1').fill('Chairs');
 await page.getByLabel('Rate 1').fill('500');
 await btn('Create').click();
 await ok(/Created MT\/002/);
-await page.getByRole('button', { name: 'Edit MT/002' }).click();
+await page.getByRole('button', { name: 'Open MT/002' }).first().click();
 await page.getByLabel('Rate 1').fill('600');
 await btn('Save changes').click();
 await ok(/Updated MT\/002: total ₹708\.00/);
@@ -220,7 +220,7 @@ await page.getByLabel('Credit 2').fill('100');
 await page.getByLabel('Repeat automatically').check();
 await page.getByLabel('Rule name').fill('Insurance');
 await btn('Save rule').click();
-await page.getByRole('cell', { name: 'Insurance' }).waitFor();
+await page.getByRole('cell', { name: 'Insurance' }).first().waitFor();
 item(9, 'journal rule that posts the entry automatically');
 
 // 10, 20. Products on a purchase order; edit before converting to a bill

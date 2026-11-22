@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
+import { DataTable } from '../table';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import type { Contact } from './Contacts';
 import type { Account } from './Lines';
@@ -55,14 +56,17 @@ export function Projects({ org, canPost, accounts }: { org: Org; canPost: boolea
         </Card>
       )}
       <Card>
-        {list.length === 0 ? <Empty text="No projects yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left"><th>Project</th><th>Customer</th><th>Status</th><th className="text-right">Time</th><th className="text-right">Estimate used</th><th className="text-right">To invoice</th><th className="text-right">Invoiced</th><th /></tr></thead>
-            <tbody>{list.map((p) => (
-              <tr key={p.id}><td className="font-medium">{p.name}</td><td>{p.contactName}</td><td><Badge text={p.status === 'closed' ? 'closed' : 'in progress'} /></td>
-                <td className="text-right">{hm(p.minutes)}</td><td className="text-right">{p.estimateUsedPct == null ? '—' : `${p.estimateUsedPct}%`}</td>
-                <td className="text-right">{fmt(p.toInvoice)}</td><td className="text-right">{fmt(p.invoiced)}</td>
-                <td className="text-right"><Button variant="ghost" onClick={() => run(() => openProject(p.id))}>Open</Button></td></tr>))}</tbody></table>
-        )}
+        <DataTable id="projects" rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle="Projects" empty="No projects yet." searchLabel="Search projects"
+          columns={[
+            { key: 'name', label: 'Project', value: (p) => p.name, render: (p) => <b>{p.name}</b> },
+            { key: 'customer', label: 'Customer', value: (p) => p.contactName },
+            { key: 'status', label: 'Status', value: (p) => (p.status === 'closed' ? 'closed' : 'in progress'), render: (p) => <Badge text={p.status === 'closed' ? 'closed' : 'in progress'} /> },
+            { key: 'time', label: 'Time', value: (p) => hm(p.minutes), noSearch: true, className: 'text-right' },
+            { key: 'est', label: 'Estimate used', value: (p) => (p.estimateUsedPct == null ? null : `${p.estimateUsedPct}%`), noSearch: true, className: 'text-right' },
+            { key: 'toinv', label: 'To invoice', value: (p) => p.toInvoice, money: true, noSearch: true },
+            { key: 'inv', label: 'Invoiced', value: (p) => p.invoiced, money: true, noSearch: true },
+          ]}
+          trailing={(p) => <Button variant="ghost" onClick={() => run(() => openProject(p.id))}>Open</Button>} />
       </Card>
 
       {open && (

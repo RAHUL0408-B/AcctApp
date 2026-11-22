@@ -458,7 +458,7 @@ function History({ org }: { org: Org }) {
   return (
     <>
       <ErrorMsg msg={error} />
-      <Card title="Changes, newest first" actions={<span className="flex gap-2"><input aria-label="Filter history" placeholder="e.g. document, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm" /><Button variant="ghost" onClick={() => load()}>Filter</Button>
+      <Card title="Changes, newest first" actions={<span className="flex flex-wrap gap-2"><input aria-label="Filter history" placeholder="e.g. document, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-40 max-w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm sm:w-56" /><Button variant="ghost" onClick={() => load()}>Filter</Button>
         <ExportMenu orgId={org.id} disabled={!rows?.length} build={() => ({ title: 'History', subtitle: q ? `Filter: ${q}` : 'Newest first',
           columns: [{ header: 'When' }, { header: 'Who' }, { header: 'What' }, { header: 'Record' }, { header: 'Details' }],
           rows: (rows ?? []).map((r) => [new Date(r.at).toLocaleString('en-IN'), r.user, ACTION_TEXT[r.action] ?? r.action.replace(/_/g, ' '), `${r.entity.replace(/_/g, ' ')}${r.entityId ? ` #${r.entityId}` : ''}`, r.after ? JSON.stringify(r.after).slice(0, 1500) : '']) })} /></span>}>
@@ -512,19 +512,19 @@ export function SettingsSection({ org, role, sub, go }: { org: Org; role: string
 /** GST, PAN and TAN, the LUT for zero-rated supplies, and the ledgers for duties and taxes (add one for customs duty, cess…). */
 function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; go: (p: string) => void }) {
   const { editing } = useEditing();
-  const [f, setF] = useState<{ gstin: string; pan: string; tan: string; gstScheme: string; lutNumber: string; lutFrom: string; lutTo: string } | null>(null);
+  const [f, setF] = useState<{ gstin: string; pan: string; tan: string; gstScheme: string; lutNumber: string; lutFrom: string; lutTo: string; strict: boolean; customs: boolean } | null>(null);
   const [ledgers, setLedgers] = useState<{ id: number; code: string; name: string; group: string; subGroup: string | null; isActive: boolean }[]>([]);
   const [nl, setNl] = useState({ name: '', subGroup: 'Other Statutory Dues' });
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
   const load = () => {
-    api(`/orgs/${org.id}/settings`).then((s) => setF({ gstin: s.gstin ?? '', pan: s.pan ?? '', tan: s.tan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', lutFrom: s.lutFrom ?? '', lutTo: s.lutTo ?? '' }));
+    api(`/orgs/${org.id}/settings`).then((s) => setF({ gstin: s.gstin ?? '', pan: s.pan ?? '', tan: s.tan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', lutFrom: s.lutFrom ?? '', lutTo: s.lutTo ?? '', strict: !!s.strictInvoiceChecks, customs: !!s.customsDuty }));
     api<any[]>(`/orgs/${org.id}/accounts`).then((a) => setLedgers(a.filter((x) => /duties|tax|gst|tds|statutory/i.test(`${x.group} ${x.subGroup ?? ''}`) && x.type === 'liability')));
   };
   useEffect(load, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!f) return <p className="text-slate-500">Loading…</p>;
   const editable = canManage && editing;
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: k === 'lutFrom' || k === 'lutTo' || k === 'gstScheme' ? e.target.value : e.target.value.toUpperCase() });
+  const set = (k: 'gstin' | 'pan' | 'tan' | 'gstScheme' | 'lutNumber' | 'lutFrom' | 'lutTo') => (e: { target: { value: string } }) => setF({ ...f, [k]: k === 'lutFrom' || k === 'lutTo' || k === 'gstScheme' ? e.target.value : e.target.value.toUpperCase() });
   const lutOk = !f.lutNumber ? 'No LUT entered: exports and SEZ supplies need IGST.' : f.lutTo && f.lutTo < new Date().toISOString().slice(0, 10) ? `The LUT ended on ${f.lutTo}: enter the new one.` : `LUT ${f.lutNumber}${f.lutTo ? ` valid up to ${f.lutTo}` : ''}: exports and SEZ supplies can be zero-rated.`;
   return (
     <>
@@ -545,8 +545,14 @@ function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; 
         </div>
         <p className="mt-2 text-xs text-slate-500">{lutOk} An overseas or SEZ customer's invoice picks "under LUT" while it is valid, and "with IGST" otherwise.</p>
       </Card>
+      <Card title="Invoice rules">
+        <div className="space-y-2">
+          <Toggle label="Stop tax invoices that miss details the law requires (customer address, HSN, your GSTIN and address) instead of only warning" checked={f.strict} onChange={(v) => setF({ ...f, strict: v })} disabled={!editable} />
+          <Toggle label="Customs duty applies: allow a customs duty line (to a Duties and taxes ledger) on export and SEZ invoices" checked={f.customs} onChange={(v) => setF({ ...f, customs: v })} disabled={!editable} />
+        </div>
+      </Card>
       {editable && <div><Button disabled={busy} onClick={() => run(async () => {
-        await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { gstin: f.gstin || null, pan: f.pan || null, tan: f.tan || null, gstScheme: f.gstScheme, lutNumber: f.lutNumber || null, lutFrom: f.lutFrom || null, lutTo: f.lutTo || null } });
+        await api(`/orgs/${org.id}/settings`, { method: 'PUT', body: { gstin: f.gstin || null, pan: f.pan || null, tan: f.tan || null, gstScheme: f.gstScheme, lutNumber: f.lutNumber || null, lutFrom: f.lutFrom || null, lutTo: f.lutTo || null, strictInvoiceChecks: f.strict, customsDuty: f.customs } });
         setOk('Duties and taxes saved.'); load();
       })}>Save duties and taxes</Button></div>}
       <Card title="Ledgers for duties and taxes">

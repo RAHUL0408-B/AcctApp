@@ -4,6 +4,7 @@ import { api, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { DataTable } from '../table';
 import type { Account } from './Lines';
 
 interface Draft { id: number; docType: string; total: number; status: string; reason: string | null; contactName: string; submittedBy: string; postedNumber: string | null; issueDate: string }
@@ -148,17 +149,22 @@ export function ExpenseClaims({ org, canPost, canManage, accounts }: { org: Org;
       )}
       <Card title="Claims" actions={canPost && <div className="flex flex-wrap gap-2">{canManage && <div className="w-56"><Field label="Reason, if you reject" value={reason} onChange={(e) => setReason(e.target.value)} /></div>}<div className="w-56"><Select label="Repay from" aria-label="Repay from" value={payFrom} onChange={(e) => setPayFrom(e.target.value)}><option value="">Select…</option>{banks.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select></div></div>}>
         {canManage && picked.size > 0 && <div className="mb-3 flex items-center gap-2 rounded bg-brand-50 px-3 py-2 text-sm"><b>{picked.size} selected</b><Button disabled={busy} onClick={approveMany}>Approve selected</Button><Button variant="ghost" onClick={() => setPicked(new Set())}>Clear</Button></div>}
-        {claims.length === 0 ? <Empty text="No claims yet." /> : (
-          <table className="w-full text-sm"><thead><tr className="text-left">{canManage && <th className="w-8"><input type="checkbox" aria-label="Select all submitted claims" checked={submitted.length > 0 && picked.size === submitted.length} onChange={() => setPicked(picked.size === submitted.length ? new Set() : new Set(submitted.map((c) => c.id)))} /></th>}<th>Date</th><th>Claim</th><th>Claimant</th><th className="text-right">Total</th><th>Status</th><th /></tr></thead>
-            <tbody>{claims.map((c) => (
-              <tr key={c.id}>{canManage && <td>{c.status === 'submitted' && <input type="checkbox" aria-label={`Select claim ${c.title}`} checked={picked.has(c.id)} onChange={() => toggleClaim(c.id)} />}</td>}<td>{c.date}</td><td>{c.title}<span className="block text-xs text-slate-500">{c.lines.map((l) => l.description).join(', ')}</span></td><td>{c.claimant}</td><td className="text-right">{fmt(c.total)}</td>
-                <td><Badge text={BADGE_TEXT[c.status] ?? c.status} />{c.reason && <span className="text-xs text-slate-500"> {c.reason}</span>}</td>
-                <td className="space-x-1 whitespace-nowrap text-right">
-                  {canManage && c.status === 'submitted' && <><Button onClick={() => act(c, 'approve')} disabled={busy}>Approve</Button><Button variant="ghost" onClick={() => act(c, 'reject')} disabled={busy || !reason}>Reject</Button></>}
-                  {canPost && c.status === 'approved' && <Button onClick={() => act(c, 'pay')} disabled={busy || !payFrom}>Repay</Button>}
-                  {c.status === 'rejected' && me === c.claimantId && <Button onClick={() => resubmit(c)}>Edit and resubmit</Button>}
-                </td></tr>))}</tbody></table>
-        )}
+        <DataTable id="claims" rows={claims} rowKey={(c) => c.id} orgId={org.id} exportTitle="Expense claims" empty="No claims yet." searchLabel="Search expense claims"
+          leadingHead={canManage ? <input type="checkbox" aria-label="Select all submitted claims" checked={submitted.length > 0 && picked.size === submitted.length} onChange={() => setPicked(picked.size === submitted.length ? new Set() : new Set(submitted.map((c) => c.id)))} /> : undefined}
+          leading={canManage ? (c) => (c.status === 'submitted' ? <input type="checkbox" aria-label={`Select claim ${c.title}`} checked={picked.has(c.id)} onChange={() => toggleClaim(c.id)} /> : null) : undefined}
+          columns={[
+            { key: 'date', label: 'Date', value: (c) => c.date },
+            { key: 'claim', label: 'Claim', value: (c) => `${c.title} ${c.lines.map((l) => l.description).join(' ')}`, render: (c) => <span>{c.title}<span className="block text-xs text-slate-500">{c.lines.map((l) => l.description).join(', ')}</span></span> },
+            { key: 'claimant', label: 'Claimant', value: (c) => c.claimant },
+            { key: 'total', label: 'Total', value: (c) => c.total, money: true, noSearch: true },
+            { key: 'status', label: 'Status', value: (c) => BADGE_TEXT[c.status] ?? c.status, render: (c) => <span><Badge text={BADGE_TEXT[c.status] ?? c.status} />{c.reason && <span className="text-xs text-slate-500"> {c.reason}</span>}</span> },
+          ]}
+          trailing={(c) => (
+            <span className="space-x-1 whitespace-nowrap">
+              {canManage && c.status === 'submitted' && <><Button onClick={() => act(c, 'approve')} disabled={busy}>Approve</Button><Button variant="ghost" onClick={() => act(c, 'reject')} disabled={busy || !reason}>Reject</Button></>}
+              {canPost && c.status === 'approved' && <Button onClick={() => act(c, 'pay')} disabled={busy || !payFrom}>Repay</Button>}
+              {c.status === 'rejected' && me === c.claimantId && <Button onClick={() => resubmit(c)}>Edit and resubmit</Button>}
+            </span>)} />
       </Card>
     </>
   );

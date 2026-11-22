@@ -121,7 +121,7 @@ await btn('Create').click();
 await ok(/Created KS\/2026\/001: total ₹2,360\.00/);
 step('invoice KS/2026/001 created with a typed number; totals shown on the form: 2,000 + 18% = 2,360');
 
-await page.getByRole('button', { name: 'Edit KS/2026/001' }).click();
+await page.getByRole('button', { name: 'Open KS/2026/001' }).first().click();
 await page.getByLabel('Rate 1').fill('3000');
 await btn('Save changes').click();
 await ok(/Updated KS\/2026\/001: total ₹3,540\.00/);
@@ -139,7 +139,7 @@ await page.getByLabel('Amount (₹)').fill('1000');
 await page.getByLabel('Payment account').selectOption({ label: '1010 Bank Account' });
 await btn('Record payment').click();
 await ok('Payment recorded.');
-await page.getByRole('button', { name: 'Edit KS/2026/001' }).click();
+await page.getByRole('button', { name: 'Open KS/2026/001' }).first().click();
 await page.getByText('₹1,000.00').first().waitFor();                  // the payment is listed for unlinking
 await page.getByRole('button', { name: 'Unlink', exact: true }).click();
 await ok('Payment unlinked.');
@@ -163,7 +163,7 @@ await page.getByLabel('Credit 2').fill('1200');
 await page.getByLabel('Repeat automatically').check();
 await page.getByLabel('Rule name').fill('Insurance monthly');
 await btn('Save rule').click();
-await page.getByRole('cell', { name: 'Insurance monthly' }).waitFor();
+await page.getByRole('cell', { name: 'Insurance monthly' }).first().waitFor();
 step('manual journal saved as a repeating rule and listed under Journal rules');
 
 // ---- report as a table, with all-ledgers export button on the ledger report

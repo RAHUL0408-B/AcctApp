@@ -62,7 +62,7 @@ export function DocView({ orgId, id, full, canEdit, go, onClose, onEdit, onDupli
 
   if (!d) return <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">{error ? <ErrorMsg msg={error} /> : 'Loading…'}</div>;
   const sales = d.docType === 'invoice' || d.docType === 'credit_note';
-  const status = d.status === 'void' ? 'void' : (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) === 0 ? 'paid' : (d.outstanding ?? 0) < d.total ? 'part paid' : 'posted';
+  const status = d.status === 'void' ? 'void' : (d.docType === 'invoice' || d.docType === 'bill') && (d.outstanding ?? 0) === 0 ? 'paid' : (d.outstanding ?? 0) < d.netPayable ? 'part paid' : 'posted';
   const cur = d.currency === 'INR' ? '₹' : `${d.currency} `;
   const intra = d.cgst > 0 || d.sgst > 0;
   const contactPage = sales ? 'customers' : 'suppliers';

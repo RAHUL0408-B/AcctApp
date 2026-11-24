@@ -51,7 +51,7 @@ describe('repeating bills, batch payments, access and GST details', () => {
     const sec = tds.includes('194C') ? '194C' : tds[0];
     const first = addDays(today, -40);
     await post('/recurring', { docType: 'bill', contactId: supplier, frequency: 'monthly', nextDate: first, dueDays: 10, autoEmail: true, lines: [line(5000000, { gstRateBp: 1800 })] }).expect(400); // bills are not emailed
-    await post('/recurring', { docType: 'invoice', contactId: customer, frequency: 'monthly', nextDate: first, tdsSection: sec, lines: [line(100000)] }).expect(400);
+    await post('/recurring', { docType: 'invoice', contactId: customer, frequency: 'monthly', nextDate: first, tdsSection: '999Z', lines: [line(100000)] }).expect(400);
     await post('/recurring', { docType: 'bill', contactId: customer, frequency: 'monthly', nextDate: first, lines: [line(100000)] }).expect(400);         // a customer, not a supplier
     const id = (await post('/recurring', { docType: 'bill', contactId: supplier, frequency: 'monthly', nextDate: first, dueDays: 10, tdsSection: sec, notes: 'Maintenance contract', postMode: 'auto', lines: [line(5000000)] }).expect(201)).body.id;
     expect((await get('/recurring?type=bill').expect(200)).body.map((r: any) => r.id)).toEqual([id]);

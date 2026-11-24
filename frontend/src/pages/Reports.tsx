@@ -57,7 +57,7 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
     const k = known(initial);
     if (!k) return;
     setRep(k); setData(null);
-    const one = /^ledger-(.+)$/.exec(initial ?? '');        // "reports/ledger-5000": that account's ledger, already run
+    const one = /^ledger-(?!run$)(.+)$/.exec(initial ?? '');        // "reports/ledger-5000": that account's ledger, already run
     // "reports/ledgers-1000~1099~2026-04-01~2026-04-30": a range of ledgers for given dates (a cash flow month opened)
     const range = /^ledgers-([^~]*)~([^~]*)~(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/.exec(initial ?? '');
     if (one) { setFromCode(one[1]); setToCode(one[1]); load('ledger', { fromCode: one[1], toCode: one[1] }); }
@@ -94,8 +94,11 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
   const load = (r = rep, codes?: { fromCode: string; toCode: string }, dates?: { from: string; to: string }) => run(async () => {
     const mine = ++latest.current;
     setData(null);
-    const q = query(r, codes, dates);
-    if ((r === 'pnlt' && !categoryId) || (r === 'bva' && !budgetId)) throw new Error(r === 'pnlt' ? 'Add a cost centre group under Accounting first.' : 'Create a budget under Accounting first.');
+    let q = query(r, codes, dates);
+    // Opened straight from a link: the budget or cost centre group may not have loaded yet.
+    if (r === 'bva' && !budgetId) { const b = await api<{ id: number }[]>(`/orgs/${org.id}/budgets`); if (b[0]) { setBudgetId(String(b[0].id)); q.set('budgetId', String(b[0].id)); } }
+    if (r === 'pnlt' && !categoryId) { const t = await api<{ id: number }[]>(`/orgs/${org.id}/tracking`); if (t[0]) { setCategoryId(String(t[0].id)); q.set('categoryId', String(t[0].id)); } }
+    if ((r === 'pnlt' && !q.get('categoryId')) || (r === 'bva' && !q.get('budgetId'))) throw new Error(r === 'pnlt' ? 'Add a cost centre group under Accounting first.' : 'Create a budget under Accounting first.');
     const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/report-table/all-ledgers?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}`,
       pnlm: `/reports/pnl-by-month?${q}`, pnlt: `/reports/pnl-by-tracking?${q}`, bva: `/reports/budget-vs-actual?${q}`,

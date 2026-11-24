@@ -120,7 +120,8 @@ await page.getByLabel('Unit 1').selectOption('OTH');
 await page.getByLabel('Rate 1').fill('40000');
 await page.getByTestId('tds-total').getByText('− ₹400.00').waitFor();                       // 1% for an individual under 194C
 assert.strictEqual(await page.getByTestId('net-payable').innerText(), '₹39,600.00');
-assert.strictEqual(await page.getByTestId('gst-total').innerText(), '₹0.00');
+await page.getByTestId('gst-na').waitFor();                                               // unregistered supplier: no GST rows, the rate shows N/A
+assert.strictEqual(await page.getByLabel('GST 1').inputValue(), 'N/A');
 await page.getByLabel('Supplier bill no.').fill('RT/77');
 await btn('Create').click();
 await ok(/Created BILL\/\d\d-\d\d\/\d+: total ₹40,000\.00, TDS ₹400\.00, net payable ₹39,600\.00/);

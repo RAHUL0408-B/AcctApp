@@ -141,7 +141,7 @@ describe('sales and purchase settings, overviews, cash flow, notifications, sear
   it('search finds the customer and their invoices; short queries return nothing', async () => {
     const r = (await get(org, '/search?q=acme').expect(200)).body.results;
     expect(r.filter((x: any) => x.type === 'Contact')).toHaveLength(1);
-    expect(r.filter((x: any) => x.type === 'invoice')).toHaveLength(2);
+    expect(r.filter((x: any) => x.type === 'Invoice')).toHaveLength(2);
     expect((await get(org, '/search?q=a').expect(200)).body.results).toEqual([]);
     expect((await get(org, '/search?q=%25').expect(200)).body.results).toEqual([]); // % is matched literally, not as a wildcard
   });

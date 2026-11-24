@@ -314,7 +314,7 @@ export function DataTable<T>({ id, rows, columns, rowKey, orgId, exportTitle, ex
               </div>
             )}
           </div>
-          {orgId && <ExportMenu orgId={orgId} build={build} disabled={!sorted.length} />}
+          {orgId && <ExportMenu orgId={orgId} build={build} disabled={!sorted.length && !totals} />}
         </div>
       </div>
       {filtering && (

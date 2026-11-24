@@ -128,7 +128,7 @@ await page.getByRole('combobox', { name: 'Group', exact: true }).click(); await 
 await page.getByLabel('Name').fill('ICICI Bank');
 await page.waitForFunction(() => document.querySelector('input[aria-label="Code"]')?.value === '1020'); // the next number after 1010, suggested
 await btn('Add ledger').click();
-await page.getByText('1020 · ICICI Bank').waitFor();
+await page.getByText('1020 · ICICI Bank').first().waitFor();
 await menu('Accounting', 'Bank accounts');
 await page.getByLabel('Bank name').fill('ICICI');
 await page.getByLabel('Bank ledger account').selectOption({ label: '1020 ICICI Bank' });
@@ -186,7 +186,7 @@ await page.getByLabel('Contact', { exact: true }).fill('CA Sharma');
 await page.getByLabel('TDS section').selectOption('194J');
 await page.getByLabel('Description 1').fill('Audit fees');
 await page.getByLabel('Rate 1').fill('60000');
-await page.getByLabel('GST 1').selectOption({ index: 0 });
+if (await page.getByLabel('GST 1').isEnabled()) await page.getByLabel('GST 1').selectOption({ index: 0 }); // an unregistered supplier's bill shows N/A
 await btn('Create').click();
 await ok(/TDS ₹6,000\.00/);
 await menu('Tax', 'TDS deducted'); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();

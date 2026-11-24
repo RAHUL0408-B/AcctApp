@@ -79,7 +79,7 @@ describe('purchase bill with TDS', () => {
     expect(tb.accounts.find((a: any) => a.code === '1300').debit).toBe(540000);
   });
   it('TDS only on bills, and unknown sections are rejected', async () => {
-    await post('/documents', { docType: 'invoice', contactId: custMH, issueDate: '2025-06-05', tdsSection: '194J', lines: [{ description: 'x', quantity: 1, rate: 100, gstRateBp: 0 }] }).expect(400);
+    await post('/documents', { docType: 'credit_note', contactId: custMH, issueDate: '2025-06-05', tdsSection: '194J', lines: [{ description: 'x', quantity: 1, rate: 100, gstRateBp: 0 }] }).expect(400);
     await post('/documents', { docType: 'bill', contactId: supplier, issueDate: '2025-06-05', tdsSection: '999Z', lines: [{ description: 'x', quantity: 1, rate: 100, gstRateBp: 0 }] }).expect(400);
   });
 });

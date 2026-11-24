@@ -120,6 +120,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId, v
 
   return (
     <>
+      <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       {view === 'list' && (
         <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
           {canPost && <Button onClick={() => { clear(); setEditingEntry(null); setFormOpen(true); }}><span aria-hidden>＋ </span>New journal</Button>}
@@ -200,7 +201,6 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId, v
             {!accounts.length && <p className="text-xs text-slate-500">Loading accounts…</p>}
             {mustReview && <p className="text-xs text-slate-500">Your organisation asks an accountant to review journals before they are posted.</p>}
           </div>
-          <div className="mt-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
         </Card>
       )}
 

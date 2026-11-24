@@ -214,7 +214,7 @@ function ContactPage(p: Props & { id: number }) {
         <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">{facts.map(([k, v]) => <div key={k}><dt className="text-xs font-medium uppercase text-slate-500">{k}</dt><dd className="text-slate-800">{v}</dd></div>)}</dl>
       </Card>
       {!restricted && stmt && (
-        <Card title={`Statement: ${c.name}`} actions={<ExportMenu orgId={org.id} build={build} />}>
+        <Card title={`Statement: ${c.name}`}>
           <div className="mb-3 flex flex-wrap items-end gap-3">
             <Field label="From" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
             <Field label="To" type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />

@@ -2,6 +2,7 @@
 // expense-claim resubmission, plus the top bar (columns, hover switch, breadcrumb, small-screen menu).
 // Needs API (:3000) and web (:5173) running and Google Chrome installed.  Run: node e2e/changes.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 
 const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
@@ -12,7 +13,8 @@ page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000));
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 let dialogs = [];
-page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); }); // confirmations (delete, unlink) are accepted and recorded
+page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
+const confirms = autoConfirm(page); // confirmations (delete, unlink) are accepted and recorded
 // Open a side-menu section unless it is already open (clicking an open one closes it).
 const openSection = async (g, root = page) => { const b = root.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: g, exact: true }); if ((await b.getAttribute('aria-expanded')) !== 'true') await b.click(); };
 const step = (s) => console.log('✓', s);
@@ -30,7 +32,7 @@ const menu = async (group, item, root = page) => {
   await box.getByRole('button', { name: item, exact: true }).click();
 };
 const ok = (re) => page.getByText(re).first().waitFor();
-const contactsLoaded = () => page.locator('datalist option').first().waitFor({ state: 'attached' });
+const contactsLoaded = () => page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 const today = new Date().toISOString().slice(0, 10);
 
 // ---- set up a firm and a client
@@ -148,7 +150,7 @@ step('Receive payment recorded Rs 1,000, then unlinked so the invoice is outstan
 await page.getByLabel('Select KS/2026/001', { exact: true }).check();
 await btn('Delete selected').click();
 await ok(/1 deleted/);
-assert(dialogs.some((d) => /Delete 1/.test(d) || /cancel/i.test(d)), 'delete asked for confirmation');
+assert([...dialogs, ...(await confirms.messages())].some((d) => /Delete 1/.test(d) || /cancel/i.test(d)), 'delete asked for confirmation');
 await page.getByLabel('Show archived').waitFor();
 step('invoice deleted (cancelled with a reversing entry) after a confirmation');
 

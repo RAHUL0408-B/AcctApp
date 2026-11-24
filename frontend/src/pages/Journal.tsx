@@ -1,10 +1,11 @@
 // Manual journals: post an entry (with documents attached), set rules that post it automatically, and reverse entries one at a time or many at once.
 import { useCallback, useEffect, useState } from 'react';
+import { AccountCombo } from '../ledgerdialog';
 import { api, download, fileToBase64, fmt, toPaise } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, Select } from '../kit';
 import { DataTable, Icon, RowMenu, type Column } from '../table';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import type { Account, TrackingCategory } from './Lines';
 
 interface Entry { id: number; date: string; narration: string; reference?: string | null; reversesId: number | null; voucherNo?: string | null; createdBy?: string | null; reversed?: boolean; lines: { accountId: number; debit: number; credit: number }[] }
@@ -16,21 +17,6 @@ const blankRows = () => [{ accountId: '', debit: '', credit: '', cc: '' }, { acc
 const FREQ = [['monthly', 'Every month'], ['weekly', 'Every week'], ['quarterly', 'Every quarter'], ['yearly', 'Every year']];
 
 /** Account box: type the number or the name, or pick from the list. */
-function AccountInput({ label, accounts, value, onChange }: { label: string; accounts: Account[]; value: string; onChange: (id: string) => void }) {
-  const text = (a: Account) => `${a.code} · ${a.name}`;
-  const chosen = accounts.find((a) => String(a.id) === value);
-  const [typed, setTyped] = useState(chosen ? text(chosen) : '');
-  useEffect(() => { if (chosen) setTyped(text(chosen)); else if (!value) setTyped((t) => (find(t) ? '' : t)); }, [chosen?.id, value]); // eslint-disable-line react-hooks/exhaustive-deps
-  const find = (v: string) => { const t = v.trim().toLowerCase(); return accounts.find((a) => text(a).toLowerCase() === t) ?? accounts.find((a) => a.code.toLowerCase() === t) ?? accounts.find((a) => a.name.toLowerCase() === t); };
-  const pick = (v: string) => { setTyped(v); const hit = find(v); onChange(hit ? String(hit.id) : ''); };
-  // The list can arrive after something was typed: match it again when it does.
-  useEffect(() => { if (typed && !chosen) { const hit = find(typed); if (hit) onChange(String(hit.id)); } }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (<>
-    <input aria-label={label} list="journal-accounts" autoComplete="off" placeholder="Type a number or name…" value={typed} onChange={(e) => pick(e.target.value)}
-      onBlur={() => { if (chosen) setTyped(text(chosen)); }} className={`w-full rounded border px-2 py-1 ${typed && !chosen ? 'border-amber-400 bg-amber-50' : 'border-slate-300'}`} />
-  </>);
-}
-
 export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void; /** show only this entry (opened from a ledger) */ focusId?: number }) {
   const [focus, setFocus] = useState<number | undefined>(focusId);
   useEffect(() => { setFocus(focusId); }, [focusId]);
@@ -70,7 +56,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   };
   const archiveRule = (r: Rule) => run(async () => { await api(`/orgs/${org.id}/journal-rules/${r.id}/archive`, { body: { archived: !r.isArchived } }); setOk(r.isArchived ? 'Rule restored.' : 'Rule archived: it stops and is hidden.'); loadRules(); });
   const deleteRule = (r: Rule) => run(async () => {
-    if (!window.confirm(`Delete the rule "${r.name}"? No more entries will be posted from it. The ${r.runs} entr${r.runs === 1 ? 'y' : 'ies'} it already posted stay in the books: they are NOT reversed.`)) return;
+    if (!await ask(`Delete the rule "${r.name}"? No more entries will be posted from it. The ${r.runs} entr${r.runs === 1 ? 'y' : 'ies'} it already posted stay in the books: they are NOT reversed.`)) return;
     await api(`/orgs/${org.id}/journal-rules/${r.id}`, { method: 'DELETE' }); setOk('Rule deleted. Entries posted earlier are still in the books.'); loadRules();
   });
   // Staff can send a journal to an accountant; when the organisation asks for approval, that is the only way.
@@ -104,7 +90,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   const reverse = (id: number) => run(async () => { await api(`/orgs/${org.id}/journal/${id}/reverse`, { body: { date: today, reason } }); setOk('Reversal posted.'); load(); });
   const bulkDelete = () => run(async () => {
     const ids = [...selected]; if (!ids.length) return;
-    if (!window.confirm(`Delete ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}? Posted entries cannot be erased from the books, so each is cancelled by a reversing entry. Entries that belong to an invoice, bill or payment are skipped.`)) return;
+    if (!await ask(`Delete ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}? Posted entries cannot be erased from the books, so each is cancelled by a reversing entry. Entries that belong to an invoice, bill or payment are skipped.`)) return;
     const r = await api(`/orgs/${org.id}/journal/bulk-reverse`, { body: { ids, date: today, reason } });
     setOk(`${r.reversed.length} reversed.${r.failed.length ? ` ${r.failed.length} skipped: ${r.failed.map((x: any) => `#${x.id} (${x.reason})`).join('; ')}` : ''}`); load();
   });
@@ -142,7 +128,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}>
-                  <td className="pr-2"><AccountInput label={`Account ${i + 1}`} accounts={accounts} value={r.accountId} onChange={(id) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, accountId: id } : x)))} /></td>
+                  <td className="pr-2"><AccountCombo orgId={org.id} ariaLabel={`Account ${i + 1}`} accounts={accounts} value={r.accountId} onChange={(id) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, accountId: id } : x)))} /></td>
                   <td className="pr-2"><input aria-label={`Debit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.debit}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, debit: e.target.value, credit: e.target.value ? '' : x.credit } : x)))} /></td>
                   <td className="pr-2"><input aria-label={`Credit ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={r.credit}
@@ -158,7 +144,6 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
 
             <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : totalD !== totalC ? `· difference ${fmt(Math.abs(totalD - totalC))}` : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td>{centres.length > 0 && <td />}<td /></tr></tfoot>
           </table>
-          <datalist id="journal-accounts">{accounts.map((a) => <option key={a.id} value={`${a.code} · ${a.name}`} />)}</datalist>
           <div className="mt-3 grid gap-4 md:grid-cols-2">
             <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Attachments (policy, bill, working)</span>
               <label className={`inline-flex items-center gap-2 rounded-md border-2 border-dashed px-4 py-2 font-medium ${rule.on ? 'cursor-not-allowed border-slate-200 text-slate-400' : 'cursor-pointer border-brand-300 bg-brand-50/50 text-brand-700 hover:border-brand-500 hover:bg-brand-50'}`}>

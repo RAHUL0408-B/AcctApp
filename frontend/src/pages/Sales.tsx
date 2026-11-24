@@ -4,7 +4,7 @@ import { api, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader, Select } from '../kit';
 import { DataTable, RowMenu, type Column } from '../table';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import type { Contact } from './Contacts';
 import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, linesToApi } from './Lines';
 
@@ -67,7 +67,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
       {show && (
         <Card title={editing ? `Edit ${sales ? 'quote' : 'purchase order'}` : sales ? 'New quote' : 'New purchase order'}>
           <div className="grid gap-3 md:grid-cols-3">
-            <ContactPicker label={sales ? 'Customer' : 'Supplier'} contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
+            <ContactPicker label={sales ? 'Customer' : 'Supplier'} org={org} kind={sales ? 'customer' : 'supplier'} onSaved={() => { api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind === 'both' || x.kind === (sales ? 'customer' : 'supplier')))); }} contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
             <Field label="Date" type="date" value={f.issueDate} onChange={(e) => setF({ ...f, issueDate: e.target.value })} />
             <Field label={sales ? 'Valid until' : 'Delivery by'} type="date" value={f.expiryDate} onChange={(e) => setF({ ...f, expiryDate: e.target.value })} />
           </div>
@@ -79,7 +79,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
         <Card title={`Review before posting: ${conv.number} becomes ${sales ? 'an invoice' : 'a bill'}`} actions={<Button variant="ghost" onClick={() => setConv(null)}>Cancel</Button>}>
           <div className="mb-3"><Callout tone="warning" title="Nothing is in the books yet">Change anything below, then post. The {sales ? 'invoice' : 'bill'} is posted with the lines as they are here.</Callout></div>
           <div className="grid gap-3 md:grid-cols-4">
-            <ContactPicker label={sales ? 'Customer' : 'Supplier'} contacts={contacts} value={conv.contactId} onChange={(id) => setConv({ ...conv, contactId: id })} />
+            <ContactPicker label={sales ? 'Customer' : 'Supplier'} org={org} kind={sales ? 'customer' : 'supplier'} onSaved={() => { api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind === 'both' || x.kind === (sales ? 'customer' : 'supplier')))); }} contacts={contacts} value={conv.contactId} onChange={(id) => setConv({ ...conv, contactId: id })} />
             <Field label="Date" type="date" value={conv.issueDate} onChange={(e) => setConv({ ...conv, issueDate: e.target.value })} />
             <Field label="Due date" type="date" value={conv.dueDate} onChange={(e) => setConv({ ...conv, dueDate: e.target.value })} />
             <Field label={`${sales ? 'Invoice' : 'Bill'} number`} aria-label="Document number" placeholder="Automatic" value={conv.docNumber} onChange={(e) => setConv({ ...conv, docNumber: e.target.value })} />
@@ -196,10 +196,10 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
   };
   const archive = (r: Rec) => run(async () => { await api(`/orgs/${org.id}/recurring/${r.id}/archive`, { body: { archived: !r.isArchived } }); setOk(r.isArchived ? 'Schedule restored.' : 'Schedule archived: it stops and is hidden.'); load(); });
   const remove = (r: Rec) => run(async () => {
-    if (!window.confirm(`Delete the repeating ${noun} for ${r.contactName}? No more ${noun}s will be made. The ${r.made ?? 0} ${noun}(s) already posted from it stay in the books: they are NOT reversed.`)) return;
+    if (!await ask(`Delete the repeating ${noun} for ${r.contactName}? No more ${noun}s will be made. The ${r.made ?? 0} ${noun}(s) already posted from it stay in the books: they are NOT reversed.`)) return;
     await api(`/orgs/${org.id}/recurring/${r.id}`, { method: 'DELETE' }); setOk('Schedule deleted. The ones posted earlier are still in the books.'); load();
   });
-  const skip = (d: Due) => run(async () => { if (!window.confirm(`Skip the ${noun} for ${d.contactName} dated ${d.dueDate}? Nothing is posted for it.`)) return; await api(`/orgs/${org.id}/recurring-due/${d.id}`, { body: { status: 'skipped' } }); load(); });
+  const skip = (d: Due) => run(async () => { if (!await ask(`Skip the ${noun} for ${d.contactName} dated ${d.dueDate}? Nothing is posted for it.`)) return; await api(`/orgs/${org.id}/recurring-due/${d.id}`, { body: { status: 'skipped' } }); load(); });
   const shown = list.filter((r) => showArchived || !r.isArchived);
   const columns: Column<Rec>[] = [
     { key: 'contact', label: bill ? 'Supplier' : 'Customer', value: (r) => r.contactName },
@@ -227,7 +227,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
       {show && (
         <Card title={editing ? `Edit repeating ${noun}` : `New repeating ${noun}`}>
           <div className="grid gap-3 md:grid-cols-4">
-            <ContactPicker label={bill ? 'Supplier' : 'Customer'} contacts={contacts} value={f.contactId} onChange={(id) => { const c = contacts.find((x) => String(x.id) === id); setF({ ...f, contactId: id, ...(bill && c && !editing ? { tdsSection: c.defaultTdsSection ?? f.tdsSection, supplyType: c.rcmDefault ? 'reverse_charge' : !c.gstin ? 'unregistered' : 'regular' } : {}) }); }} />
+            <ContactPicker label={bill ? 'Supplier' : 'Customer'} org={org} accounts={accounts} kind={bill ? 'supplier' : 'customer'} onSaved={() => { api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind !== (bill ? 'customer' : 'supplier')))); }} contacts={contacts} value={f.contactId} onChange={(id) => { const c = contacts.find((x) => String(x.id) === id); setF({ ...f, contactId: id, ...(bill && c && !editing ? { tdsSection: c.defaultTdsSection ?? f.tdsSection, supplyType: c.rcmDefault ? 'reverse_charge' : !c.gstin ? 'unregistered' : 'regular' } : {}) }); }} />
             <Select label="Repeat" aria-label="Frequency" value={f.frequency} onChange={(e) => setF({ ...f, frequency: e.target.value })}>{['weekly', 'monthly', 'quarterly', 'yearly'].map((x) => <option key={x} value={x}>{x.charAt(0).toUpperCase() + x.slice(1)}</option>)}</Select>
             <div><Field label={`First ${noun} date`} type="date" value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} />
               {f.nextDate < today() && <p className="mt-1 text-xs text-amber-700">A past date: the runs already due (up to 12) are made as soon as you save.</p>}</div>

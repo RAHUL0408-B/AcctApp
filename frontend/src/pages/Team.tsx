@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Me, Org } from '../App';
 import { Badge, Empty, PageHeader } from '../kit';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 
 type Level = 'none' | 'view' | 'edit';
 interface Member { id: number; userId: number; name: string; email: string; emailVerified: boolean; twoFactor: boolean; role: string; orgId: number | null; orgName: string | null; access: Record<string, Level> | null }
@@ -70,7 +70,7 @@ export function TeamPage({ me, orgs }: { me: Me; orgs: Org[] }) {
     setOk(r.access ? `${limit.m.name}'s access is limited: ${summary(r.access)}.` : `${limit.m.name} has everything their role allows again.`); setLimit(null); load();
   });
   const remove = (m: Member) => run(async () => {
-    if (!window.confirm(`Remove ${m.name}'s access${m.orgName ? ` to ${m.orgName}` : ''}? They can no longer open these books.`)) return;
+    if (!await ask(`Remove ${m.name}'s access${m.orgName ? ` to ${m.orgName}` : ''}? They can no longer open these books.`)) return;
     await api(`/firms/${firmId}/members/${m.id}`, { method: 'DELETE' }); setOk(`Removed ${m.name}.`); load();
   });
 

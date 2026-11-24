@@ -438,21 +438,26 @@ function SearchPanel({ org, onPick }: { org: Org; onPick: (page: string) => void
   ].filter((x, i, all) => all.findIndex((y) => y.page === x.page && y.title === x.title) === i)
    .filter((x) => words.every((w) => `${x.title} ${x.subtitle}`.toLowerCase().includes(w))).slice(0, 6);
   const pick = (page: string) => (page.startsWith('#/') ? (location.hash = page.slice(1)) : onPick(page));
+  const PLURAL: Record<string, string> = { Contact: 'Contacts', Invoice: 'Invoices', 'Credit note': 'Credit notes', Bill: 'Bills', 'Debit note': 'Debit notes', Quote: 'Quotes', 'Purchase order': 'Purchase orders', Item: 'Products and services', Project: 'Projects', Journal: 'Journals' };
+  const groups: [string, { title: string; subtitle: string; page: string }[]][] = [];
+  for (const r of results) { const h = PLURAL[r.type] ?? r.type; const g = groups.find((x) => x[0] === h); if (g) g[1].push(r); else groups.push([h, [r]]); }
+  const screens = features.filter((f) => !f.subtitle.startsWith('Settings')), settings = features.filter((f) => f.subtitle.startsWith('Settings'));
+  if (screens.length) groups.push(['Screens', screens]);
+  if (settings.length) groups.push(['Settings', settings]);
   return (
     <div className="px-4">
       <input autoFocus aria-label="Search this organisation" placeholder="Search records, screens and settings…" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" value={q} onChange={(e) => setQ(e.target.value)} />
-      <div className="mt-2 max-h-80 overflow-y-auto">
+      <div className="mt-2 max-h-[26rem] overflow-y-auto" data-testid="search-results">
         {q.trim().length >= 2 && results.length === 0 && features.length === 0 && <p className="py-3 text-sm text-slate-500">No matches.</p>}
-        {features.map((r) => (
-          <button key={`f-${r.page}-${r.title}`} onClick={() => pick(r.page)} className="flex w-full items-center justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100">
-            <span><span className="block font-medium text-slate-800">{r.title}</span><span className="text-xs text-slate-500">{r.subtitle}</span></span>
-            <span className="shrink-0 rounded bg-brand-50 px-2 py-0.5 text-xs text-brand-700">{r.subtitle.startsWith('Settings') ? 'Setting' : 'Screen'}</span>
-          </button>))}
-        {results.map((r) => (
-          <button key={`${r.type}-${r.id}`} onClick={() => onPick(r.page)} className="flex w-full items-center justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-slate-100">
-            <span><span className="block font-medium text-slate-800">{r.title}</span>{r.subtitle && <span className="text-xs text-slate-500">{r.subtitle}</span>}</span>
-            <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs capitalize text-slate-600">{r.type}</span>
-          </button>))}
+        {/* Records first, grouped (contacts, invoices, bills…), then screens and settings. */}
+        {groups.map(([heading, list]) => (
+          <div key={heading} role="group" aria-label={heading} className="mb-1">
+            <p className="sticky top-0 z-10 bg-brand-50 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-800">{heading} <span className="font-normal text-brand-600">({list.length})</span></p>
+            {list.map((r) => (
+              <button key={`${heading}-${r.page}-${r.title}`} onClick={() => pick(r.page)} className="flex w-full items-center justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-brand-50">
+                <span className="min-w-0"><span className="block truncate font-medium text-slate-800">{r.title}</span>{r.subtitle && <span className="block truncate text-xs text-slate-500">{r.subtitle}</span>}</span>
+              </button>))}
+          </div>))}
       </div>
     </div>
   );

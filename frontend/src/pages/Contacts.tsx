@@ -3,8 +3,10 @@ import { api, fmt, today } from '../api';
 import type { Org } from '../App';
 import { COUNTRY_NAMES, countryFrom, countryName } from '../countries';
 import { Badge, PageHeader, Select } from '../kit';
+import { Combo } from '../combo';
+import { AccountCombo } from '../ledgerdialog';
 import { DataTable, ExportMenu, Icon, RowMenu, exportTable, type Column } from '../table';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import type { Account } from './Lines';
 
 export interface Contact {
@@ -83,7 +85,7 @@ function ContactList(p: Props) {
 
   const archive = (c: Contact) => run(async () => { await api(`/orgs/${org.id}/contacts/${c.id}/archive`, { body: { archived: !c.isArchived } }); setOk(c.isArchived ? `${c.name} restored.` : `${c.name} archived.`); load(); });
   const remove = (c: Contact) => run(async () => {
-    if (!window.confirm(`Delete ${c.name}? This cannot be undone. A contact that has invoices or bills can only be archived.`)) return;
+    if (!await ask(`Delete ${c.name}? This cannot be undone. A contact that has invoices or bills can only be archived.`)) return;
     await api(`/orgs/${org.id}/contacts/${c.id}`, { method: 'DELETE' }); setOk(`${c.name} deleted.`); load();
   });
   const runImport = (dryRun: boolean) => run(async () => {
@@ -230,11 +232,25 @@ function ContactPage(p: Props & { id: number }) {
 }
 
 /** Add or edit a contact, on its own page. */
-function ContactForm(p: Props & { id?: number }) {
+/**
+ * The full add / edit contact form in a box over the page, so a contact can be added or corrected from an invoice or
+ * bill without losing what was typed there.
+ */
+export function ContactEditor({ org, accounts, id, kind, name, onDone }: { org: Org; accounts?: Account[]; id?: number; kind?: 'customer' | 'supplier'; name?: string; onDone: (saved: { id: number; msg: string } | null) => void }) {
+  return (
+    <div className="fixed inset-0 z-[80] overflow-y-auto bg-slate-900/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onDone(null); }}>
+      <div role="dialog" aria-modal="true" aria-label={id ? 'Edit contact' : 'New contact'} className="mx-auto max-w-5xl space-y-4 rounded-xl bg-slate-50 p-5 shadow-2xl">
+        <ContactForm org={org} canPost accounts={accounts} only={kind} id={id} startName={name} onDone={onDone} />
+      </div>
+    </div>
+  );
+}
+
+function ContactForm(p: Props & { id?: number; startName?: string; onDone?: (saved: { id: number; msg: string } | null) => void }) {
   const { org, accounts = [], only, id } = p;
   const [states, setStates] = useState<{ code: string; name: string }[]>([]);
   const [tds, setTds] = useState<TdsSection[]>([]);
-  const [f, setF] = useState<Form>({ ...blank, kind: only ?? 'customer' });
+  const [f, setF] = useState<Form>({ ...blank, kind: only ?? 'customer', name: p.startName ?? '' });
   const [loaded, setLoaded] = useState(!id);
   const { error, busy, run, setError } = useAction();
   useEffect(() => {
@@ -287,8 +303,10 @@ function ContactForm(p: Props & { id?: number }) {
       defaultSalesAccountId: f.defaultSalesAccountId ? Number(f.defaultSalesAccountId) : null, defaultPurchaseAccountId: f.defaultPurchaseAccountId ? Number(f.defaultPurchaseAccountId) : null,
       ...(supplier && f.msmeType ? { msmeType: f.msmeType } : {}), ...(supplier ? opt(f.udyamNo.toUpperCase(), 'udyamNo') : {}), ...(supplier && f.msmeAgreedDays ? { msmeAgreedDays: Number(f.msmeAgreedDays) } : {}),
     };
+    let savedId = id;
     if (id) await api(`/orgs/${org.id}/contacts/${id}`, { method: 'PUT', body });
-    else await api(`/orgs/${org.id}/contacts`, { body });
+    else savedId = Number((await api(`/orgs/${org.id}/contacts`, { body })).id);
+    if (p.onDone) { p.onDone({ id: savedId!, msg: id ? `${f.name.trim()} updated.` : `${f.name.trim()} added.` }); return; }
     flash = id ? 'Contact updated.' : 'Contact added.';
     goTo(p, pageOf(p));
   });
@@ -304,9 +322,8 @@ function ContactForm(p: Props & { id?: number }) {
           <Select label="Constitution of business" aria-label="Constitution" value={f.constitution} onChange={set('constitution')}>
             <option value="">Choose…</option>{CONSTITUTION.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</Select>
           <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Country *</span>
-            <input aria-label="Country" list="country-names" value={f.country} onChange={set('country')} onFocus={(e) => e.target.select()} placeholder="Start typing a country"
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" />
-            <datalist id="country-names">{COUNTRY_NAMES.map((n) => <option key={n} value={n} />)}</datalist></label>
+            <Combo ariaLabel="Country" value={f.country} onText={(v) => setF((x) => ({ ...x, country: v }))} placeholder="Start typing a country" max={300}
+              options={COUNTRY_NAMES.map((n) => ({ text: n }))} invalid={!!f.country.trim() && !countryFrom(f.country)} /></label>
           {india && (
             <fieldset className="text-sm md:col-span-2"><legend className="mb-1 font-medium text-slate-600">GST registration *</legend>
               <div className="flex flex-wrap gap-4 pt-1.5">
@@ -376,14 +393,16 @@ function ContactForm(p: Props & { id?: number }) {
 
       <Card title="Default accounts">
         <div className="grid gap-3 md:grid-cols-3">
-          {f.kind !== 'supplier' && <Select label="Default sales account" value={f.defaultSalesAccountId} onChange={set('defaultSalesAccountId')}><option value="">None (use the item or 4000)</option>{incomeAccts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>}
-          {supplier && <Select label="Default purchase account" value={f.defaultPurchaseAccountId} onChange={set('defaultPurchaseAccountId')}><option value="">None (choose on each bill)</option>{costAccts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</Select>}
+          {f.kind !== 'supplier' && <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Default sales account</span>
+            <AccountCombo orgId={org.id} ariaLabel="Default sales account" accounts={incomeAccts} type="income" allowNone noneLabel="None (use the item or 4000)" value={f.defaultSalesAccountId} onChange={(v) => setF((x) => ({ ...x, defaultSalesAccountId: v }))} /></label>}
+          {supplier && <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Default purchase account</span>
+            <AccountCombo orgId={org.id} ariaLabel="Default purchase account" accounts={costAccts} type="expense" allowNone noneLabel="None (choose on each bill)" value={f.defaultPurchaseAccountId} onChange={(v) => setF((x) => ({ ...x, defaultPurchaseAccountId: v }))} /></label>}
         </div>
       </Card>
 
       <div className="flex flex-wrap items-center gap-3">
         <Button disabled={busy} onClick={save}>{id ? 'Save changes' : 'Add contact'}</Button>
-        <Button variant="ghost" onClick={() => history.back()}>Cancel</Button>
+        <Button variant="ghost" onClick={() => (p.onDone ? p.onDone(null) : history.back())}>Cancel</Button>
       </div>
       <ErrorMsg msg={error} />
     </>

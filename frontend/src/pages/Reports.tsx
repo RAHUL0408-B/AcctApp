@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
-import { Button, Callout, Card, ErrorMsg, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Ok, useAction , ask } from '../ui';
 import { FORMATS, Icon, exportTable, type ExportFormat, type ExportTable } from '../table';
 import { CombinePanel } from '../export';
+import { Combo } from '../combo';
 
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
 const REPORTS = [
@@ -138,10 +139,11 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
             : <label className="block"><span className="mb-1 block font-medium text-slate-600">{RANGED.includes(rep) ? 'To' : 'As at'}</span><input aria-label="To" type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></label>}
           {rep === 'ledger' && <>
             <label className="block"><span className="mb-1 block font-medium text-slate-600">From account</span>
-              <input aria-label="From account" list="report-accounts" placeholder="First account" className={`${inputCls} w-56`} value={fromCode} onChange={(e) => setFromCode(e.target.value)} /></label>
+              <Combo ariaLabel="From account" placeholder="First account" className="w-56" value={fromCode} onText={setFromCode} searchFirst={accounts.length > 12}
+                options={accounts.map((a) => ({ text: `${a.code} · ${a.name}`, lead: a.code, label: a.name }))} /></label>
             <label className="block"><span className="mb-1 block font-medium text-slate-600">To account</span>
-              <input aria-label="To account" list="report-accounts" placeholder="Last account" className={`${inputCls} w-56`} value={toCode} onChange={(e) => setToCode(e.target.value)} /></label>
-            <datalist id="report-accounts">{accounts.map((a) => <option key={a.id} value={`${a.code} · ${a.name}`} />)}</datalist></>}
+              <Combo ariaLabel="To account" placeholder="Last account" className="w-56" value={toCode} onText={setToCode} searchFirst={accounts.length > 12}
+                options={accounts.map((a) => ({ text: `${a.code} · ${a.name}`, lead: a.code, label: a.name }))} /></label></>}
           {rep === 'pnlt' && (categories.length ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Cost centre group</span><select aria-label="Cost centre group" className={inputCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
             : <span className="pb-2 text-slate-500">Add a cost centre group under Accounting first.</span>)}
           {rep === 'bva' && (budgets.length ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Budget</span><select aria-label="Budget" className={inputCls} value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>{budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
@@ -405,7 +407,7 @@ function TableReport({ d, org, reload, selectable, onLink }: { d: any; org: Org;
   const act = (what: 'archive' | 'delete') => run(async () => {
     const list = [...picked]; if (!list.length) return;
     if (what === 'delete') {
-      if (!window.confirm(`Delete ${list.length} document(s)? Each is cancelled with a reversing entry. Ones with payments or credit/debit notes are skipped.`)) return;
+      if (!await ask(`Delete ${list.length} document(s)? Each is cancelled with a reversing entry. Ones with payments or credit/debit notes are skipped.`)) return;
       const r = await api(`/orgs/${org.id}/documents/bulk-void`, { body: { ids: list, date: today(), reason: 'Deleted from a report' } });
       setOk(`${r.voided.length} deleted.${r.failed.length ? ` ${r.failed.length} skipped: ${r.failed.map((x: any) => `${x.number ?? x.id} (${x.reason})`).join('; ')}` : ''}`);
     } else {

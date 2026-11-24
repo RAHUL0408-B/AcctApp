@@ -3,6 +3,7 @@
 // Needs API (:3000) and web (:5173) running, Google Chrome, and the dev database (it reads the email outbox to follow links).
 // Run: node e2e/team.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 import pg from 'pg';
 
@@ -163,8 +164,9 @@ await salesPage.keyboard.press('Escape');
 assert.strictEqual(await salesPage.getByRole('button', { name: 'Search' }).count(), 0, 'no search for sales people');
 await salesPage.getByRole('button', { name: 'New invoice' }).click();
 await heading(salesPage, 'Invoices');
-await salesPage.locator('datalist option').first().waitFor({ state: 'attached' });
-const names = await salesPage.locator('datalist option').evaluateAll((o) => o.map((x) => x.value));
+await salesPage.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
+await salesPage.getByLabel('Contact', { exact: true }).click();
+const names = await salesPage.getByRole('listbox', { name: 'Contact options' }).getByRole('option').evaluateAll((o) => o.map((x) => x.dataset.value));
 assert.deepStrictEqual(names, ['Kapoor Stores'], 'only customers are offered');
 await salesPage.getByLabel('Contact', { exact: true }).fill('Kapoor Stores');
 await salesPage.getByLabel('Description 1').fill('Brand design');
@@ -215,7 +217,7 @@ await heading(page, 'People and access');
 await page.getByLabel('Role for Sam Seller at Nair Traders').selectOption('client');
 await page.getByText('Sam Seller is now Client for Nair Traders.').waitFor();
 await page.getByLabel('Role for Wendy Worker at Nair Traders').waitFor();
-await page.once('dialog', (d) => d.accept());
+await page.once('dialog', (d) => d.accept()); autoConfirm(page);
 await btn(page, 'Remove Wendy Worker at Nair Traders').click();
 await page.getByText('Removed Wendy Worker.').waitFor();
 await empPage.reload();

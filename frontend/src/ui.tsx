@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 
 export const APP_NAME = 'AcctApp';
 
@@ -77,4 +77,71 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: s
       </div>
     );
   }
+}
+
+// ------------------------------------------------------------------ in-app confirmation box (instead of the browser's)
+export interface AskOptions {
+  title?: string; message?: ReactNode; confirmLabel?: string; cancelLabel?: string;
+  tone?: 'danger' | 'warning' | 'info';
+  /** Ask for a line of text as well (instead of the browser's prompt box). */
+  input?: { label: string; placeholder?: string; value?: string };
+}
+type Pending = AskOptions & { resolve: (v: string | null) => void };
+let showAsk: ((p: Pending) => void) | null = null;
+const open = (o: AskOptions) => new Promise<string | null>((resolve) => {
+  if (showAsk) showAsk({ ...o, resolve });
+  else resolve(o.input ? window.prompt(String(o.title ?? ''), o.input.value ?? '') : window.confirm(String(o.message ?? o.title ?? '')) ? '' : null);
+});
+/** Ask the person to confirm: a themed box with a title, the message and two buttons. Resolves true when they confirm. */
+export async function ask(o: AskOptions | string): Promise<boolean> {
+  const opts = typeof o === 'string' ? { message: o } : o;
+  return (await open(opts)) !== null;
+}
+/** Ask for a line of text (for example a name). Resolves null when cancelled. */
+export async function askText(title: string, input: AskOptions['input'] & {}, message?: ReactNode): Promise<string | null> {
+  return open({ title, message, input, confirmLabel: 'Save', tone: 'info' });
+}
+const ASK_ICON = {
+  danger: { ring: 'bg-red-100 text-red-600', path: 'M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 11v6m4-6v6', btn: 'bg-red-600 hover:bg-red-700' },
+  warning: { ring: 'bg-amber-100 text-amber-600', path: 'M12 8v5m0 3h.01M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z', btn: 'bg-brand-600 hover:bg-brand-700' },
+  info: { ring: 'bg-brand-100 text-brand-700', path: 'M12 16v-5m0-3h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z', btn: 'bg-brand-600 hover:bg-brand-700' },
+};
+/** Mounted once at the top of the app; draws whatever ask() / askText() is waiting for. */
+export function ConfirmHost() {
+  const [p, setP] = useState<Pending | null>(null);
+  const [text, setText] = useState('');
+  useEffect(() => { showAsk = (x) => { setText(x.input?.value ?? ''); setP(x); }; return () => { showAsk = null; }; }, []);
+  useEffect(() => {
+    if (!p) return;
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); done(null); } };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!p) return null;
+  const done = (v: string | null) => { p.resolve(v); setP(null); };
+  const tone = ASK_ICON[p.tone ?? (/delete|remove|undo|void|unlink|reverse/i.test(`${p.title ?? ''} ${typeof p.message === 'string' ? p.message : ''}`) ? 'danger' : 'warning')];
+  const title = p.title ?? (typeof p.message === 'string' ? p.message.split(/[?.]/)[0] + (p.message.includes('?') ? '?' : '') : 'Are you sure?');
+  const body = p.title ? p.message : typeof p.message === 'string' ? p.message.slice(title.length).trim() : p.message;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[1px]" onMouseDown={(e) => { if (e.target === e.currentTarget) done(null); }}>
+      <form role="alertdialog" aria-modal="true" aria-labelledby="ask-title" data-confirm className="w-full max-w-md rounded-xl border border-brand-100 bg-white p-5 shadow-2xl"
+        onSubmit={(e) => { e.preventDefault(); if (p.input && !text.trim()) return; done(p.input ? text.trim() : ''); }}>
+        <div className="flex items-start gap-3">
+          <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${tone.ring}`}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={tone.path} /></svg></span>
+          <div className="min-w-0 flex-1">
+            <h2 id="ask-title" className="text-base font-semibold text-slate-900">{title}</h2>
+            {body && <div data-confirm-message className="mt-1 whitespace-pre-line text-sm text-slate-600">{body}</div>}
+            {p.input && <label className="mt-3 block text-sm"><span className="mb-1 block font-medium text-slate-600">{p.input.label}</span>
+              <input autoFocus aria-label={p.input.label} placeholder={p.input.placeholder} value={text} onChange={(e) => setText(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" /></label>}
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" data-confirm-cancel onClick={() => done(null)} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{p.cancelLabel ?? 'Cancel'}</button>
+          <button type="submit" data-confirm-accept autoFocus={!p.input} className={`rounded-md px-4 py-2 text-sm font-medium text-white ${tone.btn}`}>{p.confirmLabel ?? 'Confirm'}</button>
+        </div>
+      </form>
+    </div>
+  );
 }

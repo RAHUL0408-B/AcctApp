@@ -90,6 +90,8 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, can
   const [accounts, setAccounts] = useState<Account[]>([]);
   // Archived ledgers are kept out of the pickers on new entries.
   const reloadAccounts = () => api<(Account & { isActive?: boolean })[]>(`/orgs/${org.id}/accounts`).then((l) => setAccounts(l.filter((a) => a.isActive !== false)));
+  // A ledger created from any dropdown ("+ Create new ledger") shows up everywhere straight away.
+  useEffect(() => { const f = () => { reloadAccounts(); }; window.addEventListener('accounts-changed', f); return () => window.removeEventListener('accounts-changed', f); }, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { reloadAccounts(); }, [org.id]);
   const canPost = role !== 'client';
   const canManage = role === 'owner' || role === 'accountant';

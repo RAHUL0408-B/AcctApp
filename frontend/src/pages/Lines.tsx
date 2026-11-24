@@ -4,7 +4,8 @@ import { api, fmt, toPaise } from '../api';
 import type { Org } from '../App';
 import { Icon } from '../table';
 import { Button, ErrorMsg, Field, useAction } from '../ui';
-import type { Contact } from './Contacts';
+import { ContactEditor, type Contact } from './Contacts';
+import { Combo } from '../combo';
 
 export interface Line { description: string; hsnSac: string; quantity: string; rate: string; gstRateBp: string; accountId: string; itemId?: string; trackingOptionId?: string;
   /** GST unit quantity code (UQC), e.g. NOS, KGS, HRS. */ unit?: string;
@@ -35,25 +36,41 @@ export function linesFromApi(lines: { description: string; hsnSac?: string | nul
     ...(l.cessRateBp ? { cess: String(l.cessRateBp / 100) } : {}), ...(l.itcBlocked ? { itcBlocked: '1' } : {}) }));
 }
 
-/** Customer or supplier: type to search, or pick from the list. A pencil opens a quick edit of the chosen contact. */
-export function ContactPicker({ label, contacts, value, onChange, onEdit }: { label: string; contacts: Contact[]; value: string; onChange: (id: string) => void; onEdit?: (c: Contact) => void }) {
+/**
+ * Customer or supplier: a themed dropdown to type and search, "+ Create new contact" at the bottom, and a pencil that
+ * opens the full contact form over the page (nothing typed on the invoice or bill is lost).
+ */
+export function ContactPicker({ label, contacts, value, onChange, org, accounts, kind, onSaved }: {
+  label: string; contacts: Contact[]; value: string; onChange: (id: string) => void;
+  /** With these, the pencil and "+ Create new contact" open the contact form; onSaved reloads the list. */
+  org?: Org; accounts?: Account[]; kind?: 'customer' | 'supplier'; onSaved?: (id: number, msg: string) => void; onEdit?: (c: Contact) => void;
+}) {
   const selected = contacts.find((c) => String(c.id) === value);
   const [text, setText] = useState(selected?.name ?? '');
+  const [editing, setEditing] = useState<{ id?: number; name?: string } | null>(null);
+  const [pending, setPending] = useState<number | null>(null);
   useEffect(() => { setText(selected?.name ?? ''); }, [selected?.name]);
-  const listId = useMemo(() => `contacts-${Math.random().toString(36).slice(2)}`, []);
   const resolve = (v: string) => contacts.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
   const change = (v: string) => { setText(v); const hit = resolve(v); onChange(hit ? String(hit.id) : ''); };
   // The list can arrive after the name was typed (slow network, or the contact was just added): match again when it does.
-  useEffect(() => { const hit = resolve(text); if (hit && String(hit.id) !== value) onChange(String(hit.id)); }, [contacts]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (pending && contacts.some((c) => c.id === pending)) { onChange(String(pending)); setPending(null); return; }
+    const hit = resolve(text); if (hit && String(hit.id) !== value) onChange(String(hit.id));
+  }, [contacts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const canEdit = !!(org && onSaved);
   return (
     <div>
-      <div className="flex items-end gap-1">
-        <div className="flex-1"><Field label={label} aria-label="Contact" list={listId} autoComplete="off" placeholder="Start typing a name…" value={text} onChange={(e) => change(e.target.value)} /></div>
-        {selected && onEdit && <button type="button" aria-label={`Edit ${selected.name}`} title={`Edit ${selected.name}`} onClick={() => onEdit(selected)}
-          className="mb-0.5 inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white hover:bg-slate-50"><Icon name="edit" /></button>}
-      </div>
-      <datalist id={listId}>{contacts.map((c) => <option key={c.id} value={c.name}>{c.gstin ?? ''}</option>)}</datalist>
-      {text.trim() && !value && <p className="mt-1 text-xs text-amber-700">No contact with this name. Pick one from the list, or add it under Contacts.</p>}
+      <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">{label}</span>
+        <div className="flex items-center gap-1">
+          <Combo className="flex-1" ariaLabel="Contact" value={text} onText={change} placeholder="Start typing a name…"
+            options={contacts.map((c) => ({ text: c.name, sub: c.gstin ?? (c.kind === 'both' ? '' : c.kind) }))}
+            onCreate={canEdit ? (t) => setEditing({ name: t }) : undefined} createLabel={`Create new ${kind ?? 'contact'}`} />
+          {selected && canEdit && <button type="button" aria-label={`Edit ${selected.name}`} title={`Edit ${selected.name}`} onClick={() => setEditing({ id: selected.id })}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white hover:bg-slate-50"><Icon name="edit" /></button>}
+        </div></label>
+      {text.trim() && !value && <p className="mt-1 text-xs text-amber-700">No contact with this name. Pick one from the list{canEdit ? ', or choose "Create new" at the bottom of it' : ', or add it under Contacts'}.</p>}
+      {editing && org && <ContactEditor org={org} accounts={accounts} id={editing.id} name={editing.name} kind={kind}
+        onDone={(r) => { setEditing(null); if (r) { setPending(r.id); onSaved!(r.id, r.msg); } }} />}
     </div>
   );
 }
@@ -159,11 +176,10 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
   return (
     <div className="mt-4">
       <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-        <label className="relative w-full max-w-sm">
-          <span className="pointer-events-none absolute left-2.5 top-2"><Icon name="search" className="text-slate-400" /></span>
-          <input aria-label="Add from catalogue" list={`items-${org.id}`} placeholder="Search products and services by name or code…" value={search} onChange={(e) => pickItem(e.target.value)}
-            className="w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-3 shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" />
-          <datalist id={`items-${org.id}`}>{items.map((i) => <option key={i.id} value={itemLabel(i)}>{i.hsnSac ? `HSN ${i.hsnSac}` : ''}</option>)}</datalist></label>
+        <Combo className="w-full max-w-md" ariaLabel="Add from catalogue" value={search} onText={pickItem} placeholder="Search products and services"
+          icon={<Icon name="search" className="text-slate-400" />} columns={['Item code', 'Product', 'HSN/SAC']}
+          options={items.map((i) => ({ text: itemLabel(i), lead: i.code, label: i.name, sub: i.hsnSac ?? '' }))}
+          onCreate={(t) => { if (!itemForm || itemForm.id) openNewItem(); if (t.trim()) setItemForm((x) => (x ? { ...x, name: t.trim() } : x)); }} createLabel="Create a new product or service" />
         <button type="button" className="text-brand-700 underline" onClick={openNewItem}>{itemForm && !itemForm.id ? 'Cancel new item' : '+ Create a new product or service'}</button>
       </div>
       {itemForm && (

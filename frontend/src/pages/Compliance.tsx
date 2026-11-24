@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Empty, PageHeader } from '../kit';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 
 const TABS = [['2b', 'GSTR-2B match'], ['msme', 'MSME payments (43B(h))'], ['itc180', 'ITC 180-day rule']] as const;
 const fyStartOf = (iso: string) => { const y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7)); return m >= 4 ? y : y - 1; };
@@ -57,7 +57,7 @@ function TwoB({ org, canPost }: { org: Org; canPost: boolean }) {
     setFile(null); await load(); setMatch(await api(`/orgs/${org.id}/compliance/gstr2b/${r.id}`)); setShow('all');
   });
   const remove = (u: Upload) => run(async () => {
-    if (!window.confirm(`Remove the GSTR-2B upload for ${u.period}?`)) return;
+    if (!await ask(`Remove the GSTR-2B upload for ${u.period}?`)) return;
     await api(`/orgs/${org.id}/compliance/gstr2b/${u.id}`, { method: 'DELETE' }); if (match?.import.id === u.id) setMatch(null); load();
   });
   const message = (c: Match['chase'][number]) => `Dear ${c.supplier},\n\nOur GSTR-2B for ${match!.import.period} does not show the following invoice(s) from you, or shows less tax than invoiced: ${c.invoices.join(', ')} (GST of Rs ${fmt(c.tax)}).\nPlease report them correctly in your GSTR-1 so that we can claim the input tax credit.\n\nOur GSTIN: ${org.gstin ?? ''}\nYour GSTIN: ${c.gstin}\n\nThank you,\n${org.name}`;
@@ -196,7 +196,7 @@ function Itc180({ org, canPost }: { org: Org; canPost: boolean }) {
   const load = () => run(async () => { setR(await api(`/orgs/${org.id}/compliance/itc-180?asOf=${asOf}`)); setRevs(await api(`/orgs/${org.id}/compliance/itc-reversals`)); });
   useEffect(() => { load(); }, [org.id, asOf]); // eslint-disable-line react-hooks/exhaustive-deps
   const reverse = (x: ItcRow) => run(async () => {
-    if (!window.confirm(`Reverse ₹${fmt(x.reverse)} of input credit on ${x.number}? A journal is posted today (Dr Input credit reversed, Cr input GST) and it shows in GSTR-3B table 4(B)(2).`)) return;
+    if (!await ask(`Reverse ₹${fmt(x.reverse)} of input credit on ${x.number}? A journal is posted today (Dr Input credit reversed, Cr input GST) and it shows in GSTR-3B table 4(B)(2).`)) return;
     const res = await api(`/orgs/${org.id}/compliance/itc-180/${x.id}/reverse`, { body: {} });
     setOk(`₹${fmt(res.amount)} of input credit on ${x.number} reversed.`); load();
   });

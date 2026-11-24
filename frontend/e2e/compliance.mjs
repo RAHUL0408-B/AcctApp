@@ -2,6 +2,7 @@
 // and matching, MSME 43B(h), the 180-day ITC rule, exports and alerts.
 // Needs API (:3000) and web (:5173) running and Google Chrome.  Run: node e2e/compliance.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 
 const URL = process.env.WEB_URL ?? 'http://127.0.0.1:5173';
@@ -13,6 +14,7 @@ const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 let answer = 'accept', dialogs = [];
 page.on('dialog', (d) => { dialogs.push(d.message()); answer === 'accept' ? d.accept() : d.dismiss(); });
+const confirms = autoConfirm(page);
 const step = (s) => console.log('✓', s);
 const btn = (name) => page.getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
@@ -83,17 +85,17 @@ assert(old.id, 'old bill created');
 // ---- duplicate supplier bill
 await menu('Purchases', 'Bills');
 await btn('New bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Good Filer');
 await page.getByLabel('Supplier bill no.').fill('gf-42');
 await page.getByLabel('Description 1').fill('Steel');
 await page.getByLabel('Rate 1').fill('2000');
-answer = 'dismiss'; dialogs = [];
+answer = 'dismiss'; dialogs = []; await confirms.clear(); await confirms.answer('dismiss');
 await btn('Create').click();
 await page.getByRole('alert').getByText(/Possible duplicate: bill .* already has supplier bill no\. GF\/0042/).waitFor();
-assert(dialogs.some((d) => /claims its GST credit twice/.test(d) && /Post this bill anyway\?/.test(d)), 'asked before posting a duplicate');
+assert([...dialogs, ...(await confirms.messages())].some((d) => /claims its GST credit twice/.test(d) && /Post this bill anyway\?/.test(d)), 'asked before posting a duplicate');
 await page.getByLabel('Supplier bill no.').fill('GF/0043');
-answer = 'accept';
+answer = 'accept'; await confirms.answer('accept');
 await btn('Create').click();
 await ok(/Created BILL\/\d\d-\d\d\/\d+/);
 step('the same supplier bill number (written gf-42 against GF/0042) was stopped with a warning; a new number posted normally');

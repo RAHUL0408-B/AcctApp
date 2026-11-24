@@ -2,6 +2,7 @@
 // (section 17(5)), Rule 37 reversal and reclaim, GSTR-2B labels, GSTR-1 JSON and GSTR-3B lines.
 // Needs API (:3000) and web (:5173) running and Google Chrome.  Run: node e2e/billsgst.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 import { readFileSync } from 'fs';
 
@@ -14,6 +15,7 @@ const errors = [];
 const watch = (p) => p.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 watch(page);
 page.on('dialog', (d) => d.accept());
+autoConfirm(page);
 const step = (s) => console.log('✓', s);
 const btn = (name, p = page) => p.locator('main').getByRole('button', { name, exact: true });
 const heading = (name, p = page) => p.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
@@ -59,7 +61,7 @@ const line = (rate) => [{ description: 'Parts', quantity: 1, rate, gstRateBp: 18
 await menu('Purchases', 'Repeating bills');
 await heading('Repeating bills');
 await btn('New repeating bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Pune Parts');
 await page.getByLabel('Frequency').selectOption('monthly');
 await page.getByLabel('Narration').fill('Workshop rent for {month}');
@@ -97,7 +99,7 @@ step('two bills (Rs 3,540) paid together as one bank entry, listed under Batch p
 // ---- cess on an invoice
 await menu('Sales', 'Invoices');
 await btn('New invoice').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Shah Auto');
 await page.getByLabel('Description 1').fill('Car');
 await page.getByLabel('Rate 1').fill('1000');
@@ -113,7 +115,7 @@ step('invoice with 28% GST and 22% cess: cess Rs 220 shown and posted, total Rs 
 // ---- blocked credit on a bill, and on an account
 await menu('Purchases', 'Bills');
 await btn('New bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Pune Parts');
 await page.getByLabel('Supplier bill no.').fill('PP-LUNCH');
 await page.getByLabel('Description 1').fill('Team lunch');

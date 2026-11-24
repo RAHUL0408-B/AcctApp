@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, fmt } from '../api';
 import type { Org } from '../App';
 import { Badge, Empty, PageHeader } from '../kit';
-import { Button, Callout, Card, ErrorMsg, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Ok, useAction , ask } from '../ui';
 import { DataTable } from '../table';
 
 interface Batch { id: number; side: 'pay' | 'receive'; date: string; reference: string | null; total: number; status: string; account: string; items: { documentId: number; number: string; contact: string; amount: number }[] }
@@ -15,7 +15,7 @@ export function BatchPayments({ org, canPost, go, focusId }: { org: Org; canPost
   const load = useCallback(() => api<Batch[]>(`/orgs/${org.id}/payment-batches`).then(setList), [org.id]);
   useEffect(() => { load(); }, [load]);
   const undo = (b: Batch) => run(async () => {
-    if (!window.confirm(`Undo batch ${b.side === 'pay' ? 'payment' : 'receipt'} #${b.id} of ₹${fmt(b.total)}? Its entry is reversed and the ${b.items.length} document(s) become outstanding again.`)) return;
+    if (!await ask(`Undo batch ${b.side === 'pay' ? 'payment' : 'receipt'} #${b.id} of ₹${fmt(b.total)}? Its entry is reversed and the ${b.items.length} document(s) become outstanding again.`)) return;
     await api(`/orgs/${org.id}/payment-batches/${b.id}`, { method: 'DELETE' });
     setOk(`Batch #${b.id} undone.`); load();
   });

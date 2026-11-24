@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Combo, type ComboOption } from '../combo';
 import { api, download, fileToBase64, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, PageHeader, Select } from '../kit';
 import { DataTable, Icon, RowMenu, type Column } from '../table';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask, askText } from '../ui';
 import type { Contact } from './Contacts';
 import { Account, ContactPicker, emptyLine, Line, LinesEditor, linesFromApi, linesToApi, taxSummary } from './Lines';
 
@@ -54,7 +55,6 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const [original, setOriginal] = useState<(Doc & { payments: Payment[] }) | null>(null);
   const [tdsPreview, setTdsPreview] = useState<{ section: string; amount: number } | null>(null);
   const [issues, setIssues] = useState<{ text: string; block: boolean }[]>([]);
-  const [quickContact, setQuickContact] = useState<Contact | null>(null);
   const [allDocs, setAllDocs] = useState(false);
   useEffect(() => { if (startNew) { setShowForm(true); if (startType && types.some(([t]) => t === startType)) setDocType(startType); } }, [startNew, startType]); // eslint-disable-line react-hooks/exhaustive-deps
   const [editing, setEditing] = useState<{ id: number; number: string; payments: Payment[] } | null>(null);
@@ -173,7 +173,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   });
   const resetForm = () => {
     setF(blankForm); setLines([emptyLine()]); setIntraOverride(null); setPosChoice(''); setFiles([]); setExistingFiles([]); setEditing(null); setShowForm(false);
-    setNumberTouched(false); setNumberClash(''); setDueTouched(false); setOriginal(null); setQuickContact(null); form.setError('');
+    setNumberTouched(false); setNumberClash(''); setDueTouched(false); setOriginal(null); form.setError('');
   };
   const uploadAll = async (docId: number) => {
     for (const file of files) await api(`/orgs/${org.id}/files`, { body: { name: file.name, mime: file.type || 'application/octet-stream', dataBase64: await fileToBase64(file), linkType: 'document', linkId: docId } });
@@ -203,7 +203,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     let r;
     try { r = editing ? await api(`/orgs/${org.id}/documents/${editing.id}`, { method: 'PUT', body: b }) : await api(`/orgs/${org.id}/documents`, { body: b }); }
     catch (e) {
-      if (editing || !/^Possible duplicate/.test((e as Error).message) || !window.confirm(`${(e as Error).message}\n\nPost this bill anyway?`)) throw e;
+      if (editing || !/^Possible duplicate/.test((e as Error).message) || !await ask(`${(e as Error).message}\n\nPost this bill anyway?`)) throw e;
       r = await api(`/orgs/${org.id}/documents`, { body: { ...b, allowDuplicate: true } });
     }
     let attachNote = '';
@@ -261,7 +261,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     if (p.dueDays != null) { setDueTouched(true); setF((x) => ({ ...x, dueDate: addDays(x.issueDate, p.dueDays) })); }
   };
   const saveTemplate = () => form.run(async () => {
-    const name = window.prompt('Name this template (for example "Monthly retainer"):'); if (!name?.trim()) return;
+    const name = await askText('Save as a template', { label: 'Template name', placeholder: 'e.g. Monthly retainer' }); if (!name?.trim()) return;
     const dd = f.dueDate ? Math.max(0, Math.round((Date.parse(f.dueDate) - Date.parse(f.issueDate)) / 86400000)) : undefined;
     await api(`/orgs/${org.id}/doc-templates`, { body: { name: name.trim(), docType: sales ? 'invoice' : 'bill', payload: {
       ...(f.contactId ? { contactId: Number(f.contactId) } : {}), supplyType: f.supplyType, ...(f.notes ? { notes: f.notes } : {}), ...(dd != null ? { dueDays: dd } : {}), ...(f.tdsSection ? { tdsSection: f.tdsSection } : {}), lines: linesToApi(lines) } } });
@@ -282,20 +282,20 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     setPay(null); setOk(`Payment recorded.${r.fxGain ? ` Exchange ${r.fxGain > 0 ? 'gain' : 'loss'} ₹${fmt(Math.abs(r.fxGain))}.` : ''}`); load();
   });
   const unlinkPayment = (paymentId: number, onDone?: () => void) => run(async () => {
-    if (!window.confirm('Unlink this payment? Its entry is reversed and the document becomes outstanding again.')) return;
+    if (!await ask('Unlink this payment? Its entry is reversed and the document becomes outstanding again.')) return;
     await api(`/orgs/${org.id}/payments/${paymentId}`, { method: 'DELETE' });
     if (editing) setEditing({ ...editing, payments: editing.payments.filter((p) => p.id !== paymentId) });
     setOk('Payment unlinked.'); load(); onDone?.();
   });
   const doVoid = (d: Doc) => run(async () => {
-    if (!window.confirm(`Delete ${d.number}? Posted entries cannot be erased from the books, so it is cancelled with a reversing entry and shows as void.`)) return;
+    if (!await ask(`Delete ${d.number}? Posted entries cannot be erased from the books, so it is cancelled with a reversing entry and shows as void.`)) return;
     await api(`/orgs/${org.id}/documents/${d.id}/void`, { body: { date: today(), reason: 'Deleted from the app' } }); setOk(`${d.number} deleted (cancelled with a reversing entry).`); load();
   });
   const archiveOne = (d: Doc) => run(async () => { await api(`/orgs/${org.id}/documents/bulk-archive`, { body: { ids: [d.id], archived: !d.isArchived } }); setOk(`${d.number} ${d.isArchived ? 'restored' : 'archived'}.`); load(); });
   const bulk = (action: 'delete' | 'archive' | 'restore') => run(async () => {
     const ids = [...selected]; if (!ids.length) return;
     if (action === 'delete') {
-      if (!window.confirm(`Delete ${ids.length} document(s)? Each is cancelled with a reversing entry. Ones with payments or credit notes are skipped.`)) return;
+      if (!await ask(`Delete ${ids.length} document(s)? Each is cancelled with a reversing entry. Ones with payments or credit notes are skipped.`)) return;
       const r = await api(`/orgs/${org.id}/documents/bulk-void`, { body: { ids, date: today(), reason: 'Deleted from the app' } });
       setOk(`${r.voided.length} deleted.${r.failed.length ? ` ${r.failed.length} skipped: ${r.failed.map((x: any) => `${x.number ?? x.id} (${x.reason})`).join('; ')}` : ''}`);
     } else {
@@ -406,7 +406,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
           )}
           <div className="grid gap-3 md:grid-cols-4">
             <Select label="Type" aria-label="Document type" value={docType} disabled={!!editing} onChange={(e) => { setDocType(e.target.value); setOriginal(null); setF((x) => ({ ...x, originalDocId: '' })); }}>{types.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
-            <ContactPicker label={sales ? 'Customer' : 'Supplier'} contacts={contacts} value={f.contactId} onChange={chooseContact} onEdit={full ? setQuickContact : undefined} />
+            <ContactPicker label={sales ? 'Customer' : 'Supplier'} contacts={contacts} value={f.contactId} onChange={chooseContact} org={full ? org : undefined} accounts={accounts} kind={sales ? 'customer' : 'supplier'}
+              onSaved={(_id, msg) => { loadContacts(); setOk(msg); }} />
             <Field label="Date" type="date" value={f.issueDate} onChange={(e) => setF({ ...f, issueDate: e.target.value })} />
             <Field label="Due date" type="date" value={f.dueDate} onChange={(e) => { setDueTouched(true); setF({ ...f, dueDate: e.target.value }); }} />
             <div><Field label={`${TYPE_NAME[docType]} number`} aria-label="Document number" value={numberTouched ? f.number : nextNumber} placeholder="Automatic"
@@ -422,14 +423,11 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
             {foreign && <Field label={`Rupees per 1 ${f.currency}`} aria-label="Exchange rate" inputMode="decimal" value={f.fxRate} disabled={isNote && !!original} onChange={(e) => setF({ ...f, fxRate: e.target.value })} />}
             {isNote && (
               <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Against {sales ? 'invoice' : 'bill'}</span>
-                <input aria-label="Original document" list="note-originals" disabled={!f.contactId || !!editing} placeholder={f.contactId ? 'Type or pick a number…' : `Choose the ${sales ? 'customer' : 'supplier'} first`}
-                  defaultValue={docs.find((d) => String(d.id) === f.originalDocId)?.number ?? ''} key={`${f.contactId}-${f.originalDocId}`}
-                  onChange={(e) => { const hit = partyOriginals.find((d) => d.number.toLowerCase() === e.target.value.trim().toLowerCase()); if (hit) setF({ ...f, originalDocId: String(hit.id) }); }}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm disabled:bg-slate-100" />
-                <datalist id="note-originals">{partyOriginals.map((d) => <option key={d.id} value={d.number}>{d.issueDate} · ₹{fmt(d.total)} · outstanding ₹{fmt(d.outstanding ?? 0)}</option>)}</datalist></label>)}
+                <OriginalPicker disabled={!f.contactId || !!editing} placeholder={f.contactId ? 'Type or pick a number…' : `Choose the ${sales ? 'customer' : 'supplier'} first`}
+                  key={`${f.contactId}-${f.originalDocId}`} start={docs.find((d) => String(d.id) === f.originalDocId)?.number ?? ''}
+                  options={partyOriginals.map((d) => ({ text: d.number, sub: `${d.issueDate} · ₹${fmt(d.total)} · outstanding ₹${fmt(d.outstanding ?? 0)}` }))}
+                  onPick={(n) => { const hit = partyOriginals.find((d) => d.number.toLowerCase() === n.trim().toLowerCase()); if (hit) setF({ ...f, originalDocId: String(hit.id) }); }} /></label>)}
           </div>
-
-          {quickContact && <QuickContact org={org} contact={quickContact} states={states} tds={tds} onClose={() => setQuickContact(null)} onSaved={(msg) => { setQuickContact(null); loadContacts(); setOk(msg); }} />}
 
           {isNote && original && (
             <div className="mt-3 space-y-2">
@@ -591,49 +589,9 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   );
 }
 
-/**
- * Quick edit of the chosen customer or supplier without leaving the invoice or bill. The rest of the contact (bank,
- * MSME, delivery address…) is kept as it is.
- */
-function QuickContact({ org, contact, states, tds, onClose, onSaved }: { org: Org; contact: Contact; states: { code: string; name: string }[]; tds: { code: string; description: string }[]; onClose: () => void; onSaved: (msg: string) => void }) {
-  const [c, setC] = useState({ name: contact.name, gstin: contact.gstin ?? '', stateCode: contact.stateCode ?? '', email: contact.email ?? '', phone: contact.phone ?? '',
-    addressLine1: contact.addressLine1 ?? '', city: contact.city ?? '', pincode: contact.pincode ?? '', defaultTdsSection: contact.defaultTdsSection ?? '', rcmDefault: !!contact.rcmDefault });
-  const { error, busy, run } = useAction();
-  const supplier = contact.kind !== 'customer';
-  const save = () => run(async () => {
-    const x = contact as Contact & Record<string, unknown>;
-    const keep = (k: string) => (x[k] == null || x[k] === '' ? {} : { [k]: x[k] });
-    const opt = (k: string, v: string) => (v.trim() ? { [k]: v.trim() } : {});
-    const body = {
-      kind: contact.kind, name: c.name.trim(), country: contact.country ?? 'IN', isSez: !!contact.isSez, isIndividual: !!contact.isIndividual,
-      ...keep('constitution'), ...keep('pan'), ...keep('addressLine2'), ...keep('shipLine1'), ...keep('shipLine2'), ...keep('shipCity'), ...keep('shipStateCode'), ...keep('shipPincode'),
-      ...keep('bankAccountName'), ...keep('bankName'), ...keep('bankAccountNo'), ...keep('bankIfsc'), ...keep('msmeType'), ...keep('udyamNo'), ...keep('msmeAgreedDays'),
-      ...keep('lowerTdsRateBp'), ...keep('lowerTdsCert'),
-      defaultSalesAccountId: contact.defaultSalesAccountId ?? null, defaultPurchaseAccountId: contact.defaultPurchaseAccountId ?? null,
-      ...opt('gstin', c.gstin.toUpperCase()), ...opt('stateCode', c.stateCode), ...opt('email', c.email), ...opt('phone', c.phone),
-      ...opt('addressLine1', c.addressLine1), ...opt('city', c.city), ...opt('pincode', c.pincode),
-      ...(supplier ? { ...opt('defaultTdsSection', c.defaultTdsSection), rcmDefault: c.rcmDefault } : {}),
-    };
-    await api(`/orgs/${org.id}/contacts/${contact.id}`, { method: 'PUT', body });
-    onSaved(`${c.name} updated.`);
-  });
-  return (
-    <div className="mt-3 rounded-lg border border-brand-200 bg-brand-50/30 p-3" role="group" aria-label={`Edit ${contact.name}`}>
-      <p className="mb-2 text-sm font-semibold text-slate-800">Edit {contact.name}</p>
-      <div className="grid gap-3 md:grid-cols-4">
-        <Field label="Name" aria-label="Contact name" value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />
-        <Field label="GSTIN" aria-label="Contact GSTIN" value={c.gstin} onChange={(e) => setC({ ...c, gstin: e.target.value })} />
-        <Select label="State" aria-label="Contact state" value={c.stateCode} onChange={(e) => setC({ ...c, stateCode: e.target.value })}><option value="">—</option>{states.map((s) => <option key={s.code} value={s.code}>{s.code} {s.name}</option>)}</Select>
-        <Field label="Email" aria-label="Contact email" value={c.email} onChange={(e) => setC({ ...c, email: e.target.value })} />
-        <Field label="Address" aria-label="Contact address" value={c.addressLine1} onChange={(e) => setC({ ...c, addressLine1: e.target.value })} />
-        <Field label="City" aria-label="Contact city" value={c.city} onChange={(e) => setC({ ...c, city: e.target.value })} />
-        <Field label="PIN code" aria-label="Contact PIN code" value={c.pincode} onChange={(e) => setC({ ...c, pincode: e.target.value })} />
-        <Field label="Phone" aria-label="Contact phone" value={c.phone} onChange={(e) => setC({ ...c, phone: e.target.value })} />
-        {supplier && <Select label="Default TDS section" aria-label="Contact TDS section" value={c.defaultTdsSection} onChange={(e) => setC({ ...c, defaultTdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code}</option>)}</Select>}
-        {supplier && <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" checked={c.rcmDefault} onChange={(e) => setC({ ...c, rcmDefault: e.target.checked })} />Reverse charge by default</label>}
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3"><Button disabled={busy} onClick={save}>Save contact</Button><Button variant="ghost" onClick={onClose}>Cancel</Button></div>
-      <div className="mt-2"><ErrorMsg msg={error} /></div>
-    </div>
-  );
+
+/** The invoice or bill a credit or debit note is against: type the number or pick it from the list. */
+function OriginalPicker({ start, options, onPick, disabled, placeholder }: { start: string; options: ComboOption[]; onPick: (n: string) => void; disabled?: boolean; placeholder: string }) {
+  const [t, setT] = useState(start);
+  return <Combo ariaLabel="Original document" value={t} onText={(v) => { setT(v); onPick(v); }} options={options} disabled={disabled} placeholder={placeholder} />;
 }

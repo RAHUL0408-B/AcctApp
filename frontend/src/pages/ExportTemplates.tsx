@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, previewPdf } from '../api';
 import type { Org } from '../App';
 import { Empty, PageHeader } from '../kit';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 
 interface Config {
   accent: string; headColour?: string; textColour: string; font: 'sans' | 'serif' | 'mono'; fontSize: number;
@@ -88,7 +88,7 @@ export function ExportTemplates({ org, role }: { org: Org; role: string }) {
     setOk(`Template "${draft.name}" saved. Choose it above to use it for reports or invoices.`); setDraft(null); setPdf(null); load();
   });
   const remove = (t: Custom) => run(async () => {
-    if (!window.confirm(`Delete the template "${t.name}"? Anything using it goes back to Classic.`)) return;
+    if (!await ask(`Delete the template "${t.name}"? Anything using it goes back to Classic.`)) return;
     await api(`/orgs/${org.id}/export-templates/${t.id}`, { method: 'DELETE' }); setOk(`Deleted "${t.name}".`); load();
   });
   const show = (kind: 'report' | 'invoice') => run(async () => { if (cfg) setPdf({ kind, url: await previewPdf(`/orgs/${org.id}/export-preview`, { config: cfg, kind }) }); });

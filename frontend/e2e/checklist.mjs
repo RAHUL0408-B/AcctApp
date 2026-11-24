@@ -2,6 +2,7 @@
 // Some items are also covered in more depth by changes.mjs; this script exists so the whole list can be ticked off at once.
 // Needs API (:3000) and web (:5173) running and Google Chrome.  Run: node e2e/checklist.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 import fs from 'fs';
 
@@ -14,6 +15,7 @@ const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 let dialogs = [];
 page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
+const confirms = autoConfirm(page);
 const item = (n, s) => console.log(`✓ ${String(n).padStart(2)}. ${s}`);
 const btn = (name) => page.getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
@@ -29,7 +31,7 @@ const menu = async (group, item, root = page) => {
   await box.getByRole('button', { name: item, exact: true }).click();
 };
 const ok = (re) => page.getByText(re).first().waitFor();
-const contactsLoaded = () => page.locator('datalist option').first().waitFor({ state: 'attached' });
+const contactsLoaded = () => page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 const download = async (click) => { const [dl] = await Promise.all([page.waitForEvent('download'), click()]); return { name: dl.suggestedFilename(), text: fs.readFileSync(await dl.path()).toString('latin1') }; };
 /** A GSTIN with the right check character, from its first 14 characters. */
 const CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -81,7 +83,8 @@ await page.getByLabel('State').selectOption({ label: '27 Maharashtra' });
 await page.getByLabel('Bank name').fill('SBI');
 await page.getByLabel('Account number').fill('30001234567');
 await page.getByLabel('IFSC code').fill('SBIN0001234');
-await page.getByLabel('Default purchase account').selectOption({ index: 1 });
+await page.getByLabel('Default purchase account').fill('5');
+await page.getByRole('listbox', { name: 'Default purchase account options' }).getByRole('option').first().click();
 await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByText('SBI ••4567').waitFor();
@@ -135,7 +138,7 @@ await page.getByText(/Output IGST/).first().waitFor();
 await page.getByText('Total invoice value').waitFor();
 await page.getByText('₹11,800.00').first().waitFor();
 item(13, 'taxable value, GST and total shown on the form: 10,000 + 18% = 11,800');
-dialogs = [];
+dialogs = []; await confirms.clear();
 await page.getByLabel('Intrastate supply').check();
 await page.getByText(/CGST \+ SGST does not match the customer's state/).waitFor(); // warned in the page, not a pop-up (CA review point 28)
 await page.getByText(/Output CGST/).first().waitFor();
@@ -157,15 +160,15 @@ await page.getByLabel('Description 1').fill('Monthly service');
 await page.getByLabel('Rate 1').fill('1000');
 await btn('Save as template').click();
 await ok(/Template ".+" saved/).catch(() => undefined);
-dialogs = [];
+dialogs = []; await confirms.clear();
 item(16, 'invoice saved as a template (lines post to each product default account)');
 
 // 11 (unregistered). No warning for a party without a GST number
 await page.getByLabel('Contact', { exact: true }).fill('');
 await page.getByLabel('Contact', { exact: true }).fill('Local Buyer');
-dialogs = [];
+dialogs = []; await confirms.clear();
 await page.getByLabel('Interstate supply').check().catch(() => undefined);
-assert.strictEqual(dialogs.length, 0, 'no warning for an unregistered party');
+assert.strictEqual(dialogs.length + (await confirms.messages()).length, 0, 'no warning for an unregistered party');
 await page.getByLabel('Intrastate supply').check();
 
 // 12. Create a product from the invoice screen

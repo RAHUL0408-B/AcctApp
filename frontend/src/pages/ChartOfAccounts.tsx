@@ -5,7 +5,7 @@ import { api } from '../api';
 import type { Org } from '../App';
 import { Badge, Select } from '../kit';
 import { DataTable, ExportMenu, Icon, RowMenu, type Column } from '../table';
-import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import type { Account } from './Lines';
 
 interface Ledger extends Account { fsli: string; group: string; subGroup: string | null; isActive: boolean; itcBlocked: boolean; system: boolean }
@@ -61,7 +61,7 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
   });
   const archive = (a: Ledger) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/archive`, { body: { archived: a.isActive } }); setOk(`${a.code} ${a.name} ${a.isActive ? 'archived' : 'restored'}.`); await load(); reload(); });
   const remove = (a: Ledger) => run(async () => {
-    if (!window.confirm(`Delete ledger ${a.code} ${a.name}? Only a ledger with no entries can be deleted; otherwise archive it.`)) return;
+    if (!await ask(`Delete ledger ${a.code} ${a.name}? Only a ledger with no entries can be deleted; otherwise archive it.`)) return;
     await api(`/orgs/${org.id}/accounts/${a.id}`, { method: 'DELETE' }); setOk(`${a.code} ${a.name} deleted.`); await load(); reload();
   });
   const block = (a: Ledger, v: boolean) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/itc-blocked`, { method: 'PUT', body: { blocked: v } }); await load(); reload(); });

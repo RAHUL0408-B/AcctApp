@@ -35,6 +35,8 @@ async function cashBalance(c: PoolClient, asOf?: string) {
       WHERE (a.id IN (SELECT account_id FROM bank_accounts) OR a.code='1000') AND ($1::date IS NULL OR e.entry_date <= $1::date)`, [asOf ?? null])).rows[0].s);
 }
 
+const DOC_TYPE: Record<string, string> = { invoice: 'Invoice', credit_note: 'Credit note', bill: 'Bill', debit_note: 'Debit note' };
+
 @Controller('orgs/:orgId')
 @UseGuards(AuthGuard)
 export class InsightsController {
@@ -85,11 +87,11 @@ export class InsightsController {
     return withOrg(orgId, async (c) => {
       const results: { type: string; id: number; title: string; subtitle: string; page: string }[] = [];
       for (const r of (await c.query('SELECT id,name,kind,gstin FROM contacts WHERE name ILIKE $1 OR gstin ILIKE $1 ORDER BY name LIMIT 8', [like])).rows)
-        results.push({ type: 'Contact', id: Number(r.id), title: r.name, subtitle: [r.kind, r.gstin].filter(Boolean).join(' · '), page: r.kind === 'supplier' ? 'suppliers' : 'customers' });
+        results.push({ type: 'Contact', id: Number(r.id), title: r.name, subtitle: [r.kind, r.gstin].filter(Boolean).join(' · '), page: `${r.kind === 'supplier' ? 'suppliers' : 'customers'}/${r.id}` });
       for (const r of (await c.query(
         `SELECT d.id,d.number,d.doc_type,ct.name,d.total,d.issue_date::text AS date FROM documents d JOIN contacts ct ON ct.id=d.contact_id
           WHERE d.number ILIKE $1 OR ct.name ILIKE $1 OR d.supplier_ref ILIKE $1 ORDER BY d.id DESC LIMIT 8`, [like])).rows)
-        results.push({ type: r.doc_type.replace('_', ' '), id: Number(r.id), title: `${r.number} · ${r.name}`, subtitle: `${r.date} · ₹${(Number(r.total) / 100).toFixed(2)}`, page: ['invoice', 'credit_note'].includes(r.doc_type) ? 'invoices' : 'bills' });
+        results.push({ type: DOC_TYPE[r.doc_type] ?? r.doc_type, id: Number(r.id), title: `${r.number} · ${r.name}`, subtitle: `${r.date} · ₹${(Number(r.total) / 100).toFixed(2)}`, page: `${['invoice', 'credit_note'].includes(r.doc_type) ? 'invoices' : 'bills'}/open-${r.id}` });
       for (const r of (await c.query(
         `SELECT p.id,p.number,p.kind,ct.name FROM pre_documents p JOIN contacts ct ON ct.id=p.contact_id WHERE p.number ILIKE $1 OR ct.name ILIKE $1 ORDER BY p.id DESC LIMIT 5`, [like])).rows)
         results.push({ type: r.kind === 'quote' ? 'Quote' : 'Purchase order', id: Number(r.id), title: `${r.number} · ${r.name}`, subtitle: '', page: r.kind === 'quote' ? 'quotes' : 'purchase-orders' });
@@ -97,8 +99,8 @@ export class InsightsController {
         results.push({ type: 'Item', id: Number(r.id), title: `${r.code} · ${r.name}`, subtitle: '', page: 'items' });
       for (const r of (await c.query('SELECT id,name,status FROM projects WHERE name ILIKE $1 ORDER BY name LIMIT 5', [like])).rows)
         results.push({ type: 'Project', id: Number(r.id), title: r.name, subtitle: r.status.replace('_', ' '), page: 'projects' });
-      for (const r of (await c.query('SELECT id,entry_date::text AS date,narration FROM journal_entries WHERE narration ILIKE $1 OR reference ILIKE $1 ORDER BY id DESC LIMIT 5', [like])).rows)
-        results.push({ type: 'Journal', id: Number(r.id), title: `#${r.id} · ${r.narration}`, subtitle: r.date, page: 'journal' });
+      for (const r of (await c.query('SELECT id,entry_date::text AS date,narration,voucher_no FROM journal_entries WHERE narration ILIKE $1 OR reference ILIKE $1 OR voucher_no ILIKE $1 ORDER BY id DESC LIMIT 5', [like])).rows)
+        results.push({ type: 'Journal', id: Number(r.id), title: `${r.voucher_no ?? `#${r.id}`} · ${r.narration}`, subtitle: r.date, page: `journal/open-${r.id}` });
       return { results };
     });
   }

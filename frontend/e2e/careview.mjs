@@ -3,6 +3,7 @@
 // chart of accounts, journals, reports, settings, search and repeating bills.
 // Needs API (:3000, TRUST_PROXY=1) and web (:5173) running and Google Chrome.  Run: node e2e/careview.mjs
 import { chromium } from 'playwright-core';
+import { autoConfirm } from './confirm.mjs';
 import assert from 'assert';
 import fs from 'fs';
 
@@ -14,6 +15,7 @@ page.setDefaultTimeout(Number(process.env.STEP_TIMEOUT ?? 30000));
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push(m.text()));
 page.on('dialog', (d) => d.accept());
+autoConfirm(page);
 const step = (s) => console.log('✓', s);
 const btn = (name) => page.locator('main').getByRole('button', { name, exact: true });
 const heading = (name) => page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
@@ -106,7 +108,7 @@ assert(customer > 0);
 await menu('Purchases', 'Bills');
 await heading('Bills');
 await btn('New bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Ramesh Transport');
 assert.strictEqual(await page.getByLabel('Supply type').inputValue(), 'unregistered');
 assert.strictEqual(await page.getByLabel('TDS section').inputValue(), '194C');
@@ -128,7 +130,7 @@ step('bill from an unregistered dealer: no GST, TDS 194C at 1% and the balance p
 await menu('Sales', 'Invoices');
 await heading('Invoices');
 await btn('New invoice').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Gujarat Retail');
 assert(await page.getByLabel('Interstate supply').isChecked(), 'IGST for a buyer in Gujarat');
 await page.getByLabel('Intrastate supply').check();
@@ -272,7 +274,7 @@ step('search finds settings and screens as well as records');
 await menu('Purchases', 'Repeating bills');
 await heading('Repeating bills');
 await btn('New repeating bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Ramesh Transport');
 const past = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
 await page.getByLabel('First bill date').fill(past);

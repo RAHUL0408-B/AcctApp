@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmt } from '../api';
 import type { Org } from '../App';
-import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
+import { Button, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import { Empty, PageHeader, Select } from '../kit';
 
 interface BankAcc { id: number; name: string; accountId: number; bookBalance: number; statementTotal: number; unreconciled: number }
@@ -63,7 +63,7 @@ export function Bank({ org, canPost, canManage, accounts, section = 'reconcile' 
     setOk(`Matched to ${d.number}. ${r.outstandingAfter > 0 ? `₹${fmt(r.outstandingAfter)} is still outstanding on it.` : 'It is now fully paid.'}`); setFinding({ ...finding, [txnId]: undefined }); refresh();
   });
   const unlink = (t: Txn) => run(async () => {
-    if (!window.confirm('Unlink this line? If it was matched to an invoice or bill, that payment is removed and the invoice or bill becomes outstanding again. The bank line goes back to unreconciled so you can match it to the right one.')) return;
+    if (!await ask('Unlink this line? If it was matched to an invoice or bill, that payment is removed and the invoice or bill becomes outstanding again. The bank line goes back to unreconciled so you can match it to the right one.')) return;
     const r = await api(`/orgs/${org.id}/bank-transactions/${t.id}/unlink`, { method: 'POST', body: {} });
     setOk(r.paymentUnlinked ? `Unlinked. ${r.documentNumber} is outstanding again.` : 'Unlinked.'); refresh();
   });

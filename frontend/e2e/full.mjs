@@ -90,7 +90,7 @@ step('customer, supplier and product added');
 // ---- quote -> invoice
 await nav('Quotes');
 await btn('New quote').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Add from catalogue').fill('CONS-01 · Consulting');
 await btn('Create').click();
@@ -106,7 +106,7 @@ step('quote QU-0001 (Rs 500 + 18% = Rs 590) accepted and converted to an invoice
 await nav('Invoices');
 await heading('Invoices');
 await btn('New invoice').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Consulting hours');
 await page.getByLabel('HSN 1').fill('9983');
@@ -134,7 +134,7 @@ step('customer statement: 590 + 1,180 - 1,180 payment = 590 owed');
 if (process.env.SHOT_DIR) { await nav('Invoices'); await page.getByRole('cell', { name: /INV\/\d\d-\d\d\/0002/ }).first().waitFor(); await page.screenshot({ path: process.env.SHOT_DIR + '/invoices.png' }); }
 await nav('Bills');
 await btn('New bill').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Pro Advisors');
 await page.getByLabel('TDS section').selectOption({ label: '194J · Professional / technical fees' });
 await page.getByLabel('Description 1').fill('Audit fee');
@@ -189,7 +189,7 @@ step('fixed asset Rs 12,000 at 20% straight line: 3 months = Rs 600 depreciation
 // ---- repeating invoice
 await nav('Repeating invoices');
 await btn('New repeating invoice').click();
-await page.locator('datalist option').first().waitFor({ state: 'attached' });
+await page.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await page.getByLabel('Contact', { exact: true }).fill('Acme Retail');
 await page.getByLabel('Description 1').fill('Monthly retainer');
 await page.getByLabel('Rate 1').fill('2000');

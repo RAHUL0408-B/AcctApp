@@ -6,6 +6,7 @@ import { writeAudit } from '../audit/audit';
 import { AuthGuard, UserId, Ip, parse, forgetTokenVersion } from '../common/guard';
 import { hashPassword, verifyPassword, weakPassword } from '../security/password';
 import { signToken, verifyToken } from '../security/jwt';
+import QRCode from 'qrcode';
 import { generateSecret, otpauthUrl, verifyTotp } from '../security/totp';
 import { RateLimiter } from '../common/ratelimit';
 import { queueMail } from '../firm/mailer';
@@ -249,7 +250,10 @@ export class AuthController {
     if (u.totp_enabled) throw new ConflictException('2FA is already enabled');
     const secret = generateSecret();
     await getPool().query('UPDATE users SET totp_secret=$2 WHERE id=$1', [uid, secret]);
-    return { secret, otpauthUrl: otpauthUrl(secret, u.email, APP_NAME) };
+    const url = otpauthUrl(secret, u.email, APP_NAME);
+    // A QR code to scan with the authenticator app (the key below it is for typing in by hand).
+    const qr = await QRCode.toDataURL(url, { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+    return { secret, otpauthUrl: url, qr };
   }
 
   @Post('2fa/enable')

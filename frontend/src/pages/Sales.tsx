@@ -39,6 +39,13 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
     else { const r = await api(`/orgs/${org.id}/pre-documents`, { body: { kind, ...b } }); setOk(`Created ${r.number}: total ₹${fmt(r.total)}`); }
     reset(); load();
   });
+  /** A copy as a new quote / order: same party and lines, today's date and the next number. */
+  const duplicate = (p: Pre) => run(async () => {
+    const d = await api(`/orgs/${org.id}/pre-documents/${p.id}`);
+    setF({ contactId: String(d.contactId), issueDate: today(), expiryDate: '', notes: d.notes ?? '' });
+    setLines(linesFromApi(d.lines)); setEditing(null); setConv(null); setShow(true); setOk(`Copied from ${p.number}. Check it, then create it: it gets the next number.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
   const startEdit = (p: Pre) => run(async () => {
     setOk('');
     const d = await api(`/orgs/${org.id}/pre-documents/${p.id}`);
@@ -95,7 +102,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
           searchLabel={`Search ${sales ? 'quotes' : 'purchase orders'}`}
           columns={[
             { key: 'number', label: 'Number', value: (p) => p.number, render: (p) => (canPost && p.status !== 'converted'
-              ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => startEdit(p)}>{p.number}</button> : <b>{p.number}</b>) },
+              ? <button type="button" className="link font-medium" onClick={() => startEdit(p)}>{p.number}</button> : <b>{p.number}</b>) },
             { key: 'contact', label: sales ? 'Customer' : 'Supplier', value: (p) => p.contactName },
             { key: 'date', label: 'Date', value: (p) => p.issueDate },
             { key: 'expiry', label: sales ? 'Valid until' : 'Delivery by', value: (p) => p.expiryDate, hidden: true },
@@ -107,6 +114,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
               {p.status !== 'declined' && <Button variant="ghost" className="!px-3 !py-1.5" disabled={busy} onClick={() => startConvert(p)}>{sales ? 'Convert to invoice' : 'Convert to bill'}</Button>}
               <RowMenu label={`Actions for ${p.number}`} actions={[
                 { label: 'Edit', icon: 'edit', onClick: () => startEdit(p) },
+                { label: 'Duplicate', icon: 'copy', onClick: () => duplicate(p) },
                 { label: 'Mark sent', icon: 'mail', onClick: () => status(p.id, 'sent'), hidden: p.status !== 'draft' },
                 { label: 'Accepted', icon: 'check', onClick: () => status(p.id, 'accepted'), hidden: !sales || !(p.status === 'draft' || p.status === 'sent') },
                 { label: 'Declined', icon: 'trash', onClick: () => status(p.id, 'declined'), hidden: !sales || p.status === 'declined', danger: true },
@@ -177,6 +185,12 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
   }, [load, org.id, bill]); // eslint-disable-line react-hooks/exhaustive-deps
   const contact = contacts.find((c) => String(c.id) === f.contactId);
   const reset = () => { setF(blank()); setLines([emptyLine()]); setEditing(null); setShow(false); form.setError(''); };
+  /** Came here from "Make it repeating" on an invoice or bill form: Close / Cancel goes back to that form. */
+  const returnTo = (() => { try { const r = sessionStorage.getItem('repeat-return'); const d = r ? JSON.parse(r) : null; return d && d.kind === kind ? d : null; } catch { return null; } })();
+  const cancel = () => {
+    if (returnTo && go) { try { sessionStorage.setItem('repeat-return', JSON.stringify({ ...returnTo, back: true })); } catch { /* storage may be off */ } reset(); go(returnTo.page); return; }
+    reset();
+  };
   const save = () => form.run(async () => {
     if (!f.contactId) throw new Error(`Choose the ${bill ? 'supplier' : 'customer'}.`);
     const body = { docType: kind, contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays),
@@ -186,6 +200,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
     else await api(`/orgs/${org.id}/recurring`, { body });
     // Anything already due (a start date today or in the past) is made now rather than at the next daily run.
     const made = f.nextDate <= today() ? (await api(`/orgs/${org.id}/recurring/run`, { body: {} }).catch(() => ({ created: 0 }))).created : 0;
+    try { sessionStorage.removeItem('repeat-return'); } catch { /* storage may be off */ }
     setOk(editing ? 'Schedule saved.' : `Saved. ${f.postMode === 'review' ? `Each ${noun} waits under "Due for posting" (and on the dashboard) for you to check and post.` : made ? `${made} ${noun}(s) already due were posted.` : `The first ${noun} is created on ${f.nextDate}.`}`);
     reset(); load();
   });
@@ -216,7 +231,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
   return (
     <>
       <PageHeader title={bill ? 'Repeating bills' : 'Repeating invoices'} subtitle={bill ? 'Rent, maintenance contracts, subscriptions. Each bill waits for you to add the supplier’s bill number or copy and post it, unless you choose automatic posting.' : 'Invoices made on a schedule: posted automatically (and emailed if you like), or kept for you to review first.'}
-        actions={canPost && <Button onClick={() => (show ? reset() : (setEditing(null), setShow(true)))}>{show ? 'Close' : `New repeating ${noun}`}</Button>} />
+        actions={canPost && <Button onClick={() => (show ? cancel() : (setEditing(null), setShow(true)))}>{show ? 'Close' : `New repeating ${noun}`}</Button>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
       {due.length > 0 && (
         <Card title={`Due for posting (${due.length})`}>
@@ -247,7 +262,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
             {f.notes.includes('{') && <p className="mt-1 text-xs text-slate-600" data-testid="narration-preview">First one reads: <b>{preview(f.notes, f.nextDate || today())}</b></p>}
           </div>
           <LinesEditor org={org} lines={lines} setLines={setLines} sales={!bill} accounts={accounts} contactDefaultId={bill ? contact?.defaultPurchaseAccountId : contact?.defaultSalesAccountId} />
-          <div className="mt-4 flex flex-wrap gap-3"><Button disabled={form.busy} onClick={save}>{editing ? 'Save changes' : 'Save schedule'}</Button><Button variant="ghost" onClick={reset}>Cancel</Button></div>
+          <div className="mt-4 flex flex-wrap gap-3"><Button disabled={form.busy} onClick={save}>{editing ? 'Save changes' : 'Save schedule'}</Button><Button variant="ghost" onClick={cancel}>{returnTo ? `Cancel and go back to the ${noun}` : 'Cancel'}</Button></div>
           <div className="mt-2"><ErrorMsg msg={form.error} /></div>
         </Card>
       )}

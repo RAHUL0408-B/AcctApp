@@ -105,14 +105,13 @@ const recurringSchema = z.object({
 type RecurringBody = z.infer<typeof recurringSchema>;
 function checkRecurring(b: RecurringBody) {
   if (b.docType === 'bill' && b.autoEmail) throw new BadRequestException('Bills are not emailed; turn off "email automatically"');
-  if (b.docType === 'invoice' && b.tdsSection) throw new BadRequestException('TDS is deducted on bills, not on invoices');
   if (b.endDate && b.endDate < b.nextDate) throw new BadRequestException('The end date is before the first date');
   if (b.autoEmail && b.postMode === 'review') throw new BadRequestException('An invoice waiting for review cannot be emailed automatically');
 }
 /** Validate now, so the schedule cannot fail later for bad data. */
 async function validateRecurring(c: PoolClient, orgId: number, b: RecurringBody) {
   await priceLines(c, orgId, b.docType === 'invoice', b.contactId, b.nextDate, b.lines, undefined, b.supplyType);
-  if (b.tdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1 AND valid_to IS NULL', [b.tdsSection])).rowCount) throw new BadRequestException('Unknown TDS section');
+  if (b.tdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1 AND valid_to IS NULL UNION ALL SELECT 1 FROM org_tds_sections WHERE code=$1', [b.tdsSection])).rowCount) throw new BadRequestException('Unknown TDS section');
 }
 
 const PRE = { quote: { prefix: 'QU', docType: 'invoice', contactKinds: 'customer' }, purchase_order: { prefix: 'PO', docType: 'bill', contactKinds: 'supplier' } } as const;
@@ -238,15 +237,16 @@ export class ExtrasController {
   @Post('pre-documents')
   async addPreDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
     const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
-    const b = parse(z.object({ kind: z.enum(['quote', 'purchase_order']), contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200) }), body);
+    const b = parse(z.object({ kind: z.enum(['quote', 'purchase_order']), contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200),
+      tdsSection: z.string().max(20).optional(), tdsForced: z.boolean().optional() }), body);
     if (role === 'sales' && b.kind !== 'quote') throw new ForbiddenException('You can create quotes only');
     return withOrg(orgId, async (c) => {
       const { t } = await priceLines(c, orgId, b.kind === 'quote', b.contactId, b.issueDate, b.lines);
       const seq = (await c.query(`INSERT INTO doc_sequences(org_id,doc_type,fy_label,next_no) VALUES ($1,$2,'-',2)
         ON CONFLICT (org_id,doc_type,fy_label) DO UPDATE SET next_no = doc_sequences.next_no + 1 RETURNING next_no - 1 AS n`, [orgId, b.kind])).rows[0];
       const number = `${await prefixFor(c, b.kind)}-${String(seq.n).padStart(4, '0')}`;
-      const r = (await c.query('INSERT INTO pre_documents(org_id,kind,number,contact_id,issue_date,expiry_date,lines,subtotal,tax,total,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',
-        [orgId, b.kind, number, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null, uid])).rows[0];
+      const r = (await c.query('INSERT INTO pre_documents(org_id,kind,number,contact_id,issue_date,expiry_date,lines,subtotal,tax,total,notes,created_by,tds_section,tds_forced) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id',
+        [orgId, b.kind, number, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null, uid, b.tdsSection || null, !!b.tdsForced])).rows[0];
       await writeAudit(c, { orgId, userId: uid, action: 'create', entity: b.kind, entityId: r.id, after: { number, total: t.total }, ip });
       return { id: Number(r.id), number, total: t.total };
     });
@@ -256,7 +256,8 @@ export class ExtrasController {
   async preDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number) {
     const role = await requireAnyOrg(uid, orgId, ['read', 'sales']);
     return withOrg(orgId, async (c) => {
-      const p = (await c.query(`SELECT p.id,p.kind,p.number,p.contact_id AS "contactId",ct.name AS "contactName",p.issue_date::text AS "issueDate",p.expiry_date::text AS "expiryDate",p.status,p.lines,p.notes,p.total
+      const p = (await c.query(`SELECT p.id,p.kind,p.number,p.contact_id AS "contactId",ct.name AS "contactName",p.issue_date::text AS "issueDate",p.expiry_date::text AS "expiryDate",p.status,p.lines,p.notes,p.total,
+        p.tds_section AS "tdsSection",p.tds_forced AS "tdsForced"
         FROM pre_documents p JOIN contacts ct ON ct.id=p.contact_id WHERE p.id=$1`, [id])).rows[0];
       if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
       return num(p, 'id', 'contactId', 'total');
@@ -267,14 +268,15 @@ export class ExtrasController {
   @Put('pre-documents/:id')
   async editPreDoc(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('id', ParseIntPipe) id: number, @Body() body: unknown, @Ip() ip: string) {
     const role = await requireAnyOrg(uid, orgId, ['post', 'sales']);
-    const b = parse(z.object({ contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200) }), body);
+    const b = parse(z.object({ contactId: z.number().int().positive(), issueDate: date, expiryDate: date.optional(), notes: z.string().max(500).optional(), lines: z.array(lineSchema).min(1).max(200),
+      tdsSection: z.string().max(20).optional(), tdsForced: z.boolean().optional() }), body);
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT kind,status FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
       if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
       if (p.status === 'converted') throw new ConflictException('This has already been turned into an invoice or bill, so it can no longer be edited');
       const { t } = await priceLines(c, orgId, p.kind === 'quote', b.contactId, b.issueDate, b.lines);
-      await c.query('UPDATE pre_documents SET contact_id=$2,issue_date=$3,expiry_date=$4,lines=$5,subtotal=$6,tax=$7,total=$8,notes=$9 WHERE id=$1',
-        [id, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null]);
+      await c.query('UPDATE pre_documents SET contact_id=$2,issue_date=$3,expiry_date=$4,lines=$5,subtotal=$6,tax=$7,total=$8,notes=$9,tds_section=$10,tds_forced=$11 WHERE id=$1',
+        [id, b.contactId, b.issueDate, b.expiryDate ?? null, JSON.stringify(b.lines), t.subtotal, t.total - t.subtotal, t.total, b.notes ?? null, b.tdsSection || null, !!b.tdsForced]);
       await writeAudit(c, { orgId, userId: uid, action: 'update', entity: p.kind, entityId: id, after: { total: t.total }, ip });
       return { ok: true, total: t.total };
     });
@@ -298,7 +300,7 @@ export class ExtrasController {
     // Everything after the dates is optional: the screen lets the user change the lines and details before anything is posted.
     const b = parse(z.object({ issueDate: date.default(today()), dueDate: date.optional(), contactId: z.number().int().positive().optional(), lines: z.array(lineSchema).min(1).max(200).optional(),
       notes: z.string().max(500).optional(), supplierRef: z.string().max(60).optional(), placeOfSupply: z.string().length(2).optional(), supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge', 'unregistered']).optional(),
-      tdsSection: z.string().optional(), number: z.string().trim().min(1).max(40).optional() }), body ?? {});
+      tdsSection: z.string().optional(), tdsForced: z.boolean().optional(), number: z.string().trim().min(1).max(40).optional() }), body ?? {});
     return withOrg(orgId, async (c) => {
       const p = (await c.query('SELECT * FROM pre_documents WHERE id=$1 FOR UPDATE', [id])).rows[0];
       if (!p || (role === 'sales' && p.kind !== 'quote')) throw new NotFoundException('Not found');
@@ -306,7 +308,9 @@ export class ExtrasController {
       if (p.status === 'declined') throw new ConflictException('A declined document cannot be converted');
       const spec = PRE[p.kind as keyof typeof PRE];
       const doc = await createDocument(c, orgId, uid, { docType: spec.docType, contactId: b.contactId ?? Number(p.contact_id), issueDate: b.issueDate, dueDate: b.dueDate, lines: b.lines ?? p.lines,
-        supplierRef: b.supplierRef ?? (p.kind === 'purchase_order' ? p.number : undefined), notes: b.notes ?? p.notes ?? undefined, placeOfSupply: b.placeOfSupply, supplyType: b.supplyType ?? 'regular', tdsSection: b.tdsSection, number: b.number } as any, ip);
+        supplierRef: b.supplierRef ?? (p.kind === 'purchase_order' ? p.number : undefined), notes: b.notes ?? p.notes ?? undefined, placeOfSupply: b.placeOfSupply, supplyType: b.supplyType ?? 'regular',
+        // TDS on the quote (receivable) or order (payable) is carried to the invoice or bill unless changed on the way.
+        tdsSection: b.tdsSection ?? p.tds_section ?? undefined, tdsForced: b.tdsForced ?? !!p.tds_forced, number: b.number } as any, ip);
       await c.query("UPDATE pre_documents SET status='converted', converted_doc_id=$2 WHERE id=$1", [id, doc.id]);
       await writeAudit(c, { orgId, userId: uid, action: 'convert', entity: p.kind, entityId: id, after: { documentId: doc.id, number: doc.number }, ip });
       return { documentId: doc.id, number: doc.number };

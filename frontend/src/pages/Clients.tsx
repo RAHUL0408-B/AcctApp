@@ -10,19 +10,24 @@ export function Clients({ me, orgs, firmRole, onOpen, onChanged }: { me: Me; org
   const [f, setF] = useState({ name: '', gstin: '', pan: '', template: 'services' });
   const { error, busy, run } = useAction();
   const canAdd = firmRole === 'owner' || firmRole === 'accountant';
+  // The add-client fields stay out of the way behind "New client", except for a new firm with no clients yet.
+  const [adding, setAdding] = useState(false);
+  const showForm = canAdd && (adding || orgs.length === 0);
 
   const add = (e: FormEvent) => {
     e.preventDefault();
     run(async () => {
       await api('/orgs', { body: { firmId: firm!.firmId, name: f.name, template: f.template, ...(f.gstin ? { gstin: f.gstin.toUpperCase() } : {}), ...(f.pan ? { pan: f.pan.toUpperCase() } : {}) } });
       setF({ name: '', gstin: '', pan: '', template: 'services' });
+      setAdding(false);
       onChanged();
     });
   };
 
   return (
     <>
-      <Card title={firmNames.length ? `${firmNames.join(' and ')} — clients` : 'Your organizations'}>
+      <Card title={firmNames.length ? `${firmNames.join(' and ')} — clients` : 'Your organizations'}
+        actions={canAdd && orgs.length > 0 && !adding ? <Button onClick={() => setAdding(true)}><span aria-hidden>＋ </span>New client</Button> : undefined}>
         {orgs.length === 0 ? (
           <div className="rounded bg-brand-50 p-4 text-sm" data-testid="onboarding">
             <p className="font-semibold">Welcome! Three steps to get going:</p>
@@ -41,8 +46,8 @@ export function Clients({ me, orgs, firmRole, onOpen, onChanged }: { me: Me; org
           </ul>
         )}
       </Card>
-      {canAdd && (
-        <Card title="Add a client">
+      {showForm && (
+        <Card title="Add a client" actions={orgs.length > 0 ? <Button variant="ghost" onClick={() => setAdding(false)}>Cancel</Button> : undefined}>
           <form onSubmit={add} className="grid gap-3 md:grid-cols-2">
             <Field label="Business name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
             <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Chart of accounts</span>

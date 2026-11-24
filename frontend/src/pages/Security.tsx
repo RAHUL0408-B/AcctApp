@@ -33,7 +33,7 @@ export function Security({ me, onChanged }: { me: Me; onChanged: () => void }) {
 }
 
 function TwoFactor({ me, onChanged }: { me: Me; onChanged: () => void }) {
-  const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string; qr?: string } | null>(null);
   const [code, setCode] = useState('');
   const [recovery, setRecovery] = useState<string[]>([]);
   const { error, busy, run } = useAction();
@@ -50,7 +50,9 @@ function TwoFactor({ me, onChanged }: { me: Me; onChanged: () => void }) {
       {!me.twoFactorEnabled && !setup && <Button disabled={busy} onClick={() => run(async () => setSetup(await api('/auth/2fa/setup', { method: 'POST', body: {} })))}>Set up 2FA</Button>}
       {setup && (
         <div className="space-y-3">
-          <p className="text-sm">Add this key to an authenticator app (Google Authenticator, Authy…), then enter the 6-digit code.</p>
+          <p className="text-sm">Scan this QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, Authy…), then enter the 6-digit code it shows.</p>
+          {setup.qr && <img src={setup.qr} alt="QR code to scan with your authenticator app" data-testid="totp-qr" width={220} height={220} className="rounded-lg border border-brand-100 bg-white p-2" />}
+          <p className="text-xs text-slate-500">Cannot scan? Type this key into the app instead:</p>
           <p className="break-all rounded bg-slate-100 p-2 font-mono text-sm" data-testid="totp-secret">{setup.secret}</p>
           <Field label="6-digit code" value={code} onChange={(e) => setCode(e.target.value)} maxLength={6} />
           <Button disabled={busy} onClick={() => run(async () => { const r = await api('/auth/2fa/enable', { body: { code } }); setRecovery(r.recoveryCodes); setSetup(null); onChanged(); })}>Turn on 2FA</Button>

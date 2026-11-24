@@ -98,9 +98,10 @@ export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
 
 type ItemForm = { id?: number; code: string; name: string; kind: string; hsnSac: string; unit: string; rate: string; gstRateBp: string; accountId: string; line?: number };
 
-export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds, dutyOk = false }:
+export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds, dutyOk = false, fxRate }:
   { org: Org; lines: Line[]; setLines: (l: Line[]) => void; sales: boolean; accounts: Account[]; currency?: string; intra?: boolean; noTax?: boolean;
     /** Customs duty may be added as a line (export and SEZ invoices, when the organisation says duty applies). */ dutyOk?: boolean;
+    /** Rupees per unit of a foreign currency: the totals are shown in rupees as well. */ fxRate?: number;
     /** The chosen contact's default sales or purchase account, shown as what "Default" means. */ contactDefaultId?: number | null;
     /** TDS this bill will carry, to show the balance payable after it. */ tds?: { section: string; amount: number } | null }) {
   const [rates, setRates] = useState<{ rateBp: number; label: string }[]>([]);
@@ -259,7 +260,12 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
             <tr className="border-t-2 border-slate-300"><td className="pt-2 font-semibold">Total {sales ? 'invoice' : 'bill'} value</td><td className="pt-2 text-right text-base font-semibold tabular-nums" data-testid="grand-total">{cur}{fmt(sum.total)}</td></tr>
             {tds && <>
               <tr className="text-slate-600"><td className="py-1 pl-3">Less TDS u/s {tds.section}</td><td className="py-1 text-right tabular-nums" data-testid="tds-total">− {cur}{fmt(tds.amount)}</td></tr>
-              <tr className="border-t border-slate-300"><td className="pt-1 font-semibold">Balance payable after TDS</td><td className="pt-1 text-right font-semibold tabular-nums" data-testid="net-payable">{cur}{fmt(sum.total - tds.amount)}</td></tr></>}
+              <tr className="border-t border-slate-300"><td className="pt-1 font-semibold">{sales ? 'Net receivable after TDS' : 'Balance payable after TDS'}</td><td className="pt-1 text-right font-semibold tabular-nums" data-testid="net-payable">{cur}{fmt(sum.total - tds.amount)}</td></tr></>}
+            {currency !== 'INR' && !!fxRate && fxRate > 0 && <>
+              <tr className="border-t border-brand-100"><td colSpan={2} className="pt-2 text-xs font-semibold uppercase tracking-wide text-brand-800">In rupees at ₹{fxRate} per {currency}</td></tr>
+              <tr className="text-slate-600"><td className="py-0.5 pl-3">Taxable value</td><td className="py-0.5 text-right tabular-nums">₹{fmt(Math.round(sum.subtotal * fxRate))}</td></tr>
+              <tr className="text-slate-600"><td className="py-0.5 pl-3">GST</td><td className="py-0.5 text-right tabular-nums">₹{fmt(Math.round(sum.gst * fxRate))}</td></tr>
+              <tr><td className="py-1 pl-3 font-semibold">Total in rupees</td><td className="py-1 text-right font-semibold tabular-nums" data-testid="inr-total">₹{fmt(Math.round(sum.total * fxRate))}</td></tr></>}
           </tbody>
         </table>
       </div>

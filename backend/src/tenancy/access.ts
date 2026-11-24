@@ -47,7 +47,7 @@ async function kindOf(orgId: number, sql: string, id: number): Promise<string | 
 export async function areaOf(orgId: number, method: string, rest: string, body: any, query: any): Promise<Area | Area[] | null> {
   const read = method === 'GET' || method === 'HEAD';
   const p = rest.replace(/\/+$/, '');
-  if (read && /^(settings|org-settings|accounts|contacts|items|currencies|tracking|notifications|search|setup-guide|dashboard|numbering|documents-next-number|documents-number-check|tds-preview|documents-check|account-structure|accounts-next-code|upi-sample|portal|tasks|files(\/\d+\/download)?|doc-templates|export-settings|export-columns\/[\w-]+|asset-groups|fixed-assets-next-code)$/.test(p)) return null;
+  if (read && /^(settings|org-settings|accounts|contacts|items|currencies|tracking|notifications|search|setup-guide|dashboard|numbering|documents-next-number|documents-number-check|tds-preview|tds-sections|gst-rates|documents-check|account-structure|accounts-next-code|upi-sample|portal|tasks|files(\/\d+\/download)?|doc-templates|export-settings|export-columns\/[\w-]+|asset-groups|fixed-assets-next-code)$/.test(p)) return null;
   if (/^(compliance\/|reports\/(gstr1|gstr3b|gstr1-json|tds)$)/.test(p)) return 'tax';
   if (/^reports\/|^export(\/|-multi)|^report-table\/|^trial-balance$/.test(p)) return 'reports';
   if (/^overview\/sales$/.test(p)) return 'sales';
@@ -55,6 +55,7 @@ export async function areaOf(orgId: number, method: string, rest: string, body: 
   if (/^(bank-|bank-transfers)/.test(p)) return 'bank';
   if (/^contacts\/\d+\/statement$/.test(p) || /^contacts(\/|$)/.test(p)) return 'contacts';
   if (/^projects(\/|$)/.test(p)) return 'projects';
+  if (/^(tds-sections|gst-rates)(\/|$)/.test(p)) return 'settings';
   if (/^(org-settings|settings|numbering\/next|lock-dates|lock|currencies|export-templates|export-defaults|export-preview|scheduled-reports|import|history|audit|email-preview)(\/|$)/.test(p)) return 'settings';
   if (/^(journal|journal-rules|fixed-assets|stock|tracking|budgets|year-end|accounts|account-groups|journal-drafts|journal-next-number)(\/|$)/.test(p)) return 'accounting';
   if (/^expense-claims(\/|$)/.test(p)) return 'purchases';
@@ -81,7 +82,7 @@ export async function areaOf(orgId: number, method: string, rest: string, body: 
     const first = Number(body?.items?.[0]?.documentId);
     return first ? docArea(await kindOf(orgId, 'SELECT doc_type AS k FROM documents WHERE id=$1', first)) : null;
   }
-  if ((m = /^payment-batches\/(\d+)$/.exec(p))) return (await kindOf(orgId, 'SELECT side AS k FROM payment_batches WHERE id=$1', Number(m[1]))) === 'pay' ? 'purchases' : 'sales';
+  if ((m = /^payment-batches\/(\d+)(\/unlink)?$/.exec(p))) return (await kindOf(orgId, 'SELECT side AS k FROM payment_batches WHERE id=$1', Number(m[1]))) === 'pay' ? 'purchases' : 'sales';
   if (p === 'pre-documents') return read ? (query?.kind ? docArea(query.kind) : null) : docArea(body?.kind) ?? 'sales';
   if ((m = /^pre-documents\/(\d+)(\/.*)?$/.exec(p))) return docArea(await kindOf(orgId, 'SELECT kind AS k FROM pre_documents WHERE id=$1', Number(m[1])));
   if (p === 'recurring') return read ? (query?.type === 'bill' ? 'purchases' : 'sales') : body?.docType === 'bill' ? 'purchases' : 'sales';

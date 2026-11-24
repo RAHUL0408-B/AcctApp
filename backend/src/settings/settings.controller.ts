@@ -59,6 +59,25 @@ const COLUMNS: Partial<Record<keyof Body, string>> = {
   autoRemind: 'auto_remind', remindEveryDays: 'remind_every_days',
 };
 
+const FIELD_NAME: Record<string, string> = {
+  number: 'Number', party: 'Party', date: 'Date', due: 'Due date', taxable: 'Taxable value', gst: 'GST', total: 'Total', supplierRef: 'Supplier bill no.', notes: 'Notes',
+  currency: 'Currency', lines: 'Lines', name: 'Name', code: 'Code', group: 'Group', narration: 'Narration', reference: 'Reference', voucherNo: 'Voucher', gstin: 'GSTIN', email: 'Email',
+  phone: 'Phone', pan: 'PAN', amount: 'Amount', reason: 'Reason', status: 'Status',
+};
+/**
+ * The particulars of one history line: what it was about (party, number, voucher) and, for a change, each field that
+ * changed from its old value to the new one.
+ */
+export function describeChange(entity: string, before: any, after: any) {
+  const b = before && typeof before === 'object' ? before : {}, a = after && typeof after === 'object' ? after : {};
+  const pick = (k: string) => a[k] ?? b[k];
+  const particulars = [pick('number') ?? pick('voucherNo'), pick('party') ?? pick('contactName') ?? pick('name'), pick('narration'), pick('total') != null ? `₹${pick('total')}` : null, pick('reason') ? `reason: ${pick('reason')}` : null]
+    .filter((x) => x != null && x !== '').map(String).join(' · ');
+  const changes = Object.keys(FIELD_NAME).filter((k) => k in b && k in a && JSON.stringify(b[k]) !== JSON.stringify(a[k]))
+    .map((k) => ({ field: FIELD_NAME[k], from: b[k] == null ? '' : String(b[k]), to: a[k] == null ? '' : String(a[k]) }));
+  return { particulars, changes, about: entity };
+}
+
 @Controller('orgs/:orgId')
 @UseGuards(AuthGuard)
 export class SettingsController {
@@ -232,12 +251,14 @@ export class SettingsController {
     await requireOrg(uid, orgId, 'manage');
     const limit = Math.min(Math.max(parseInt(q.limit ?? '') || 100, 1), 500);
     const rows = await withOrg(orgId, async (c) => (await c.query(
-      `SELECT id, user_id, action, entity, entity_id AS "entityId", after_data AS after, created_at AS "at" FROM audit_log
-        WHERE ($1::text IS NULL OR entity=$1) AND ($2::text IS NULL OR action ILIKE '%'||$2||'%' OR entity ILIKE '%'||$2||'%')
-        ORDER BY id DESC LIMIT $3`, [q.entity || null, q.q || null, limit])).rows);
+      `SELECT id, user_id, action, entity, entity_id AS "entityId", before_data AS before, after_data AS after, created_at AS "at" FROM audit_log
+        WHERE ($1::text IS NULL OR entity=$1) AND ($2::text IS NULL OR action ILIKE '%'||$2||'%' OR entity ILIKE '%'||$2||'%' OR after_data::text ILIKE '%'||$2||'%' OR before_data::text ILIKE '%'||$2||'%')
+          AND ($4::text IS NULL OR entity_id=$4)
+        ORDER BY id DESC LIMIT $3`, [q.entity || null, q.q || null, limit, q.entityId || null])).rows);
     const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     const users = ids.length ? (await getPool().query('SELECT id, full_name AS name, email FROM users WHERE id = ANY($1)', [ids])).rows : [];
     const who = new Map(users.map((u) => [String(u.id), u.name || u.email]));
-    return rows.map((r) => ({ id: Number(r.id), at: r.at, user: r.user_id ? who.get(String(r.user_id)) ?? 'Unknown user' : 'System', action: r.action, entity: r.entity, entityId: r.entityId, after: r.after }));
+    return rows.map((r) => ({ id: Number(r.id), at: r.at, user: r.user_id ? who.get(String(r.user_id)) ?? 'Unknown user' : 'System', action: r.action, entity: r.entity, entityId: r.entityId,
+      before: r.before, after: r.after, ...describeChange(r.entity, r.before, r.after) }));
   }
 }

@@ -91,13 +91,16 @@ export const docSchema = z.object({
   issueDate: date, dueDate: date.optional(), placeOfSupply: z.string().length(2).optional(), supplierRef: z.string().max(60).optional(),
   number: z.string().trim().min(1).max(40).optional(),
   originalDocId: z.number().int().positive().optional(), tdsSection: z.string().optional(), notes: z.string().max(500).optional(),
+  /** Apply TDS even below the section's thresholds. */ tdsForced: z.boolean().optional(),
+  /** TDS typed by hand (paise), instead of the amount worked out. */ tdsAmount: z.number().int().min(0).optional(),
   supplyType: z.enum(['regular', 'export_lut', 'export_igst', 'sez_lut', 'sez_igst', 'reverse_charge', 'unregistered']).default('regular'),
   currency: z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code').default('INR'),
   fxRate: z.number().positive().max(100000).optional(), // rupees per 1 unit of the currency
   lines: z.array(z.object({
     description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
     unit: z.string().trim().toUpperCase().refine((u) => (UQC as readonly string[]).includes(u), 'Unit must be a GST unit quantity code (UQC) such as NOS, PCS, KGS, LTR or OTH').optional(),
-    quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0),
+    // A negative rate makes a discount or return line: it has the opposite debit / credit effect.
+    quantity: z.number().positive().max(1e9), rate: z.number().int().min(-1e13), gstRateBp: z.number().int().min(0).max(5000).default(0),
     accountId: z.number().int().positive().optional(), itemId: z.number().int().positive().optional(), trackingOptionId: z.number().int().positive().optional(),
     cessRateBp: z.number().int().min(0).max(30000).optional(), itcBlocked: z.boolean().optional(),
   })).min(1).max(200),
@@ -124,6 +127,41 @@ const shapeDoc = (r: any) => ({
   paid: r.paid !== undefined ? Number(r.paid) : undefined, outstanding: r.outstanding !== undefined ? Number(r.outstanding) : undefined,
 });
 
+/** A TDS section as it applies to this organisation: its own section or its changed rates and thresholds, else the statutory one. */
+export async function tdsSectionFor(c: PoolClient, code: string, on: string) {
+  const own = (await c.query('SELECT * FROM org_tds_sections WHERE code=$1', [code])).rows[0];
+  if (own) return own;
+  const sec = (await c.query('SELECT * FROM tds_sections WHERE code=$1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to >= $2)', [code, on])).rows[0];
+  if (!sec) throw new BadRequestException(`Unknown TDS section ${code}`);
+  return sec;
+}
+/** Every TDS section for this organisation, with where its figures come from (statutory, changed, or its own). */
+export async function tdsSectionList(c: PoolClient) {
+  const std = (await c.query('SELECT code, description, rate_individual_bp, rate_other_bp, single_threshold, annual_threshold FROM tds_sections WHERE valid_to IS NULL ORDER BY code')).rows;
+  const own = (await c.query('SELECT * FROM org_tds_sections ORDER BY code')).rows;
+  const shape = (r: any, source: 'statutory' | 'changed' | 'custom', statutory?: any) => ({
+    code: r.code, description: r.description, rateIndividualBp: Number(r.rate_individual_bp), rateOtherBp: Number(r.rate_other_bp),
+    singleThreshold: Number(r.single_threshold), annualThreshold: Number(r.annual_threshold), source,
+    ...(statutory ? { statutory: { rateIndividualBp: Number(statutory.rate_individual_bp), rateOtherBp: Number(statutory.rate_other_bp), singleThreshold: Number(statutory.single_threshold), annualThreshold: Number(statutory.annual_threshold) } } : {}),
+  });
+  return [
+    ...std.map((s) => { const o = own.find((x) => x.code === s.code); return o ? shape(o, 'changed', s) : shape(s, 'statutory'); }),
+    ...own.filter((o) => !std.some((s) => s.code === o.code)).map((o) => shape(o, 'custom')),
+  ];
+}
+
+/** The particulars of a document as the history shows them: number, party, dates, amounts and its lines in short. */
+export async function docSnapshot(c: PoolClient, id: number) {
+  const d = (await c.query(`SELECT d.number, d.doc_type, ct.name AS party, d.issue_date::text AS date, d.due_date::text AS due, d.subtotal, d.cgst + d.sgst + d.igst AS gst, d.total,
+      d.supplier_ref, d.notes, d.currency FROM documents d JOIN contacts ct ON ct.id=d.contact_id WHERE d.id=$1`, [id])).rows[0];
+  if (!d) return {};
+  const lines = (await c.query('SELECT description, qty_milli, rate, gst_rate_bp FROM document_lines WHERE doc_id=$1 ORDER BY id', [id])).rows
+    .map((l) => `${l.description} × ${Number(l.qty_milli) / 1000} @ ${(Number(l.rate) / 100).toFixed(2)} (GST ${Number(l.gst_rate_bp) / 100}%)`).join('; ');
+  const rupees = (p: unknown) => (Number(p) / 100).toFixed(2);
+  return { number: d.number, type: d.doc_type, party: d.party, date: d.date, due: d.due, taxable: rupees(d.subtotal), gst: rupees(d.gst), total: rupees(d.total),
+    ...(d.supplier_ref ? { supplierRef: d.supplier_ref } : {}), ...(d.notes ? { notes: d.notes } : {}), ...(d.currency !== 'INR' ? { currency: d.currency } : {}), lines };
+}
+
 @Controller()
 @UseGuards(AuthGuard)
 export class DocumentsController {
@@ -131,6 +169,71 @@ export class DocumentsController {
   @Get('config/states') async states() { return (await getPool().query('SELECT code,name FROM gst_states ORDER BY code')).rows; }
   @Get('config/gst-rates') async gstRates() {
     return (await getPool().query('SELECT rate_bp AS "rateBp", label FROM gst_rates WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE ORDER BY rate_bp')).rows;
+  }
+  /** TDS sections for this organisation: the statutory ones with its own rate and threshold changes, plus its own sections. */
+  @Get('orgs/:orgId/tds-sections')
+  async orgTdsSections(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    return withOrg(orgId, (c) => tdsSectionList(c));
+  }
+  /**
+   * Change a TDS section's rates or thresholds for this organisation, or add its own section. The statutory figures are
+   * kept: "Back to statutory" removes the change. Every change is in the history.
+   */
+  @Put('orgs/:orgId/tds-sections/:code')
+  async setTdsSection(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('code') code: string, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    const b = parse(z.object({ description: z.string().trim().min(1).max(200).optional(), rateIndividualBp: z.number().int().min(0).max(5000), rateOtherBp: z.number().int().min(0).max(5000),
+      singleThreshold: z.number().int().min(0).default(0), annualThreshold: z.number().int().min(0).default(0) }), body);
+    const key = code.trim().toUpperCase().replace(/\s+/g, '');
+    if (!/^[0-9A-Z()]{2,20}$/.test(key)) throw new BadRequestException('A section code is 2-20 letters, digits or brackets, for example 194Q or 194J(b)');
+    return withOrg(orgId, async (c) => {
+      const std = (await c.query('SELECT * FROM tds_sections WHERE code=$1 AND valid_to IS NULL', [key])).rows[0];
+      const before = (await c.query('SELECT * FROM org_tds_sections WHERE code=$1', [key])).rows[0] ?? std ?? null;
+      if (!std && !b.description) throw new BadRequestException('Give a description for your own section');
+      await c.query(`INSERT INTO org_tds_sections(org_id,code,description,rate_individual_bp,rate_other_bp,single_threshold,annual_threshold,custom) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT (org_id,code) DO UPDATE SET description=EXCLUDED.description, rate_individual_bp=EXCLUDED.rate_individual_bp, rate_other_bp=EXCLUDED.rate_other_bp,
+          single_threshold=EXCLUDED.single_threshold, annual_threshold=EXCLUDED.annual_threshold, updated_at=now()`,
+        [orgId, key, b.description ?? std.description, b.rateIndividualBp, b.rateOtherBp, b.singleThreshold, b.annualThreshold, !std]);
+      const pct = (bp: unknown) => `${Number(bp) / 100}%`, rs = (p: unknown) => (Number(p) / 100).toFixed(2);
+      await writeAudit(c, { orgId, userId: uid, action: std ? 'change_tds_section' : 'add_tds_section', entity: 'tds_section', entityId: key,
+        before: before ? { name: key, rate: `${pct(before.rate_individual_bp)} / ${pct(before.rate_other_bp)}`, amount: `${rs(before.single_threshold)} / ${rs(before.annual_threshold)}` } : undefined,
+        after: { name: key, rate: `${pct(b.rateIndividualBp)} / ${pct(b.rateOtherBp)}`, amount: `${rs(b.singleThreshold)} / ${rs(b.annualThreshold)}` }, ip });
+      return { code: key, custom: !std };
+    });
+  }
+  @Delete('orgs/:orgId/tds-sections/:code')
+  async resetTdsSection(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Param('code') code: string, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    return withOrg(orgId, async (c) => {
+      const own = (await c.query('DELETE FROM org_tds_sections WHERE code=$1 RETURNING *', [code])).rows[0];
+      if (!own) throw new NotFoundException('Nothing to remove: this section already uses the statutory figures');
+      if (own.custom && (await c.query("SELECT 1 FROM documents WHERE tds_section=$1 AND status='posted' LIMIT 1", [code])).rowCount)
+        throw new ConflictException(`${code} is used on posted documents, so it cannot be removed`);
+      await writeAudit(c, { orgId, userId: uid, action: own.custom ? 'remove_tds_section' : 'reset_tds_section', entity: 'tds_section', entityId: code, before: { name: code }, ip });
+      return { removed: true };
+    });
+  }
+  /** The organisation's own GST rates (in basis points), offered on every line next to the standard ones. */
+  @Put('orgs/:orgId/gst-rates')
+  async setGstRates(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number, @Body() body: unknown, @Ip() ip: string) {
+    await requireOrg(uid, orgId, 'manage');
+    const b = parse(z.object({ rates: z.array(z.number().int().min(1).max(5000)).max(20) }), body);
+    const rates = [...new Set(b.rates)].sort((x, y) => x - y);
+    return withOrg(orgId, async (c) => {
+      const before = (await c.query('SELECT custom_gst_rates FROM organizations WHERE id=$1', [orgId])).rows[0]?.custom_gst_rates ?? [];
+      await c.query('UPDATE organizations SET custom_gst_rates=$2 WHERE id=$1', [orgId, rates]);
+      await writeAudit(c, { orgId, userId: uid, action: 'set_gst_rates', entity: 'settings', entityId: orgId, before: { rate: before.map((r: number) => `${r / 100}%`).join(', ') }, after: { rate: rates.map((r) => `${r / 100}%`).join(', ') }, ip });
+      return { rates };
+    });
+  }
+  /** GST rates offered on lines: the standard ones and the organisation's own. */
+  @Get('orgs/:orgId/gst-rates')
+  async orgGstRates(@UserId() uid: number, @Param('orgId', ParseIntPipe) orgId: number) {
+    await requireOrg(uid, orgId, 'read');
+    const std = (await getPool().query('SELECT rate_bp AS "rateBp", label FROM gst_rates WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE ORDER BY rate_bp')).rows.map((r) => ({ rateBp: Number(r.rateBp), label: r.label, custom: false }));
+    const own = ((await getPool().query('SELECT custom_gst_rates FROM organizations WHERE id=$1', [orgId])).rows[0]?.custom_gst_rates ?? []).map(Number);
+    return [...std, ...own.filter((r: number) => !std.some((s) => s.rateBp === r)).map((r: number) => ({ rateBp: r, label: `${r / 100}%`, custom: true }))].sort((a, b) => a.rateBp - b.rateBp);
   }
   @Get('config/tds-sections') async tdsSections() {
     return (await getPool().query(`SELECT code, description, rate_individual_bp AS "rateIndividualBp", rate_other_bp AS "rateOtherBp",
@@ -311,11 +414,13 @@ export class DocumentsController {
       if (!old) throw new NotFoundException('Document not found');
       if (old.status === 'void') throw new ConflictException('This document is already cancelled');
       if (old.doc_type !== b.docType) throw new BadRequestException('The type of a document cannot be changed');
+      const before = await docSnapshot(c, id);
       await voidDocument(c, orgId, uid, id, old.issue_date, 'Edited', ip);
       await c.query('UPDATE documents SET number = number || $2 WHERE id=$1', [id, `-v${id}`]); // free the number for the corrected version
       const fresh = await createDocument(c, orgId, uid, { ...b, number: b.number ?? old.number }, ip);
       await c.query('UPDATE documents SET replaced_by=$2 WHERE id=$1', [id, fresh.id]);
-      await writeAudit(c, { orgId, userId: uid, action: 'edit', entity: 'document', entityId: fresh.id, before: { replacedId: id, number: old.number }, after: { total: fresh.total }, ip });
+      // The history shows what changed, field by field (party, dates, amounts, lines), from the old version to the new one.
+      await writeAudit(c, { orgId, userId: uid, action: 'edit', entity: 'document', entityId: fresh.id, before: { replacedId: id, ...before }, after: await docSnapshot(c, fresh.id), ip });
       return fresh;
     });
   }
@@ -359,18 +464,20 @@ export class DocumentsController {
     const amount = Number(q.amount), contactId = Number(q.contactId);
     if (!q.section || !Number.isInteger(contactId) || !Number.isFinite(amount) || amount < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(q.date ?? '')) throw new BadRequestException('Give section, contactId, amount (paise) and date');
     return withOrg(orgId, async (c) => {
-      const sec = (await c.query('SELECT * FROM tds_sections WHERE code=$1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to >= $2)', [q.section, q.date])).rows[0];
+      const sec = await tdsSectionFor(c, q.section, q.date);
       const contact = (await c.query('SELECT * FROM contacts WHERE id=$1', [contactId])).rows[0];
+      const kind = q.type === 'invoice' ? 'invoice' : 'bill';
       if (!sec || !contact) throw new NotFoundException('Unknown TDS section or contact');
       const fy = financialYearOf(q.date);
       const prior = (await c.query(
         `SELECT COALESCE(SUM(subtotal),0) AS total, COALESCE(SUM(subtotal) FILTER (WHERE tds_amount > 0),0) AS deducted
-           FROM documents WHERE contact_id=$1 AND doc_type='bill' AND status='posted' AND tds_section=$2 AND issue_date BETWEEN $3 AND $4 AND ($5::bigint IS NULL OR id <> $5)`,
-        [contactId, q.section, fy.start, fy.end, q.except ? Number(q.except) : null])).rows[0];
+           FROM documents WHERE contact_id=$1 AND doc_type=$6 AND status='posted' AND tds_section=$2 AND issue_date BETWEEN $3 AND $4 AND ($5::bigint IS NULL OR id <> $5)`,
+        [contactId, q.section, fy.start, fy.end, q.except ? Number(q.except) : null, kind])).rows[0];
       const r = computeTds({
         section: { code: sec.code, rateIndividualBp: sec.rate_individual_bp, rateOtherBp: sec.rate_other_bp, singleThreshold: Number(sec.single_threshold), annualThreshold: Number(sec.annual_threshold) },
         deducteeIsIndividual: contact.is_individual, hasPan: !!contact.pan || !!contact.gstin, amount: Math.round(amount), priorTotal: Number(prior.total), priorDeductedBase: Number(prior.deducted),
         certificateRateBp: contact.lower_tds_rate_bp != null && contact.default_tds_section === sec.code ? Number(contact.lower_tds_rate_bp) : undefined,
+        force: q.force === '1' || q.force === 'true',
       });
       return { ...r, section: sec.code };
     });
@@ -564,7 +671,7 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     if (!b.fxRate) throw new BadRequestException(`Give the exchange rate: rupees per 1 ${currency}`);
     fxRate = b.fxRate;
   }
-  if (foreign && b.tdsSection) throw new BadRequestException('TDS on foreign-currency bills is not supported: record the bill in rupees');
+  if (foreign && b.tdsSection) throw new BadRequestException('TDS on foreign-currency documents is not supported: record it in rupees');
 
   const priced = await priceLines(c, orgId, isSales, b.contactId, b.issueDate, b.lines, b.placeOfSupply, supplyType);
   const { contact, pos, rules } = priced;
@@ -580,26 +687,29 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const rcm = priced.rcmLines ? totals(priced.rcmLines.map(conv)) : { cgst: 0, sgst: 0, igst: 0, cess: 0, total: 0, subtotal: 0 };
   const foreignTotal = foreign ? priced.t.total : null;
   if (original && t.total > Number(original.outstanding)) throw new BadRequestException('Note is larger than the amount still outstanding on the original');
+  if (t.total <= 0) throw new BadRequestException('The total must be more than zero: discount and return lines (negative rates) cannot exceed the rest');
 
-  // TDS on bills only.
+  // TDS: deducted by us on bills (TDS payable), or by the customer on invoices (TDS receivable).
   let tdsSection: string | null = null, tdsAmount = 0;
   if (b.tdsSection) {
-    if (type !== 'bill') throw new BadRequestException('TDS can only be deducted on purchase bills');
-    const sec = (await c.query('SELECT * FROM tds_sections WHERE code=$1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to >= $2)', [b.tdsSection, b.issueDate])).rows[0];
+    if (type !== 'bill' && type !== 'invoice') throw new BadRequestException('TDS applies to bills (deducted by you) and invoices (deducted by your customer)');
+    const sec = await tdsSectionFor(c, b.tdsSection, b.issueDate);
     if (!sec) throw new BadRequestException(`Unknown TDS section ${b.tdsSection}`);
     const fy = financialYearOf(b.issueDate);
     const prior = (await c.query(
       `SELECT COALESCE(SUM(subtotal),0) AS total, COALESCE(SUM(subtotal) FILTER (WHERE tds_amount > 0),0) AS deducted
-         FROM documents WHERE contact_id=$1 AND doc_type='bill' AND status='posted' AND tds_section=$2 AND issue_date BETWEEN $3 AND $4`,
-      [b.contactId, b.tdsSection, fy.start, fy.end])).rows[0];
+         FROM documents WHERE contact_id=$1 AND doc_type=$5 AND status='posted' AND tds_section=$2 AND issue_date BETWEEN $3 AND $4`,
+      [b.contactId, b.tdsSection, fy.start, fy.end, type])).rows[0];
     const r = computeTds({
       section: { code: sec.code, rateIndividualBp: sec.rate_individual_bp, rateOtherBp: sec.rate_other_bp, singleThreshold: Number(sec.single_threshold), annualThreshold: Number(sec.annual_threshold) },
       deducteeIsIndividual: contact.is_individual, hasPan: !!contact.pan || !!contact.gstin,
       amount: t.subtotal, priorTotal: Number(prior.total), priorDeductedBase: Number(prior.deducted),
       // A lower-deduction certificate (section 197) is for one section: its rate replaces the normal one.
       certificateRateBp: contact.lower_tds_rate_bp != null && contact.default_tds_section === sec.code ? Number(contact.lower_tds_rate_bp) : undefined,
+      force: !!b.tdsForced,
     });
-    tdsSection = sec.code; tdsAmount = Math.min(r.tds, t.total);
+    // The amount worked out, or the one typed by hand (it cannot exceed the document).
+    tdsSection = sec.code; tdsAmount = Math.min(b.tdsAmount ?? r.tds, t.total);
   }
   const netPayable = t.total - tdsAmount;
 
@@ -655,7 +765,9 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
   const cessAmt = isSales ? t.cess : claimable('cess');
   const primary: Line[] = []; // the "normal" direction for an invoice (sales) or bill (purchase)
   if (isSales) {
-    primary.push({ accountId: await accountIdByCode(c, '1100'), debit: t.total, credit: 0 });
+    primary.push({ accountId: await accountIdByCode(c, '1100'), debit: netPayable, credit: 0 });
+    // The customer deducts TDS and pays the rest: Dr TDS receivable (claimed against our income tax).
+    if (tdsAmount) primary.push({ accountId: await ensureAccount(c, orgId, '1400'), debit: tdsAmount, credit: 0 });
     for (const v of sums.values()) primary.push({ accountId: v.accountId, debit: 0, credit: v.amount, trackingOptionId: v.trackingOptionId });
     taxAmts.forEach((v, i) => v && primary.push({ accountId: gstIds[i], debit: 0, credit: v }));
     if (cessAmt) primary.push({ accountId: await ensureAccount(c, orgId, '2160'), debit: 0, credit: cessAmt });
@@ -682,7 +794,10 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
     }
   }
   const isNote = type === 'credit_note' || type === 'debit_note';
-  const journal = validateLines(isNote ? reverseLines(primary) : primary);
+  // Discount or return lines (negative rates) can leave an account negative: it moves to the other side.
+  const sided = primary.map((l) => (l.debit < 0 || l.credit < 0 ? { ...l, debit: Math.max(0, l.debit) + Math.max(0, -l.credit), credit: Math.max(0, l.credit) + Math.max(0, -l.debit) } : l))
+    .filter((l) => l.debit || l.credit);
+  const journal = validateLines(isNote ? reverseLines(sided) : sided);
   const eid = await insertEntry(c, orgId, uid, b.issueDate, `${type.replace('_', ' ')} ${number} - ${contact.name}`, number, null, journal);
 
   // Sales and purchase settings: default payment terms, and the terms printed on invoices.
@@ -693,10 +808,10 @@ export async function createDocument(c: PoolClient, orgId: number, uid: number, 
 
   const doc = (await c.query(
     `INSERT INTO documents(org_id,doc_type,number,contact_id,issue_date,due_date,place_of_supply,supplier_ref,original_doc_id,subtotal,cgst,sgst,igst,
-       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total,cess)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING id`,
+       tds_section,tds_amount,total,net_payable,journal_entry_id,notes,created_by,recurring_id,supply_type,rcm_cgst,rcm_sgst,rcm_igst,currency,fx_rate,foreign_total,cess,tds_forced)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING id`,
     [orgId, type, number, b.contactId, b.issueDate, dueDate, pos, b.supplierRef ?? null, b.originalDocId ?? null, t.subtotal, t.cgst, t.sgst, t.igst,
-     tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal, t.cess])).rows[0];
+     tdsSection, tdsAmount, t.total, netPayable, eid, notes, uid, extra.recurringId ?? null, supplyType, rcm.cgst, rcm.sgst, rcm.igst, currency, fxRate, foreignTotal, t.cess, !!b.tdsForced])).rows[0];
   for (const l of taxLines) {
     await c.query('INSERT INTO document_lines(doc_id,org_id,description,hsn_sac,qty_milli,rate,taxable,gst_rate_bp,cgst,sgst,igst,account_id,item_id,tracking_option_id,cess_rate_bp,cess,itc_blocked,unit) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)',
       [doc.id, orgId, l.description, l.hsnSac ?? null, l.qtyMilli, l.rate, l.taxable, l.gstRateBp, l.cgst, l.sgst, l.igst, l.accountId, l.itemId ?? null, l.trackingOptionId ?? null, l.cessRateBp ?? 0, l.cess, !!l.itcBlocked, l.unit ?? null]);

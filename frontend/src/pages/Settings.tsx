@@ -5,7 +5,7 @@ import { api, fmt } from '../api';
 import type { Org } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import { EditMode, useEditing } from '../editmode';
-import { ExportMenu } from '../table';
+import { DataTable, ExportMenu, type Column } from '../table';
 import { Empty, PageHeader, Select } from '../kit';
 
 type S = Record<string, any>;
@@ -449,25 +449,31 @@ function TaxRates() {
 
 const ACTION_TEXT: Record<string, string> = { update_settings: 'Changed settings', create: 'Created', update: 'Updated', void: 'Voided', edit: 'Edited', email: 'Emailed', remind_overdue: 'Sent payment reminders',
   auto_remind_overdue: 'Sent automatic reminders', lock_period: 'Locked the books', lock_dates: 'Changed lock dates', set_next_number: 'Changed the next number', set_currency: 'Saved a currency', remove_currency: 'Removed a currency' };
+type HistRow = { id: number; at: string; user: string; action: string; entity: string; entityId: string | null; after: unknown; particulars?: string; changes?: { field: string; from: string; to: string }[] };
+const changeText = (r: HistRow) => (r.changes ?? []).map((c) => `${c.field}: ${c.from || '—'} → ${c.to || '—'}`).join('; ');
 function History({ org }: { org: Org }) {
-  const [rows, setRows] = useState<{ id: number; at: string; user: string; action: string; entity: string; entityId: string | null; after: unknown }[] | null>(null);
+  const [rows, setRows] = useState<HistRow[] | null>(null);
   const [q, setQ] = useState('');
   const { error, run } = useAction();
-  const load = (term = q) => run(async () => setRows(await api(`/orgs/${org.id}/history?limit=200${term ? `&q=${encodeURIComponent(term)}` : ''}`)));
+  const load = (term = q) => run(async () => setRows(await api(`/orgs/${org.id}/history?limit=500${term ? `&q=${encodeURIComponent(term)}` : ''}`)));
   useEffect(() => { load(''); }, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const columns: Column<HistRow>[] = [
+    { key: 'at', label: 'When', value: (r) => r.at.slice(0, 10), render: (r) => <span className="whitespace-nowrap text-slate-600">{new Date(r.at).toLocaleString('en-IN')}</span> },
+    { key: 'user', label: 'Who', value: (r) => r.user },
+    { key: 'what', label: 'What', value: (r) => ACTION_TEXT[r.action] ?? r.action.replace(/_/g, ' ') },
+    { key: 'record', label: 'Record', value: (r) => `${r.entity.replace(/_/g, ' ')}${r.entityId ? ` #${r.entityId}` : ''}` },
+    { key: 'particulars', label: 'Particulars', value: (r) => r.particulars ?? '', render: (r) => <span className="text-slate-700">{r.particulars || '—'}</span> },
+    { key: 'changes', label: 'Changed (from → to)', value: changeText, render: (r) => (r.changes?.length
+      ? <ul className="space-y-0.5 text-xs">{r.changes.map((c, i) => <li key={i}><span className="font-medium text-slate-700">{c.field}:</span> <span className="text-red-700 line-through decoration-red-300">{c.from || '—'}</span> → <span className="text-emerald-700">{c.to || '—'}</span></li>)}</ul>
+      : <span className="text-slate-400">—</span>) },
+  ];
   return (
     <>
       <ErrorMsg msg={error} />
-      <Card title="Changes, newest first" actions={<span className="flex flex-wrap gap-2"><input aria-label="Filter history" placeholder="e.g. document, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-40 max-w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm sm:w-56" /><Button variant="ghost" onClick={() => load()}>Filter</Button>
-        <ExportMenu orgId={org.id} disabled={!rows?.length} build={() => ({ title: 'History', subtitle: q ? `Filter: ${q}` : 'Newest first',
-          columns: [{ header: 'When' }, { header: 'Who' }, { header: 'What' }, { header: 'Record' }, { header: 'Details' }],
-          rows: (rows ?? []).map((r) => [new Date(r.at).toLocaleString('en-IN'), r.user, ACTION_TEXT[r.action] ?? r.action.replace(/_/g, ' '), `${r.entity.replace(/_/g, ' ')}${r.entityId ? ` #${r.entityId}` : ''}`, r.after ? JSON.stringify(r.after).slice(0, 1500) : '']) })} /></span>}>
-        {!rows ? <p className="text-sm text-slate-500">Loading…</p> : rows.length === 0 ? <Empty text="Nothing recorded yet." /> : (
-          <table className="w-full text-sm" data-testid="history-rows">
-            <thead><tr className="text-left text-slate-500"><th className="py-1">When</th><th>Who</th><th>What</th><th>Record</th></tr></thead>
-            <tbody>{rows.map((r) => <tr key={r.id} className="border-t border-slate-100 align-top"><td className="whitespace-nowrap py-2 text-slate-600">{new Date(r.at).toLocaleString('en-IN')}</td><td>{r.user}</td>
-              <td>{ACTION_TEXT[r.action] ?? r.action.replace(/_/g, ' ')}</td><td className="text-slate-600">{r.entity.replace(/_/g, ' ')}{r.entityId ? ` #${r.entityId}` : ''}</td></tr>)}</tbody>
-          </table>)}
+      <Card title="Changes, newest first" actions={<span className="flex flex-wrap gap-2"><input aria-label="Filter history" placeholder="e.g. INV/26-27/0004, party, settings" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} className="w-40 max-w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm sm:w-64" /><Button variant="ghost" onClick={() => load()}>Filter</Button></span>}>
+        {!rows ? <p className="text-sm text-slate-500">Loading…</p> : (
+          <div data-testid="history-rows"><DataTable id="history" rows={rows} columns={columns} rowKey={(r) => r.id} orgId={org.id} exportTitle="History" exportSubtitle={q ? `Filter: ${q}` : 'Newest first'}
+            searchLabel="Search who, what, party, number…" dateKey="at" facets={['what', 'user']} empty="Nothing recorded yet." /></div>)}
         <p className="mt-3 text-xs text-slate-500">The history cannot be edited or deleted, so it can be shown to an auditor.</p>
       </Card>
     </>

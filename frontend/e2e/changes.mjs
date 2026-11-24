@@ -124,6 +124,7 @@ await ok(/Created KS\/2026\/001: total ₹2,360\.00/);
 step('invoice KS/2026/001 created with a typed number; totals shown on the form: 2,000 + 18% = 2,360');
 
 await page.getByRole('button', { name: 'Open KS/2026/001' }).first().click();
+await page.getByTestId('doc-view').getByRole('button', { name: 'Edit', exact: true }).click();
 await page.getByLabel('Rate 1').fill('3000');
 await btn('Save changes').click();
 await ok(/Updated KS\/2026\/001: total ₹3,540\.00/);
@@ -157,6 +158,7 @@ step('invoice deleted (cancelled with a reversing entry) after a confirmation');
 // ---- manual journal rule
 await menu('Accounting', 'Manual journals');
 await heading('Manual journals');
+await btn('New journal').click();
 await page.getByLabel('Narration', { exact: true }).fill('Insurance write-off');
 await page.getByLabel('Account 1').fill('1000 · Cash in Hand');
 await page.getByLabel('Debit 1').fill('1200');
@@ -253,6 +255,7 @@ await btn('Create').click();
 await ok(/Created .*total ₹1,180\.00/);
 await menu('Accounting', 'Manual journals');
 await heading('Manual journals');
+await btn('New journal').click();
 await page.getByLabel('Narration', { exact: true }).fill('Admin cost');
 await page.getByLabel('Account 1').fill('1000 · Cash in Hand');
 await page.getByLabel('Debit 1').fill('700');

@@ -17,6 +17,8 @@ export interface TdsInput {
   priorDeductedBase: number;
   /** Rate from a lower or nil deduction certificate under section 197, if the deductee has one for this section. */
   certificateRateBp?: number;
+  /** Apply TDS on this amount even below the thresholds (the person asked for it). */
+  force?: boolean;
 }
 
 export const NO_PAN_RATE_BP = 2000; // section 206AA: 20% when PAN is missing (or the section rate if higher)
@@ -28,7 +30,7 @@ export const NO_PAN_RATE_BP = 2000; // section 206AA: 20% when PAN is missing (o
 export function computeTds(i: TdsInput) {
   const s = i.section;
   const cumulative = i.priorTotal + i.amount;
-  const singleHit = s.singleThreshold > 0 && i.amount >= s.singleThreshold;
+  const singleHit = (s.singleThreshold > 0 && i.amount >= s.singleThreshold) || !!i.force;
   const annualHit = s.annualThreshold > 0 ? cumulative > s.annualThreshold : s.singleThreshold === 0;
   if (!singleHit && !annualHit) return { base: 0, rateBp: 0, tds: 0 };
   const base = Math.max(0, cumulative - i.priorDeductedBase);

@@ -86,7 +86,7 @@ await menu('Contacts', 'All contacts');
 await heading('All contacts');
 await btn('Import').click();
 await page.getByText('Choose CSV file…').waitFor();
-await page.getByLabel('Contacts CSV data').fill('Name,GSTIN,Email\nBad One,27AAPFU0939F1ZX,a@b.in\nBad Two,,not-mail\n');
+await page.getByLabel('Contacts CSV file').setInputFiles({ name: 'contacts.csv', mimeType: 'text/csv', buffer: Buffer.from('Name,GSTIN,Email\nBad One,27AAPFU0939F1ZX,a@b.in\nBad Two,,not-mail\n') });
 await btn('Check (dry run)').click();
 await page.getByTestId('import-problems').getByText('Copy the GSTIN again from the GST portal').waitFor();
 const errs = await download(() => btn('Download errors (Excel)').click());
@@ -205,8 +205,9 @@ step('product with a unit of measurement; searchable list');
 // ---- 6, 7, 18, 19, 24: chart of accounts
 await menu('Accounting', 'Chart of accounts');
 await heading('Chart of accounts');
-await page.getByLabel('Statement line').selectOption({ label: 'Indirect Expenses' });
-await page.getByLabel('Group', { exact: true }).selectOption('__new__');
+await btn('New ledger').click();
+await page.getByRole('combobox', { name: 'Statement line' }).click(); await page.getByRole('option', { name: /^Indirect Expenses/ }).click();
+await page.getByRole('combobox', { name: 'Group', exact: true }).click(); await page.getByRole('option', { name: /New group/ }).click();
 await page.getByLabel('New group name').fill('Vehicle Running');
 await page.getByLabel('Range from').fill('5900');
 await page.getByLabel('Range to').fill('5949');
@@ -226,6 +227,7 @@ step('chart of accounts: a new group with a number range, the next ledger number
 // ---- 16, 17: journal with voucher number, reference, typed accounts
 await menu('Accounting', 'Manual journals');
 await heading('Manual journals');
+await btn('New journal').click();
 for (let i = 0; i < 50 && !(await page.getByLabel('Voucher number').inputValue()); i++) await page.waitForTimeout(200);
 assert.match(await page.getByLabel('Voucher number').inputValue(), /^JV\/\d\d-\d\d\/0001$/);
 await page.getByLabel('Reference number').fill('AGR-9');

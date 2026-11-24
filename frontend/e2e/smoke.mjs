@@ -47,6 +47,7 @@ await page.getByRole('listitem').getByText('Sharma Traders').waitFor();
 await page.getByRole('button', { name: 'Open books' }).click();
 { const acc = page.getByRole('navigation', { name: 'Client sections' }).getByRole('button', { name: 'Accounting', exact: true }); if ((await acc.getAttribute('aria-expanded')) !== 'true') await acc.click(); } // open the section only if it is closed
 await page.getByRole('button', { name: 'Manual journals', exact: true }).click();
+await page.locator('main').getByRole('button', { name: 'New journal', exact: true }).click();
 await page.getByText('New journal entry').waitFor();
 step('client created, books opened');
 

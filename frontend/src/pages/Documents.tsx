@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Combo, type ComboOption } from '../combo';
+import { DocView } from '../docview';
 import { api, download, fileToBase64, fmt, toPaise, today } from '../api';
 import type { Org } from '../App';
 import { Badge, PageHeader, Select } from '../kit';
@@ -48,6 +49,10 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const [intraOverride, setIntraOverride] = useState<boolean | null>(null);
   const [posChoice, setPosChoice] = useState('');
   const [showForm, setShowForm] = useState(startNew);
+  /** The document open in the locked (read-only) view. */
+  const [viewing, setViewing] = useState<number | null>(null);
+  /** The form as it was when an edit started: saving with nothing but new attachments does not re-post the document. */
+  const editSnap = useRef<string | null>(null);
   const [fxDefaults, setRates] = useState<Record<string, number>>({});
   const [numberTouched, setNumberTouched] = useState(false);
   const [numberClash, setNumberClash] = useState('');
@@ -56,6 +61,15 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const [tdsPreview, setTdsPreview] = useState<{ section: string; amount: number } | null>(null);
   const [issues, setIssues] = useState<{ text: string; block: boolean }[]>([]);
   const [allDocs, setAllDocs] = useState(false);
+  // Back from "Make it repeating" (Cancel there): the form comes back with what was typed.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('repeat-return'); if (!raw) return;
+      const d = JSON.parse(raw); if (d.kind !== (sales ? 'invoice' : 'bill') || !d.back) return;
+      sessionStorage.removeItem('repeat-return');
+      setShowForm(true); setF(d.f); setLines(d.lines); if (d.docType) setDocType(d.docType);
+    } catch { /* storage may be off */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (startNew) { setShowForm(true); if (startType && types.some(([t]) => t === startType)) setDocType(startType); } }, [startNew, startType]); // eslint-disable-line react-hooks/exhaustive-deps
   const [editing, setEditing] = useState<{ id: number; number: string; payments: Payment[] } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -200,6 +214,12 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
       setOk(`Sent for approval (total ${foreign ? f.currency + ' ' : '₹'}${fmt(d.total)}). It reaches the books once an owner or accountant approves it.`);
       resetForm(); return;
     }
+    if (editing && editSnap.current === JSON.stringify(b)) {
+      if (!files.length) { setOk(`Nothing changed on ${editing.number}.`); resetForm(); return; }
+      await uploadAll(editing.id);
+      setOk(`${files.length} file${files.length === 1 ? '' : 's'} attached to ${editing.number}. Nothing else changed, so the posted entry was left as it was.`);
+      resetForm(); load(); return;
+    }
     let r;
     try { r = editing ? await api(`/orgs/${org.id}/documents/${editing.id}`, { method: 'PUT', body: b }) : await api(`/orgs/${org.id}/documents`, { body: b }); }
     catch (e) {
@@ -218,6 +238,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     resetForm(); load();
   });
 
+  useEffect(() => { if (editing && editSnap.current == null) { const t = setTimeout(() => { editSnap.current = JSON.stringify(body()); }, 0); return () => clearTimeout(t); } if (!editing) editSnap.current = null; }); // eslint-disable-line react-hooks/exhaustive-deps
   const openForm = () => { resetForm(); setShowForm(true); setTimeout(() => formTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); };
   const startEdit = (d: Doc) => run(async () => {
     setOk('');
@@ -232,8 +253,20 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     const auto = orgState && st ? orgState === st : true;
     const was = fullDoc.igst > 0 ? false : fullDoc.cgst > 0 ? true : auto;
     setIntraOverride(was === auto ? null : was); setPosChoice(fullDoc.placeOfSupply ?? '');
-    setEditing({ id: d.id, number: fullDoc.number, payments: fullDoc.payments });
+    setEditing({ id: d.id, number: fullDoc.number, payments: fullDoc.payments }); setViewing(null); editSnap.current = null;
     setShowForm(true); setTimeout(() => formTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  });
+  /** A copy of a document as a new one: same party, lines and terms; the next number and today's date. */
+  const duplicate = (d: Doc) => run(async () => {
+    setOk('');
+    const fullDoc = await api(`/orgs/${org.id}/documents/${d.id}`);
+    resetForm(); setViewing(null);
+    setDocType(fullDoc.docType);
+    setF({ ...blankForm, contactId: String(fullDoc.contactId), supplierRef: '', tdsSection: fullDoc.tdsSection ?? '', originalDocId: fullDoc.originalDocId ? String(fullDoc.originalDocId) : '',
+      supplyType: fullDoc.supplyType, currency: fullDoc.currency, fxRate: fullDoc.currency !== 'INR' ? String(fullDoc.fxRate) : '', notes: fullDoc.notes ?? '' });
+    setLines(linesFromApi(fullDoc.lines)); setPosChoice(fullDoc.placeOfSupply ?? '');
+    setShowForm(true); setOk(`Copied from ${fullDoc.number}. Check the date and lines, then create it: it gets the next number.`);
+    setTimeout(() => formTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   });
   /** A credit note against an invoice (or debit note against a bill): the original's lines are copied in and can be changed. */
   const noteAgainst = (d: Doc) => { resetForm(); setShowForm(true); setDocType(sales ? 'credit_note' : 'debit_note'); setF({ ...blankForm, contactId: String(d.contactId), originalDocId: String(d.id) }); };
@@ -269,7 +302,11 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   });
   /** Open the repeating schedule screen with this document's details already filled in. */
   const makeRepeating = () => {
-    try { sessionStorage.setItem('repeat-from', JSON.stringify({ kind: sales ? 'invoice' : 'bill', contactId: f.contactId, lines, notes: f.notes, tdsSection: f.tdsSection, supplyType: f.supplyType, supplierRef: f.supplierRef })); } catch { /* storage may be off */ }
+    try {
+      sessionStorage.setItem('repeat-from', JSON.stringify({ kind: sales ? 'invoice' : 'bill', contactId: f.contactId, lines, notes: f.notes, tdsSection: f.tdsSection, supplyType: f.supplyType, supplierRef: f.supplierRef }));
+      // Cancel on the repeating page brings the person back to this form, as it was.
+      sessionStorage.setItem('repeat-return', JSON.stringify({ kind: sales ? 'invoice' : 'bill', page: sales ? 'invoices/new' : 'bills/new', f, lines, docType }));
+    } catch { /* storage may be off */ }
     go?.(sales ? 'recurring' : 'recurring-bills');
   };
 
@@ -288,8 +325,17 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     setOk('Payment unlinked.'); load(); onDone?.();
   });
   const doVoid = (d: Doc) => run(async () => {
-    if (!await ask(`Delete ${d.number}? Posted entries cannot be erased from the books, so it is cancelled with a reversing entry and shows as void.`)) return;
-    await api(`/orgs/${org.id}/documents/${d.id}/void`, { body: { date: today(), reason: 'Deleted from the app' } }); setOk(`${d.number} deleted (cancelled with a reversing entry).`); load();
+    if (!await ask({ title: `Void ${d.number}?`, confirmLabel: 'Void', tone: 'danger',
+      message: 'It is cancelled with a reversing entry dated today and stays in the list marked "void", so the numbering has no gaps. Payments or credit notes against it must be unlinked first.' })) return;
+    await api(`/orgs/${org.id}/documents/${d.id}/void`, { body: { date: today(), reason: 'Voided' } }); setOk(`${d.number} voided (cancelled with a reversing entry).`); load();
+  });
+  /** Delete = void it (if still posted) and archive it, so it leaves the list. The books keep both entries. */
+  const doDelete = (d: Doc) => run(async () => {
+    if (!await ask({ title: `Delete ${d.number}?`, confirmLabel: 'Delete', tone: 'danger',
+      message: `Posted entries cannot be erased from the books, so ${d.status === 'posted' ? 'it is cancelled with a reversing entry, shows as void, and ' : ''}it is archived (hidden from this list; tick "Show archived" to see it).` })) return;
+    if (d.status === 'posted') await api(`/orgs/${org.id}/documents/${d.id}/void`, { body: { date: today(), reason: 'Deleted from the app' } });
+    await api(`/orgs/${org.id}/documents/bulk-archive`, { body: { ids: [d.id], archived: true } });
+    setOk(`${d.number} deleted (cancelled with a reversing entry).`); if (viewing === d.id) setViewing(null); load();
   });
   const archiveOne = (d: Doc) => run(async () => { await api(`/orgs/${org.id}/documents/bulk-archive`, { body: { ids: [d.id], archived: !d.isArchived } }); setOk(`${d.number} ${d.isArchived ? 'restored' : 'archived'}.`); load(); });
   const bulk = (action: 'delete' | 'archive' | 'restore') => run(async () => {
@@ -343,7 +389,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     const d = docs.find((x) => x.id === openId);
     if (!d) return;
     opened.current = openId;
-    if (canEdit(d)) startEdit(d); else setOk(`${d.number}: ${statusOf(d)}, total ₹${fmt(d.total)}. It cannot be edited; use the ⋮ menu for its PDF.`);
+    setViewing(d.id); setShowForm(false);
   }, [openId, docs]); // eslint-disable-line react-hooks/exhaustive-deps
   // A run of a repeating schedule that waits for review: fill the form from it; posting marks it done.
   const [dueRun, setDueRun] = useState<number | null>(null);
@@ -364,8 +410,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
 
   const columns: Column<Doc>[] = [
     { key: 'number', label: 'Number', value: (d) => d.number, render: (d) => (
-      <button type="button" className="font-medium text-brand-700 hover:text-brand-900 hover:underline" title={canEdit(d) ? 'Open to view or edit' : 'Download PDF'}
-        aria-label={`Open ${d.number}`} onClick={() => (canEdit(d) ? startEdit(d) : downloadPdf([d.id], d.number))}>{d.number}</button>) },
+      <button type="button" className="link font-medium" title="Open this document"
+        aria-label={`Open ${d.number}`} onClick={() => { resetForm(); setViewing(d.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>{d.number}</button>) },
     { key: 'type', label: 'Type', value: (d) => TYPE_NAME[d.docType] ?? d.docType, hidden: true },
     { key: 'contact', label: sales ? 'Customer' : 'Supplier', value: (d) => d.contactName, render: (d) => (go
       ? <button type="button" className="text-left text-slate-800 hover:text-brand-700 hover:underline" onClick={() => go(`${contactPage}/${d.contactId}`)}>{d.contactName}</button> : d.contactName) },
@@ -394,6 +440,11 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
           {full && go && <Button variant="ghost" onClick={() => go(sales ? 'recurring' : 'recurring-bills')}><span className="inline-flex items-center gap-1.5"><Icon name="repeat" />Repeating</span></Button>}
           <Button onClick={() => (showForm ? resetForm() : openForm())}>{showForm ? 'Close' : `New ${sales ? 'invoice' : 'bill'}`}</Button></>} />
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
+      {viewing && !showForm && (() => { const vd = docs.find((x) => x.id === viewing); return (
+        <DocView key={viewing} orgId={org.id} id={viewing} full={full} canEdit={!!vd && canEdit(vd)} go={go} onClose={() => setViewing(null)}
+          onEdit={() => startEdit(vd ?? ({ id: viewing } as Doc))} onDuplicate={() => duplicate(vd ?? ({ id: viewing } as Doc))}
+          onVoid={() => vd && doVoid(vd)} onArchive={() => vd && archiveOne(vd)} onPdf={() => downloadPdf([viewing], vd?.number ?? 'document')}
+          onPay={vd ? () => openPay(vd) : undefined} onNote={vd ? () => { setViewing(null); noteAgainst(vd); } : undefined} onChanged={load} />); })()}
       {showForm && canPost && (
         <div ref={formTop}>
         <Card title={editing ? `Edit ${editing.number}` : sales ? 'New sales document' : 'New purchase document'}
@@ -420,7 +471,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
             <Select label="Currency" aria-label="Currency" value={f.currency} disabled={isNote && !!original}
               onChange={(e) => { const c = e.target.value; setF({ ...f, currency: c, fxRate: c !== 'INR' && fxDefaults[c] ? String(fxDefaults[c]) : c === 'INR' ? '' : f.fxRate }); }}>
               {currencies.map((c) => <option key={c} value={c}>{c}{fxDefaults[c] ? ` (default ₹${fxDefaults[c]})` : ''}</option>)}</Select>
-            {foreign && <Field label={`Rupees per 1 ${f.currency}`} aria-label="Exchange rate" inputMode="decimal" value={f.fxRate} disabled={isNote && !!original} onChange={(e) => setF({ ...f, fxRate: e.target.value })} />}
+            {foreign && <div><Field label={`Rupees per 1 ${f.currency}`} aria-label="Exchange rate" inputMode="decimal" value={f.fxRate} disabled={isNote && !!original} onChange={(e) => setF({ ...f, fxRate: e.target.value })} />
+              {Number(f.fxRate) > 0 && <p className="mt-1 text-xs text-slate-500" data-testid="fx-hint">1 {f.currency} = ₹{f.fxRate}. Rupee totals are shown under the lines.</p>}</div>}
             {isNote && (
               <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Against {sales ? 'invoice' : 'bill'}</span>
                 <OriginalPicker disabled={!f.contactId || !!editing} placeholder={f.contactId ? 'Type or pick a number…' : `Choose the ${sales ? 'customer' : 'supplier'} first`}
@@ -477,7 +529,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
               </Callout>
             </div>)}
 
-          <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} currency={f.currency} intra={intra} noTax={noTax}
+          <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} currency={f.currency} fxRate={foreign ? Number(f.fxRate) || undefined : undefined} intra={intra} noTax={noTax}
             dutyOk={sales && !!settings.customsDuty && (f.supplyType.startsWith('export') || f.supplyType.startsWith('sez'))}
             contactDefaultId={sales ? contact?.defaultSalesAccountId : contact?.defaultPurchaseAccountId} tds={docType === 'bill' ? tdsPreview : null} />
 
@@ -488,7 +540,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border-2 border-dashed border-brand-300 bg-brand-50/50 px-4 py-2 font-medium text-brand-700 hover:border-brand-500 hover:bg-brand-50">
                 <Icon name="plus" className="text-brand-600" />Upload documents<input aria-label="Attach documents" type="file" multiple className="sr-only" onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ''; }} /></label>
               <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
-                {existingFiles.map((a) => <li key={a.id}><button className="underline" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button> (attached)</li>)}
+                {existingFiles.map((a) => <li key={a.id}><button className="link" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button> (attached)</li>)}
                 {files.map((x, i) => <li key={i}>{x.name} <button className="text-red-700" onClick={() => setFiles(files.filter((_, j) => j !== i))}>remove</button></li>)}</ul></div>
           </div>
 
@@ -530,9 +582,12 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
                 { label: 'Download PDF', icon: 'pdf', onClick: () => downloadPdf([d.id], d.number) },
                 { label: 'Email', icon: 'mail', onClick: () => email(d), hidden: !(full && sales && d.status === 'posted') },
                 { label: 'Send reminder', icon: 'bell', onClick: () => remind([d.id]), hidden: !(full && d.docType === 'invoice' && d.status === 'posted' && (d.outstanding ?? 0) > 0) },
+                { label: 'Open', icon: 'view', onClick: () => { resetForm(); setViewing(d.id); window.scrollTo({ top: 0, behavior: 'smooth' }); } },
                 { label: 'Edit', icon: 'edit', onClick: () => startEdit(d), hidden: !canEdit(d) },
+                { label: 'Duplicate', icon: 'copy', onClick: () => duplicate(d), hidden: !full || !canPost },
+                { label: 'Void', icon: 'void', onClick: () => doVoid(d), hidden: !(full && d.status === 'posted') },
                 { label: d.isArchived ? 'Restore' : 'Archive', icon: d.isArchived ? 'restore' : 'archive', onClick: () => archiveOne(d), hidden: !full },
-                { label: 'Delete', icon: 'trash', onClick: () => doVoid(d), hidden: !(full && d.status === 'posted'), danger: true },
+                { label: 'Delete', icon: 'trash', onClick: () => doDelete(d), hidden: !full, danger: true },
               ]} />
             </span>)} />
       </Card>

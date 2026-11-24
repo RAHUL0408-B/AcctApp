@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Org } from '../App';
 import { Badge, Select } from '../kit';
+import { PickList } from '../combo';
 import { DataTable, ExportMenu, Icon, RowMenu, type Column } from '../table';
 import { Button, Callout, Card, ErrorMsg, Field, Ok, useAction , ask } from '../ui';
 import type { Account } from './Lines';
@@ -12,7 +13,6 @@ interface Ledger extends Account { fsli: string; group: string; subGroup: string
 interface Range { name: string; from: number | null; to: number | null; custom: boolean }
 interface Fsli { key: string; name: string; type: string; from: number; to: number; groups: (Range & { sub: Range[] })[] }
 
-const NEW = '__new__';
 const blank = { fsli: 'ie', group: '', subGroup: '', name: '', code: '', itcBlocked: false };
 
 export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManage: boolean; reload: () => void }) {
@@ -25,6 +25,7 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
   const [range, setRange] = useState('');
   const [newGroup, setNewGroup] = useState<{ level: 'group' | 'sub'; name: string; from: string; to: string } | null>(null);
   const [editing, setEditing] = useState<Ledger | null>(null);
+  const [adding, setAdding] = useState(false);
   const [ok, setOk] = useState('');
   const { error, busy, run, setError } = useAction();
   const load = useCallback(async () => {
@@ -59,9 +60,14 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
     setF((x) => (newGroup.level === 'group' ? { ...x, group: newGroup.name.trim(), subGroup: '' } : { ...x, subGroup: newGroup.name.trim() }));
     setOk(`${newGroup.level === 'group' ? 'Group' : 'Sub-group'} "${newGroup.name.trim()}" created.`); setNewGroup(null);
   });
-  const archive = (a: Ledger) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/archive`, { body: { archived: a.isActive } }); setOk(`${a.code} ${a.name} ${a.isActive ? 'archived' : 'restored'}.`); await load(); reload(); });
+  const archive = (a: Ledger) => run(async () => {
+    if (a.isActive && !await ask({ title: `Archive ledger ${a.code} ${a.name}?`, confirmLabel: 'Archive', tone: 'warning',
+      message: 'What this does:\n• The ledger disappears from account lists on new vouchers, invoices, bills, contacts and products.\n• Entries already posted to it stay in the books and still show in the reports, the trial balance and its ledger.\n• Contacts, products and bank rules that use it as a default keep it until you change them.\n• You can restore it at any time from "Show archived".' })) return;
+    await api(`/orgs/${org.id}/accounts/${a.id}/archive`, { body: { archived: a.isActive } }); setOk(`${a.code} ${a.name} ${a.isActive ? 'archived' : 'restored'}.`); await load(); reload();
+  });
   const remove = (a: Ledger) => run(async () => {
-    if (!await ask(`Delete ledger ${a.code} ${a.name}? Only a ledger with no entries can be deleted; otherwise archive it.`)) return;
+    if (!await ask({ title: `Delete ledger ${a.code} ${a.name}?`, confirmLabel: 'Delete ledger', tone: 'danger',
+      message: 'What this does:\n• The ledger is removed from the chart of accounts for good; this cannot be undone.\n• Only a ledger with no entries, no opening balance and no defaults pointing to it can be deleted. If it has any, nothing is deleted and you are asked to archive it instead.\n• Reports are not affected, because it has nothing in them.' })) return;
     await api(`/orgs/${org.id}/accounts/${a.id}`, { method: 'DELETE' }); setOk(`${a.code} ${a.name} deleted.`); await load(); reload();
   });
   const block = (a: Ledger, v: boolean) => run(async () => { await api(`/orgs/${org.id}/accounts/${a.id}/itc-blocked`, { method: 'PUT', body: { blocked: v } }); await load(); reload(); });
@@ -92,17 +98,21 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
   return (
     <>
       <div className="mb-3 space-y-2"><ErrorMsg msg={error} /><Ok msg={ok} /></div>
-      {canManage && (
-        <Card title="New ledger">
+      {canManage && !adding && <div className="mb-3 flex justify-end"><Button onClick={() => setAdding(true)}><span aria-hidden>＋ </span>New ledger</Button></div>}
+      {canManage && adding && (
+        <Card title="New ledger" actions={<Button variant="ghost" onClick={() => { setAdding(false); setNewGroup(null); }}>Close</Button>}>
           <div className="grid gap-3 md:grid-cols-3">
-            <Select label="Financial statement line item" aria-label="Statement line" value={f.fsli} onChange={(e) => { setF({ ...f, fsli: e.target.value, group: '', subGroup: '' }); setCodeTouched(false); setNewGroup(null); }}>
-              {tree.map((x) => <option key={x.key} value={x.key}>{x.name}</option>)}</Select>
-            <Select label="Group" aria-label="Group" value={f.group} onChange={(e) => { if (e.target.value === NEW) { setNewGroup({ level: 'group', name: '', from: '', to: '' }); return; } setF({ ...f, group: e.target.value, subGroup: '' }); setCodeTouched(false); }}>
-              <option value="">Choose a group…</option>{groups.map((g) => <option key={g.name} value={g.name}>{g.name}{g.from != null ? ` (${g.from}–${g.to})` : ''}</option>)}
-              <option value={NEW}>＋ New group…</option></Select>
-            <Select label="Sub-group (optional)" aria-label="Sub-group" value={f.subGroup} disabled={!f.group} onChange={(e) => { if (e.target.value === NEW) { setNewGroup({ level: 'sub', name: '', from: '', to: '' }); return; } setF({ ...f, subGroup: e.target.value }); setCodeTouched(false); }}>
-              <option value="">None</option>{(group?.sub ?? []).map((s) => <option key={s.name} value={s.name}>{s.name}{s.from != null ? ` (${s.from}–${s.to})` : ''}</option>)}
-              {f.group && <option value={NEW}>＋ New sub-group…</option>}</Select>
+            <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Financial statement line item</span>
+              <PickList ariaLabel="Statement line" value={f.fsli} onChange={(v) => { setF({ ...f, fsli: v, group: '', subGroup: '' }); setCodeTouched(false); setNewGroup(null); }}
+                options={tree.map((x) => ({ value: x.key, label: x.name, right: `${x.from}–${x.to}` }))} /></div>
+            <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Group</span>
+              <PickList ariaLabel="Group" value={f.group} placeholder="Choose a group…" onChange={(v) => { setF({ ...f, group: v, subGroup: '' }); setCodeTouched(false); }}
+                options={groups.map((g) => ({ value: g.name, label: g.name, right: g.from != null ? `${g.from}–${g.to}` : '' }))}
+                footer={{ label: 'New group…', onClick: () => setNewGroup({ level: 'group', name: '', from: '', to: '' }) }} /></div>
+            <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Sub-group (optional)</span>
+              <PickList ariaLabel="Sub-group" value={f.subGroup} placeholder="None" disabled={!f.group} onChange={(v) => { setF({ ...f, subGroup: v }); setCodeTouched(false); }}
+                options={[{ value: '', label: 'None' }, ...(group?.sub ?? []).map((s) => ({ value: s.name, label: s.name, right: s.from != null ? `${s.from}–${s.to}` : '' }))]}
+                footer={f.group ? { label: 'New sub-group…', onClick: () => setNewGroup({ level: 'sub', name: '', from: '', to: '' }) } : undefined} /></div>
           </div>
           {newGroup && (
             <div className="mt-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">

@@ -66,7 +66,7 @@ await heading('All contacts');
 await btn('Import').click();
 let f = await download(() => btn('Download blank template').click());
 assert.match(f.text, /^Name,Type,GSTIN/);
-await page.getByLabel('Contacts CSV data').fill(`Name,Type,GSTIN,PAN,State Code,Email,Phone,Bank Account Name,Bank Name,Bank Account Number,IFSC\nKarnataka Retail,Customer,${gstin('29AAPFU0939F1Z')},,29,,,,,,\nLocal Buyer,Customer,,,27,,,,,,\nPaper Mart,Supplier,,,27,,,,,,\n`);
+await page.getByLabel('Contacts CSV file').setInputFiles({ name: 'contacts.csv', mimeType: 'text/csv', buffer: Buffer.from(`Name,Type,GSTIN,PAN,State Code,Email,Phone,Bank Account Name,Bank Name,Bank Account Number,IFSC\nKarnataka Retail,Customer,${gstin('29AAPFU0939F1Z')},,29,,,,,,\nLocal Buyer,Customer,,,27,,,,,,\nPaper Mart,Supplier,,,27,,,,,,\n`) });
 await btn('Check (dry run)').click();
 await ok('Looks good: 3 contact(s) ready to import.');
 await page.getByRole('button', { name: 'Import', exact: true }).last().click();
@@ -204,6 +204,7 @@ await page.getByLabel('Rate 1').fill('500');
 await btn('Create').click();
 await ok(/Created MT\/002/);
 await page.getByRole('button', { name: 'Open MT/002' }).first().click();
+await page.getByTestId('doc-view').getByRole('button', { name: 'Edit', exact: true }).click();
 await page.getByLabel('Rate 1').fill('600');
 await btn('Save changes').click();
 await ok(/Updated MT\/002: total ₹708\.00/);
@@ -215,6 +216,7 @@ item(7, 'posted invoice edited by clicking its amount, then deleted (bulk delete
 
 // 9. Manual journal with a rule, 8 (journal attachment)
 await menu('Accounting', 'Manual journals');
+await btn('New journal').click();
 await page.getByLabel('Narration', { exact: true }).fill('Prepaid insurance');
 await page.getByLabel('Account 1').fill('1000 · Cash in Hand');
 await page.getByLabel('Debit 1').fill('100');

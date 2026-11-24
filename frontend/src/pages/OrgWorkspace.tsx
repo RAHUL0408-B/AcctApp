@@ -117,7 +117,8 @@ export function OrgPage({ org, role, page, sub, go, onOrgChanged, lastLogin, can
     case 'bank': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="reconcile" />;
     case 'bank-rules': return <Bank org={org} canPost={canPost} canManage={canManage} accounts={accounts} section="rules" />;
     case 'money': return <Money org={org} canPost={canPost} accounts={accounts} tab={sub === 'receive' || sub === 'transfer' ? sub : 'spend'} go={go} />;
-    case 'journal': return <><PageHeader title="Manual journals" subtitle="Double-entry adjustments. Posted entries are never edited; reverse them instead." /><Journal org={org} accounts={accounts} canPost={canPost} role={role} go={go} focusId={sub?.startsWith('open-') ? Number(sub.slice(5)) : undefined} /></>;
+    case 'journal': return <><PageHeader title={sub === 'repeating' ? 'Repeating journals' : 'Manual journals'} subtitle={sub === 'repeating' ? 'Journals posted on a schedule. Narration placeholders such as {month} are filled in on each run; choose to post automatically or wait for review.' : 'Double-entry adjustments. Posted entries are never edited; correct them with a reversal and a new entry.'} />
+      <Journal org={org} accounts={accounts} canPost={canPost} role={role} go={go} view={sub === 'repeating' ? 'repeating' : 'list'} startForm={sub === 'new' ? 'new' : sub === 'new-repeating' ? 'repeating' : undefined} focusId={sub?.startsWith('open-') ? Number(sub.slice(5)) : undefined} /></>;
     case 'coa': return <><PageHeader title="Chart of accounts" subtitle="Financial statement line item › group › sub-group › ledger. Every account that transactions can post to." /><ChartOfAccounts org={org} canManage={canManage} reload={reloadAccounts} /></>;
     case 'assets': return <FixedAssets org={org} canManage={canManage} accounts={accounts} />;
     case 'items': return <Items org={org} canPost={canPost && !narrow} accounts={accounts} />;

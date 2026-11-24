@@ -17,7 +17,11 @@ const blankRows = () => [{ accountId: '', debit: '', credit: '', cc: '' }, { acc
 const FREQ = [['monthly', 'Every month'], ['weekly', 'Every week'], ['quarterly', 'Every quarter'], ['yearly', 'Every year']];
 
 /** Account box: type the number or the name, or pick from the list. */
-export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void; /** show only this entry (opened from a ledger) */ focusId?: number }) {
+export function Journal({ org, accounts, canPost, role = 'owner', go, focusId, view = 'list', startForm }: { org: Org; accounts: Account[]; canPost: boolean; role?: string; go?: (p: string) => void; /** show only this entry (opened from a ledger) */ focusId?: number;
+  /** The posted entries, or the repeating journals (rules). */ view?: 'list' | 'repeating'; /** Open the form straight away (journal/new, journal/new-repeating). */ startForm?: 'new' | 'repeating' }) {
+  const [formOpen, setFormOpen] = useState(!!startForm);
+  /** Posted entry being corrected: it is reversed when the corrected entry is posted. */
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [focus, setFocus] = useState<number | undefined>(focusId);
   useEffect(() => { setFocus(focusId); }, [focusId]);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -43,6 +47,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   useEffect(() => { load(); loadRules(); }, [load, loadRules]);
   useEffect(() => { api(`/orgs/${org.id}/journal-next-number?date=${date || today}`).then((r) => setNextVoucher(r.number)).catch(() => setNextVoucher('')); }, [org.id, date, entries.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSelected(new Set()); }, [entries]);
+  useEffect(() => { if (startForm) { setFormOpen(true); setRule((r) => ({ ...r, on: startForm === 'repeating' })); } }, [startForm]);
 
   const name = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
   const totalD = rows.reduce((s, r) => s + (r.debit ? safe(r.debit) : 0), 0), totalC = rows.reduce((s, r) => s + (r.credit ? safe(r.credit) : 0), 0);
@@ -52,7 +57,7 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
   const editRule = (r: Rule) => {
     setOk(''); setEditingRule(r.id); setDate(r.nextDate); setNarration(r.narration); setRule({ on: true, name: r.name, frequency: r.frequency, endDate: r.endDate ?? '' });
     setRows(r.lines.map((l) => ({ accountId: String(l.accountId), debit: l.debit ? String(l.debit / 100) : '', credit: l.credit ? String(l.credit / 100) : '', cc: l.trackingOptionId ? String(l.trackingOptionId) : '' })));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setFormOpen(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const archiveRule = (r: Rule) => run(async () => { await api(`/orgs/${org.id}/journal-rules/${r.id}/archive`, { body: { archived: !r.isArchived } }); setOk(r.isArchived ? 'Rule restored.' : 'Rule archived: it stops and is hidden.'); loadRules(); });
   const deleteRule = (r: Rule) => run(async () => {
@@ -77,9 +82,13 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
       if (editingRule) await api(`/orgs/${org.id}/journal-rules/${editingRule}`, { method: 'PUT', body: ruleBody });
       else await api(`/orgs/${org.id}/journal-rules`, { body: ruleBody });
       const r = await api(`/orgs/${org.id}/journal-rules/run`, { body: {} });
-      setOk(`Rule saved. ${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted so far; the rest post automatically on their dates.`); clear(); load(); loadRules(); return;
+      setOk(`Rule saved. ${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted so far; the rest post automatically on their dates.`); clear(); load(); loadRules();
+      setFormOpen(false); if (go && view !== 'repeating') go('journal/repeating'); return;
     }
+    // Correcting a posted entry: the original is reversed (it stays in the books with its reversal) and the corrected one is posted.
+    if (editingEntry) await api(`/orgs/${org.id}/journal/${editingEntry.id}/reverse`, { body: { date: today, reason: `Corrected by a new entry${narration ? `: ${narration}` : ''}` } });
     const r = await api(`/orgs/${org.id}/journal`, { body: { ...header(), lines: apiLines() } });
+    if (editingEntry) setEditingEntry(null);
     let note = '';
     for (const file of files) {
       try { await api(`/orgs/${org.id}/files`, { body: { name: file.name, mime: file.type || 'application/octet-stream', dataBase64: await fileToBase64(file), linkType: 'journal', linkId: r.id } }); }
@@ -87,6 +96,13 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
     }
     clear(); setOk(`Entry posted. Voucher ${r.voucherNo}.${note}`); load();
   });
+  /** Fill the form from a posted entry: to correct it (it is reversed on posting) or to post a copy with the next number. */
+  const loadEntry = (e: Entry, correct: boolean) => {
+    clear(); setOk(''); setEditingEntry(correct ? e : null);
+    setNarration(e.narration); setReference(e.reference ?? ''); setDate(correct ? e.date : today);
+    setRows(e.lines.map((l) => ({ accountId: String(l.accountId), debit: l.debit ? String(l.debit / 100) : '', credit: l.credit ? String(l.credit / 100) : '', cc: '' })));
+    setFormOpen(true); window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const reverse = (id: number) => run(async () => { await api(`/orgs/${org.id}/journal/${id}/reverse`, { body: { date: today, reason } }); setOk('Reversal posted.'); load(); });
   const bulkDelete = () => run(async () => {
     const ids = [...selected]; if (!ids.length) return;
@@ -104,15 +120,27 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
 
   return (
     <>
-      {canPost && (
-        <Card title="New journal entry">
-          <div className="grid gap-3 md:grid-cols-4">
+      {view === 'list' && (
+        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+          {canPost && <Button onClick={() => { clear(); setEditingEntry(null); setFormOpen(true); }}><span aria-hidden>＋ </span>New journal</Button>}
+          {canPost && <Button variant="ghost" onClick={() => { clear(); setEditingEntry(null); setRule((r) => ({ ...r, on: true })); setFormOpen(true); }}><span aria-hidden>＋ </span>New repeating journal</Button>}
+          <Button variant="ghost" onClick={() => go?.('journal/repeating')}>Repeating journals ({rules.filter((r) => r.active && !r.isArchived).length})</Button>
+        </div>)}
+      {view === 'repeating' && (
+        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+          {canPost && <Button onClick={() => { clear(); setRule((r) => ({ ...r, on: true })); setFormOpen(true); }}><span aria-hidden>＋ </span>New repeating journal</Button>}
+          <Button variant="ghost" onClick={() => go?.('journal')}>Posted journals</Button>
+        </div>)}
+      {canPost && formOpen && (
+        <Card title={editingRule ? 'Edit repeating journal' : editingEntry ? `Correct entry ${editingEntry.voucherNo ?? `#${editingEntry.id}`}` : rule.on ? 'New repeating journal' : 'New journal entry'}
+          actions={<Button variant="ghost" onClick={() => { clear(); setEditingEntry(null); setFormOpen(false); }}>Close</Button>}>
+          {editingEntry && <div className="mb-3"><Callout tone="info" title="Posted entries are not changed in place">When you post, {editingEntry.voucherNo ?? `entry #${editingEntry.id}`} is reversed (both stay in the books with the reason) and this corrected entry is posted.</Callout></div>}
+          <div className="grid gap-3 md:grid-cols-3">
             <Field label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             <div><Field label="Voucher number" aria-label="Voucher number" value={voucherTouched ? voucher : nextVoucher} placeholder="Automatic" disabled={rule.on}
               onChange={(e) => { setVoucherTouched(true); setVoucher(e.target.value); }} />
               <p className="mt-1 text-xs text-slate-500">{rule.on ? 'Each posted entry gets the next number' : voucherTouched ? 'Your number' : 'Next in the series; type over it to change'}</p></div>
             <Field label="Reference number (optional)" aria-label="Reference number" placeholder="e.g. bank ref, agreement no." value={reference} onChange={(e) => setReference(e.target.value)} />
-            <Field label="Narration" value={narration} onChange={(e) => setNarration(e.target.value)} />
           </div>
           {centres.length > 0 && (
             <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
@@ -144,6 +172,10 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
 
             <tfoot><tr className="font-medium"><td className="py-2 text-right">Totals {totalD === totalC && totalD > 0 ? '✓ balanced' : totalD !== totalC ? `· difference ${fmt(Math.abs(totalD - totalC))}` : ''}</td><td className="text-right">{fmt(totalD)}</td><td className="text-right">{fmt(totalC)}</td>{centres.length > 0 && <td />}<td /></tr></tfoot>
           </table>
+          <label className="mt-3 block text-sm"><span className="mb-1 block font-medium text-slate-600">Narration</span>
+            <textarea aria-label="Narration" rows={2} value={narration} onChange={(e) => setNarration(e.target.value)}
+              placeholder={rule.on ? 'e.g. Being insurance for {month}' : 'e.g. Being office tea expenses paid in cash'}
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" /></label>
           <div className="mt-3 grid gap-4 md:grid-cols-2">
             <div className="text-sm"><span className="mb-1 block font-medium text-slate-600">Attachments (policy, bill, working)</span>
               <label className={`inline-flex items-center gap-2 rounded-md border-2 border-dashed px-4 py-2 font-medium ${rule.on ? 'cursor-not-allowed border-slate-200 text-slate-400' : 'cursor-pointer border-brand-300 bg-brand-50/50 text-brand-700 hover:border-brand-500 hover:bg-brand-50'}`}>
@@ -172,8 +204,9 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
         </Card>
       )}
 
-      <Card title="Journal rules" actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchivedRules} onChange={(e) => setShowArchivedRules(e.target.checked)} />Show archived</label>}>
-        {rules.filter((r) => showArchivedRules || !r.isArchived).length === 0 ? <Empty text="No rules yet. Tick “Post this entry automatically” above to make one." /> : (
+      {view === 'repeating' && (
+      <Card title="Repeating journals" actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchivedRules} onChange={(e) => setShowArchivedRules(e.target.checked)} />Show archived</label>}>
+        {rules.filter((r) => showArchivedRules || !r.isArchived).length === 0 ? <Empty text="No repeating journals yet. Click “New repeating journal” to make one." /> : (
           <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Rule</th><th>Repeats</th><th>Next entry</th><th>Ends</th><th>Posted</th><th>Status</th><th /></tr></thead>
             <tbody>{rules.filter((r) => showArchivedRules || !r.isArchived).map((r) => (
               <tr key={r.id} className="border-t border-slate-100"><td className="py-2"><b>{r.name}</b><span className="block text-xs text-slate-500">{r.narration}: {r.lines.map((l) => `${l.debit ? 'Dr' : 'Cr'} ${name(l.accountId)} ${fmt(l.debit || l.credit)}`).join(' · ')}</span></td>
@@ -186,40 +219,62 @@ export function Journal({ org, accounts, canPost, role = 'owner', go, focusId }:
                 ]} />}</td></tr>))}</tbody></table>
         )}
         {canPost && rules.some((r) => r.active) && <div className="mt-3"><Button variant="ghost" disabled={busy} onClick={() => run(async () => { const r = await api(`/orgs/${org.id}/journal-rules/run`, { body: {} }); setOk(`${r.created} entr${r.created === 1 ? 'y' : 'ies'} posted.`); load(); loadRules(); })}>Post anything due now</Button></div>}
-      </Card>
+      </Card>)}
 
+      {view === 'list' && (
       <Card title="Posted entries">
         {canPost && <div className="mb-3 flex flex-wrap items-end gap-3"><div className="max-w-sm"><Field label="Reason used when reversing an entry" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
           {selected.size > 0 && <Button variant="danger" disabled={busy} onClick={bulkDelete}>Delete {selected.size} selected</Button>}</div>}
         {focus && <div className="mb-3"><Callout tone="info">Showing the entry opened from the ledger. <button type="button" className="font-medium underline" onClick={() => setFocus(undefined)}>Show all entries</button></Callout></div>}
         <DataTable id="journal" rows={focus ? entries.filter((e) => e.id === focus || e.reversesId === focus) : entries} rowKey={(e) => e.id} orgId={org.id} exportTitle="Journal entries" searchLabel="Search journal entries (voucher, reference, text, account)" empty="Nothing posted yet."
-          columns={journalColumns(accounts)}
+          columns={journalColumns(accounts, entries, (id) => setFocus(id))} dateKey="date" facets={['status', 'type']}
+          expand={(e) => <EntryLines entry={e} accounts={accounts} />}
           leadingHead={canPost && selectable.length > 0 ? <input type="checkbox" aria-label="Select all entries" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((e) => e.id)))} /> : undefined}
           leading={canPost ? (e) => (!e.reversesId ? <input type="checkbox" aria-label={`Select entry ${e.id}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /> : null) : undefined}
           trailing={(e) => <RowMenu label={`Actions for entry ${e.voucherNo ?? e.id}`} actions={[
+            { label: 'Edit', icon: 'edit', onClick: () => loadEntry(e, true), hidden: !canPost || !!e.reversesId || !!e.reversed },
+            { label: 'Duplicate', icon: 'copy', onClick: () => loadEntry(e, false), hidden: !canPost || !!e.reversesId },
             { label: 'Attached files', icon: 'note', onClick: () => toggleFiles(e.id) },
-            { label: 'Reverse', icon: 'restore', onClick: () => { setError(''); reverse(e.id); }, hidden: !canPost || !!e.reversesId || !!e.reversed },
+            { label: 'Reverse', icon: 'void', onClick: () => { setError(''); reverse(e.id); }, hidden: !canPost || !!e.reversesId || !!e.reversed },
           ]} />} />
         {Object.entries(open).filter(([, v]) => v).map(([id, v]) => (
-          <div key={id} className="mt-2 text-xs text-slate-600"><b>Files on entry #{id}:</b> {v!.length === 0 ? 'none attached.' : v!.map((a) => <button key={a.id} className="mr-3 underline" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button>)}
+          <div key={id} className="mt-2 text-xs text-slate-600"><b>Files on entry #{id}:</b> {v!.length === 0 ? 'none attached.' : v!.map((a) => <button key={a.id} className="link mr-3" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button>)}
             <button className="ml-2 text-slate-400" onClick={() => setOpen({ ...open, [id]: undefined })}>✕</button></div>))}
-      </Card>
+      </Card>)}
     </>
   );
 }
 
+/** The lines of one entry, shown when its row is opened: account, debit, credit and the entry total. */
+function EntryLines({ entry, accounts }: { entry: Entry; accounts: Account[] }) {
+  const acc = (id: number) => { const a = accounts.find((x) => x.id === id); return a ? `${a.code} · ${a.name}` : `#${id}`; };
+  const d = entry.lines.reduce((s, l) => s + l.debit, 0), c = entry.lines.reduce((s, l) => s + l.credit, 0);
+  return (
+    <table className="w-full max-w-3xl text-xs" aria-label={`Lines of ${entry.voucherNo ?? `entry ${entry.id}`}`}>
+      <thead><tr className="text-left"><th>Account</th><th>Narration</th><th className="text-right">Debit (₹)</th><th className="text-right">Credit (₹)</th></tr></thead>
+      <tbody>{entry.lines.map((l, i) => <tr key={i}><td>{acc(l.accountId)}</td><td className="text-slate-500">{i === 0 ? entry.narration : ''}</td>
+        <td className="text-right tabular-nums">{l.debit ? fmt(l.debit) : ''}</td><td className="text-right tabular-nums">{l.credit ? fmt(l.credit) : ''}</td></tr>)}</tbody>
+      <tfoot><tr><td colSpan={2}>Entry total</td><td className="text-right tabular-nums">{fmt(d)}</td><td className="text-right tabular-nums">{fmt(c)}</td></tr></tfoot>
+    </table>
+  );
+}
+
 /** Columns of the posted entries list. */
-function journalColumns(accounts: Account[]): Column<Entry>[] {
+function journalColumns(accounts: Account[], all: Entry[], open: (id: number) => void): Column<Entry>[] {
   const name = (id: number) => { const a = accounts.find((x) => x.id === id); return a ? `${a.code} ${a.name}` : `#${id}`; };
   const amount = (e: Entry) => e.lines.reduce((s, l) => s + l.debit, 0);
+  const reversal = (e: Entry) => all.find((x) => x.reversesId === e.id);
+  const vno = (e?: Entry) => (e ? e.voucherNo ?? `#${e.id}` : '');
   return [
-    { key: 'voucher', label: 'Voucher', value: (e) => e.voucherNo ?? `#${e.id}`, render: (e) => <b>{e.voucherNo ?? `#${e.id}`}</b> },
+    { key: 'voucher', label: 'Voucher', value: (e) => vno(e), render: (e) => <button type="button" className="link font-medium" onClick={() => open(e.id)}>{vno(e)}</button> },
     { key: 'date', label: 'Date', value: (e) => e.date },
     { key: 'reference', label: 'Reference', value: (e) => e.reference ?? null },
-    { key: 'narration', label: 'Narration', value: (e) => e.narration, render: (e) => <span>{e.narration}{e.reversesId && <em className="ml-2 text-amber-700">(reversal of #{e.reversesId})</em>}{e.reversed && <span className="ml-2"><Badge text="reversed" /></span>}</span> },
-    { key: 'lines', label: 'Accounts', value: (e) => e.lines.map((l) => `${l.debit ? 'Dr' : 'Cr'} ${name(l.accountId)} ${fmt(l.debit || l.credit)}`).join('; '),
-      render: (e) => <ul className="text-xs text-slate-600">{e.lines.map((l, i) => <li key={i}>{l.debit ? 'Dr' : 'Cr'} {name(l.accountId)} · {fmt(l.debit || l.credit)}</li>)}</ul> },
+    { key: 'narration', label: 'Narration', value: (e) => e.narration, render: (e) => <span>{e.narration}{e.reversesId && <span className="ml-2 text-xs text-amber-700">reverses <button type="button" className="link" onClick={() => open(e.reversesId!)}>{vno(all.find((x) => x.id === e.reversesId)) || `#${e.reversesId}`}</button></span>}</span> },
+    { key: 'lines', label: 'Accounts', value: (e) => e.lines.map((l) => `${l.debit ? 'Dr' : 'Cr'} ${name(l.accountId)} ${fmt(l.debit || l.credit)}`).join('; '), hidden: true },
     { key: 'amount', label: 'Amount', value: amount, money: true, noSearch: true },
+    { key: 'status', label: 'Status', value: (e) => (e.reversed ? 'Reversed' : 'Posted'),
+      render: (e) => { const r = reversal(e); return <span className="inline-flex items-center gap-1"><Badge text={e.reversed ? 'reversed' : 'posted'} />{r && <button type="button" className="link text-xs" onClick={() => open(r.id)}>by {vno(r)}</button>}</span>; } },
+    { key: 'type', label: 'Voucher type', value: (e) => (e.reversesId ? 'Reversal' : 'Journal'), hidden: true },
     { key: 'by', label: 'Entered by', value: (e) => e.createdBy ?? null, hidden: true },
   ];
 }

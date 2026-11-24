@@ -127,6 +127,15 @@ export class OrgController {
         for (const u of used.filter((x) => x.sub_group && (x.fsli ?? fsliOf(x.type, x.code)) === f.key)) {
           const g = find(u.group_name); if (g && !g.sub.some((s) => s.name.toLowerCase() === u.sub_group.toLowerCase())) g.sub.push({ name: u.sub_group, from: null, to: null, custom: false });
         }
+        // A group without its own number range (an older or imported group): show the numbers its ledgers use, or the
+        // statement line's range, so every group in the list carries a number series.
+        const num = (x: string) => Number.parseInt(x, 10);
+        for (const g of groups) {
+          if (g.from != null) continue;
+          const codes = used.filter((u) => u.group_name?.toLowerCase() === g.name.toLowerCase()).map((u) => num(u.code)).filter((n) => Number.isFinite(n) && n >= f.from && n <= f.to);
+          g.from = codes.length ? Math.min(...codes) : f.from; g.to = codes.length ? Math.max(Math.max(...codes), Math.min(f.to, Math.min(...codes) + 99)) : f.to;
+          for (const s of g.sub) if (s.from == null) { s.from = g.from; s.to = g.to; }
+        }
         return { ...f, groups };
       });
     });

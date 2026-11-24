@@ -134,3 +134,61 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
     </div>
   );
 }
+
+/**
+ * A themed single-choice dropdown (instead of the browser's own select): the choices in a list with an optional note on
+ * the right (a number range) and an optional action at the bottom ("+ New group…").
+ */
+export function PickList({ value, onChange, options, ariaLabel, placeholder = 'Choose…', footer, disabled, className }: {
+  value: string; onChange: (v: string) => void; options: { value: string; label: string; right?: string }[]; ariaLabel: string; placeholder?: string;
+  footer?: { label: string; onClick: () => void }; disabled?: boolean; className?: string;
+}) {
+  const [open, setOpen] = useState(false), [hi, setHi] = useState(0);
+  const [pos, setPos] = useState<React.CSSProperties>({});
+  const btn = useRef<HTMLButtonElement>(null), box = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const chosen = options.find((o) => o.value === value);
+  const n = options.length + (footer ? 1 : 0);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btn.current?.getBoundingClientRect(); if (!r) return;
+      const below = window.innerHeight - r.bottom, above = r.top, width = Math.max(r.width, 260);
+      setPos(below < 220 && above > below ? { position: 'fixed', left: r.left, width, bottom: window.innerHeight - r.top + 4, maxHeight: Math.min(360, above - 12) }
+        : { position: 'fixed', left: r.left, width, top: r.bottom + 4, maxHeight: Math.min(360, below - 12) });
+    };
+    place(); setHi(Math.max(0, options.findIndex((o) => o.value === value)));
+    const down = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false); };
+    window.addEventListener('scroll', place, true); window.addEventListener('resize', place); document.addEventListener('mousedown', down);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); document.removeEventListener('mousedown', down); };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const choose = (i: number) => { setOpen(false); btn.current?.focus(); if (i === options.length) footer?.onClick(); else onChange(options[i].value); };
+  const key = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) setOpen(true); else setHi((h) => Math.min(n - 1, h + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(0, h - 1)); }
+    else if ((e.key === 'Enter' || e.key === ' ') && open) { e.preventDefault(); choose(hi); }
+    else if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); }
+  };
+  return (
+    <div className={className}>
+      <button ref={btn} type="button" role="combobox" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} aria-controls={id} disabled={disabled}
+        onClick={() => setOpen(!open)} onKeyDown={key}
+        className={`flex w-full items-center justify-between gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${open ? 'border-brand-500 ring-2 ring-brand-200' : 'border-slate-300'}`}>
+        <span className={`truncate ${chosen ? 'text-slate-900' : 'text-slate-500'}`}>{chosen?.label ?? placeholder}</span>
+        <span aria-hidden className="text-xs text-brand-700">▾</span></button>
+      {open && (
+        <div ref={box} id={id} role="listbox" aria-label={`${ariaLabel} options`} data-popover style={pos} className="z-[60] flex flex-col overflow-hidden rounded-lg border border-brand-100 bg-white text-sm shadow-xl">
+          <div className="min-h-0 flex-1 overflow-y-auto py-1">
+            {options.map((o, i) => (
+              <div key={o.value} role="option" aria-selected={o.value === value} data-value={o.value} onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
+                className={`flex cursor-pointer items-center justify-between gap-3 px-3 py-2 ${i === hi ? 'bg-brand-50 text-brand-900' : 'text-slate-800'} ${o.value === value ? 'font-medium' : ''}`}>
+                <span className="truncate">{o.label}</span>{o.right && <span className="shrink-0 text-xs tabular-nums text-slate-500">{o.right}</span>}</div>))}
+            {!options.length && <p className="px-3 py-2 text-slate-500">Nothing to choose yet.</p>}
+          </div>
+          {footer && <div className="border-t border-brand-100 p-1">
+            <div role="option" aria-selected={false} onMouseEnter={() => setHi(options.length)} onClick={() => choose(options.length)}
+              className={`cursor-pointer rounded-md px-3 py-2 font-medium text-brand-700 ${hi === options.length ? 'bg-brand-50' : ''}`}>＋ {footer.label}</div></div>}
+        </div>)}
+    </div>
+  );
+}

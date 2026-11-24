@@ -143,7 +143,8 @@ function ContactList(p: Props) {
               <input aria-label="Contacts CSV file" type="file" accept=".csv" className="sr-only"
                 onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setFileName(f.name); setCsv(await f.text()); setProblems([]); } }} /></label>
           </div>
-          <textarea aria-label="Contacts CSV data" className="mt-3 h-32 w-full rounded border border-slate-300 p-2 font-mono text-xs" placeholder="Choose a file or paste CSV here" value={csv} onChange={(e) => setCsv(e.target.value)} />
+          {csv && (() => { const rows = csv.split(/\r?\n/).filter((l) => l.trim()).length - 1; return (
+            <p className="mt-3 text-sm text-slate-600" data-testid="import-summary">{fileName ?? 'File'}: {rows} contact{rows === 1 ? '' : 's'} to bring in. Check it first, then import.</p>); })()}
           <div className="mt-3 flex gap-3"><Button variant="ghost" disabled={busy || !csv} onClick={() => runImport(true)}>Check (dry run)</Button><Button disabled={busy || !csv} onClick={() => runImport(false)}>Import</Button></div>
           {problems.length > 0 && (
             <div className="mt-4" data-testid="import-problems">

@@ -173,7 +173,7 @@ export function FixedAssets({ org, canManage, accounts = [] }: { org: Org; canMa
             : <p className="mt-2 text-xs text-slate-500">Pick a group to fill in the usual rate. For example an air conditioner or refrigerator goes under Plant and machinery (15% WDV), a computer or laptop under Computers and software (40% WDV).</p>}
           <div className="mt-3 text-sm"><span className="mb-1 block font-medium text-slate-600">Attach documents (purchase bill, warranty, photos)</span>
             <input aria-label="Attach documents" type="file" multiple onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])} />
-            <ul className="mt-1 text-xs text-slate-600">{existing.map((a) => <li key={a.id}><button className="underline" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button> (attached)</li>)}
+            <ul className="mt-1 text-xs text-slate-600">{existing.map((a) => <li key={a.id}><button className="link" onClick={() => run(() => download(`/orgs/${org.id}/files/${a.id}/download`, a.name))}>{a.name}</button> (attached)</li>)}
               {files.map((x, i) => <li key={i}>{x.name} <button className="text-red-700" onClick={() => setFiles(files.filter((_, j) => j !== i))}>remove</button></li>)}</ul></div>
           <div className="mt-3 flex gap-3"><Button disabled={busy} onClick={save}>{editing ? 'Save changes' : 'Save asset'}</Button>{editing && <Button variant="ghost" onClick={reset}>Cancel</Button>}</div>
         </Card>

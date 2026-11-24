@@ -21,7 +21,8 @@ interface Batch { id: number; side: string; date: string; reference: string | nu
 const TYPE: Record<string, string> = { invoice: 'Invoice', credit_note: 'Credit note', bill: 'Bill', debit_note: 'Debit note' };
 const ACTION: Record<string, string> = { create: 'Created', edit: 'Edited', void: 'Voided', email: 'Emailed', unlink_payment: 'Payment unlinked', attach: 'File attached', payment: 'Payment recorded', unlink_from_batch: 'Unlinked from a batch' };
 
-export function DocView({ orgId, id, full, canEdit, go, onClose, onEdit, onDuplicate, onVoid, onArchive, onPdf, onPay, onNote, onChanged }: {
+export function DocView({ orgId, id, full, canEdit, go, onClose, onEdit, onDuplicate, onVoid, onArchive, onPdf, onPay, onNote, onChanged, refresh }: {
+  /** Changes whenever the list behind this view reloads (a payment was recorded, a note made…): the view loads again. */ refresh?: unknown;
   orgId: number; id: number; full: boolean; canEdit: boolean; go?: (p: string) => void; onClose: () => void;
   onEdit: () => void; onDuplicate: () => void; onVoid: () => void; onArchive: () => void; onPdf: () => void; onPay?: () => void; onNote?: () => void; onChanged: () => void;
 }) {
@@ -37,7 +38,7 @@ export function DocView({ orgId, id, full, canEdit, go, onClose, onEdit, onDupli
     setD(doc); setFiles(atts);
     api<Hist[]>(`/orgs/${orgId}/history?entity=document&entityId=${id}&limit=50`).then(setHist).catch(() => setHist([]));
   }, [orgId, id]);
-  useEffect(() => { load().catch(() => undefined); }, [load]);
+  useEffect(() => { load().catch(() => undefined); }, [load, refresh]);
 
   // Adding a file never touches the posted entry: it is attached to the document as it is.
   const attach = (list: FileList | null) => run(async () => {

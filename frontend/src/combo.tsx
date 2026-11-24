@@ -31,8 +31,6 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
   const [pos, setPos] = useState<React.CSSProperties>({});
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const typedKey = useRef(false);
-  const completion = useRef<{ typed: string; full: string } | null>(null);
   const id = useId();
 
   const exact = options.find((o) => norm(o.text) === norm(value));
@@ -66,31 +64,18 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
   }, [open, columns]);
   useEffect(() => { list.current?.querySelector(`[data-index="${hi}"]`)?.scrollIntoView({ block: 'nearest' }); }, [hi, open]);
 
-  // Complete the rest of the best match as the person types (only for real key presses, not pasted or filled text).
-  useLayoutEffect(() => {
-    const c = completion.current; if (!c || !input.current) return;
-    if (input.current.value === c.full) input.current.setSelectionRange(c.typed.length, c.full.length);
-    completion.current = null;
-  });
+  // The rest of the best match is shown in grey after what was typed; Tab or Enter takes it. Nothing is chosen until then.
+  const ghost = open && value.trim() && !exact ? options.find((o) => o.text.length > value.length && o.text.toLowerCase().startsWith(value.toLowerCase())) : undefined;
 
   const pick = (o: ComboOption) => { onText(o.text); setOpen(false); };
-  const change = (v: string, inputType?: string) => {
-    setOpen(true);
-    if (typedKey.current && inputType === 'insertText' && v.trim()) {
-      const best = options.find((o) => o.text.toLowerCase().startsWith(v.toLowerCase()));
-      if (best && best.text.length > v.length) { completion.current = { typed: v, full: v + best.text.slice(v.length) }; onText(completion.current.full); typedKey.current = false; return; }
-    }
-    typedKey.current = false;
-    onText(v);
-  };
+  const change = (v: string) => { setOpen(true); onText(v); };
   const key = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    typedKey.current = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
     if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) setOpen(true); else setHi((h) => Math.min(count - 1, h + 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(0, h - 1)); }
     else if (e.key === 'Escape') { if (open) { e.preventDefault(); setOpen(false); } }
     else if ((e.key === 'Enter' || e.key === 'Tab') && open && count) {
       if (hi === createAt) { if (e.key === 'Enter') { e.preventDefault(); setOpen(false); onCreate!(value); } return; }
-      const o = shown[hi];
+      const o = ghost && hi === 0 ? ghost : shown[hi];
       if (o && (words.length || e.key === 'Enter')) { if (e.key === 'Enter') e.preventDefault(); pick(o); }
       else setOpen(false);
     }
@@ -99,12 +84,13 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
   return (
     <div className={`relative ${className ?? ''}`}>
       {icon && <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2">{icon}</span>}
-      <input ref={input} role="combobox" aria-label={ariaLabel} data-count={options.length} aria-expanded={open} aria-controls={id} aria-autocomplete="both" autoComplete="off" disabled={disabled}
+      <input ref={input} role="combobox" aria-label={ariaLabel} data-count={options.length} aria-expanded={open} aria-controls={id} aria-autocomplete="list" autoComplete="off" disabled={disabled}
         placeholder={placeholder} value={value}
-        onChange={(e) => change(e.target.value, (e.nativeEvent as InputEvent).inputType)}
+        onChange={(e) => change(e.target.value)}
         onKeyDown={key} onFocus={(e) => { e.target.select(); }} onClick={() => setOpen(true)}
         onBlur={() => { setTimeout(() => setOpen(false), 120); onBlur?.(); }}
         className={`w-full rounded-md border bg-white py-1.5 ${icon ? 'pl-8' : 'pl-2.5'} pr-7 text-sm shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200 disabled:bg-slate-100 ${invalid ? 'border-amber-400 bg-amber-50' : 'border-slate-300'}`} />
+      {ghost && <div aria-hidden data-testid="ghost" className={`pointer-events-none absolute inset-y-0 left-0 right-7 flex items-center overflow-hidden whitespace-pre text-sm ${icon ? 'pl-[calc(2rem+1px)]' : 'pl-[calc(0.625rem+1px)]'}`}><span className="invisible">{value}</span><span className="text-slate-400">{ghost.text.slice(value.length)}</span></div>}
       <button type="button" tabIndex={-1} aria-hidden onMouseDown={(e) => { e.preventDefault(); setOpen(!open); input.current?.focus(); }}
         className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[10px] text-brand-700">▼</button>
       {open && !disabled && (

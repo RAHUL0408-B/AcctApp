@@ -23,10 +23,8 @@ import { matchRule, monthEnds, monthlyDepreciation, nextDate } from './calc';
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 const today = () => new Date().toISOString().slice(0, 10);
 const num = (r: any, ...ks: string[]) => { for (const k of ks) if (r[k] != null) r[k] = Number(r[k]); return r; };
-const lineSchema = z.object({
-  description: z.string().min(1).max(300), hsnSac: z.string().regex(/^\d{4,8}$/, 'HSN/SAC must be 4-8 digits').optional(),
-  quantity: z.number().positive().max(1e9), rate: z.number().int().min(0), gstRateBp: z.number().int().min(0).max(5000).default(0), accountId: z.number().int().positive().optional(),
-});
+// A quote or order line is the same as an invoice line, so nothing typed on it (unit, product, cost centre, cess, blocked credit) is lost.
+const lineSchema = docSchema.shape.lines.element;
 
 const assetSchema = z.object({
   name: z.string().min(1).max(200), code: z.string().trim().min(1).max(30).optional(), group: z.string().max(100).optional(), purchaseDate: date,

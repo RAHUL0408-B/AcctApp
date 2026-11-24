@@ -109,9 +109,11 @@ const acc1 = page.getByLabel('Account 1');
 await acc1.click();
 await page.getByRole('listbox', { name: 'Suggestions' }).getByText('Type an account code or name to search').waitFor();   // a hint, not every account
 await acc1.pressSequentially('100');
-for (let i = 0; i < 30 && !/^1000 · /.test(await acc1.inputValue()); i++) await page.waitForTimeout(100);
-assert.match(await acc1.inputValue(), /^1000 · /, 'typing completes the rest of the best match');
+assert.strictEqual(await acc1.inputValue(), '100', 'what is typed is not replaced');
+await page.getByTestId('ghost').waitFor();                                           // the rest of the best match, in grey
+assert.match(await page.getByTestId('ghost').innerText(), /0 · Cash in Hand$/);
 await page.keyboard.press('Tab');
+assert.match(await acc1.inputValue(), /^1000 · /, 'Tab takes the completion');
 await page.getByLabel('Debit 1').fill('750');
 await page.getByLabel('Account 2').fill('Courier charges');
 await page.getByRole('listbox', { name: 'Suggestions' }).getByRole('option', { name: /Create new ledger/ }).click();

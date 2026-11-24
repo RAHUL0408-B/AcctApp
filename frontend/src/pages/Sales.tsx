@@ -85,7 +85,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
               {f.tdsSection && <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-600"><input type="checkbox" aria-label="Apply TDS irrespective of threshold" checked={f.tdsForced} onChange={(e) => setF({ ...f, tdsForced: e.target.checked })} />Apply TDS irrespective of threshold</label>}
               {f.tdsSection && <p className="mt-1 text-xs text-slate-500">Carried to the {sales ? 'invoice' : 'bill'} when this is converted.</p>}</div>
           </div>
-          <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} intra={intraFor(f.contactId)} />
+          <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} intra={intraFor(f.contactId)} contactDefaultId={(() => { const c = contacts.find((x) => String(x.id) === f.contactId); return sales ? c?.defaultSalesAccountId : c?.defaultPurchaseAccountId; })()} />
           <div className="mt-4 flex gap-3"><Button disabled={busy} onClick={create}>{editing ? 'Save changes' : 'Create'}</Button>{editing && <Button variant="ghost" onClick={reset}>Cancel</Button>}</div>
         </Card>
       )}
@@ -99,7 +99,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
             <Field label={`${sales ? 'Invoice' : 'Bill'} number`} aria-label="Document number" placeholder="Automatic" value={conv.docNumber} onChange={(e) => setConv({ ...conv, docNumber: e.target.value })} />
             {!sales && <Field label="Supplier bill no." value={conv.supplierRef} onChange={(e) => setConv({ ...conv, supplierRef: e.target.value })} />}
           </div>
-          <LinesEditor org={org} lines={conv.lines} setLines={(l) => setConv({ ...conv, lines: l })} sales={sales} accounts={accounts} intra={intraFor(conv.contactId)} />
+          <LinesEditor org={org} lines={conv.lines} setLines={(l) => setConv({ ...conv, lines: l })} sales={sales} accounts={accounts} intra={intraFor(conv.contactId)} contactDefaultId={(() => { const c = contacts.find((x) => String(x.id) === conv.contactId); return sales ? c?.defaultSalesAccountId : c?.defaultPurchaseAccountId; })()} />
           <label className="mt-4 block text-sm"><span className="mb-1 block font-medium text-slate-600">Notes</span><textarea aria-label="Notes" rows={2} maxLength={500} className="w-full rounded-md border border-slate-300 px-3 py-2" value={conv.notes} onChange={(e) => setConv({ ...conv, notes: e.target.value })} /></label>
           <div className="mt-4 flex gap-3"><Button disabled={busy || !conv.contactId} onClick={post}>{sales ? 'Post invoice' : 'Post bill'}</Button><Button variant="ghost" onClick={() => setConv(null)}>Cancel</Button></div>
         </Card>

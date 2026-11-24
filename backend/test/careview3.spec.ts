@@ -157,4 +157,21 @@ describe('CA review 3', () => {
     const conv = (await post(`/pre-documents/${q.id}/convert`, { issueDate: today }).expect(201)).body;
     expect((await get(`/documents/${conv.documentId}`).expect(200)).body).toMatchObject({ tdsSection: '194J', tdsAmount: 100000 });
   });
+
+  it('a quote keeps the unit, product and cess of its lines, and carries them to the invoice', async () => {
+    const cust = (await post('/contacts', { kind: 'customer', name: 'Quote Lines Co', stateCode: '27' }).expect(201)).body.id;
+    const item = (await post('/items', { code: 'QL-1', name: 'Quoted item', kind: 'goods', saleRate: 5000, gstRateBp: 1800 }).expect(201)).body.id;
+    const q = (await post('/pre-documents', { kind: 'quote', contactId: cust, issueDate: today, lines: [{ description: 'Quoted item', hsnSac: '8471', unit: 'NOS', quantity: 2, rate: 5000, gstRateBp: 1800, itemId: item, cessRateBp: 100 }] }).expect(201)).body;
+    const back = (await get(`/pre-documents/${q.id}`).expect(200)).body;
+    expect(back.lines[0]).toMatchObject({ unit: 'NOS', itemId: item, cessRateBp: 100 });
+    const conv = (await post(`/pre-documents/${q.id}/convert`, { issueDate: today }).expect(201)).body;
+    const doc = (await get(`/documents/${conv.documentId}`).expect(200)).body;
+    expect(doc.lines[0]).toMatchObject({ unit: 'NOS', itemId: item });
+  });
+
+  it('a single-ledger export names the account in every format', async () => {
+    const bank = await accId('1010');
+    const rows = (await get(`/report-table/ledger?accountId=${bank}&from=2020-01-01`).expect(200)).body.rows;
+    expect(String(rows[0][1])).toContain('1010 Bank Account');
+  });
 });

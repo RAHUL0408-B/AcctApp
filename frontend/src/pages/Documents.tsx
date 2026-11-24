@@ -457,7 +457,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
         <DocView key={viewing} orgId={org.id} id={viewing} full={full} canEdit={!!vd && canEdit(vd)} go={go} onClose={() => setViewing(null)}
           onEdit={() => startEdit(vd ?? ({ id: viewing } as Doc))} onDuplicate={() => duplicate(vd ?? ({ id: viewing } as Doc))}
           onVoid={() => vd && doVoid(vd)} onArchive={() => vd && archiveOne(vd)} onPdf={() => downloadPdf([viewing], vd?.number ?? 'document')}
-          onPay={vd ? () => openPay(vd) : undefined} onNote={vd ? () => { setViewing(null); noteAgainst(vd); } : undefined} onChanged={load} />); })()}
+          onPay={vd ? () => openPay(vd) : undefined} onNote={vd ? () => { setViewing(null); noteAgainst(vd); } : undefined} onChanged={load} refresh={docs} />); })()}
       {showForm && canPost && (
         <div ref={formTop}>
         <Card title={editing ? `Edit ${editing.number}` : sales ? 'New sales document' : 'New purchase document'}

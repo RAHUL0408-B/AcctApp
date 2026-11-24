@@ -46,7 +46,7 @@ export const IconButton = ({ icon, label, onClick, disabled }: { icon: IconName;
 );
 
 // ------------------------------------------------------------------ popovers
-function useOutside(open: boolean, close: () => void) {
+export function useOutside(open: boolean, close: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -62,7 +62,7 @@ function useOutside(open: boolean, close: () => void) {
  * Where to draw a pop-up menu: fixed to the screen under its button, so a list that scrolls sideways (inside a card)
  * does not cut it off. It follows the button when the page scrolls.
  */
-function useAnchor(open: boolean, close: () => void, width: number) {
+export function useAnchor(open: boolean, close: () => void, width: number) {
   const btn = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<React.CSSProperties>({});
   useEffect(() => {

@@ -55,7 +55,7 @@ export async function buildTable(c: PoolClient, name: ReportName, p: ReportParam
       const l = await ledgerStatement(c, p.accountId, p.from, p.to);
       if (!l) throw new Error('Account not found');
       return { title: `Ledger: ${l.account.code} ${l.account.name}`, subtitle: `${p.from} to ${p.to}`, columns: [T('Date'), T('Narration'), M('Debit'), M('Credit'), M('Balance')],
-        rows: [['', 'Opening balance', 0, 0, l.openingBalance], ...l.lines.map((x) => [x.date, x.narration, x.debit, x.credit, x.balance])] };
+        rows: [['', `Opening balance · ${l.account.code} ${l.account.name}`, 0, 0, l.openingBalance], ...l.lines.map((x) => [x.date, x.narration, x.debit, x.credit, x.balance])] };
     }
     case 'all-ledgers': {
       // Every account that has a balance or movement, one after another: header row, opening balance, lines, closing balance.

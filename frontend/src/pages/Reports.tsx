@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { api, download, fmt, today } from '../api';
 import type { Org } from '../App';
 import { Button, Callout, Card, ErrorMsg, Ok, useAction , ask } from '../ui';
-import { FORMATS, Icon, exportTable, type ExportFormat, type ExportTable } from '../table';
+import { FORMATS, Icon, exportTable, useAnchor, useOutside, type ExportFormat, type ExportTable } from '../table';
 import { CombinePanel } from '../export';
 import { Combo, PickList } from '../combo';
 
@@ -180,10 +180,15 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
 /** "Export ▾" for a report: Excel, PDF, CSV or XML. */
 function ReportExport({ onExport, disabled }: { onExport: (f: ExportFormat) => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
+  const shut = useCallback(() => setOpen(false), []);
+  const ref = useOutside(open, shut);
+  // Fixed to the screen under the button, so the card around it never cuts the menu off.
+  const { btn, pos } = useAnchor(open, shut, 176);
   return (
-    <div className="relative">
-      <Button variant="ghost" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}><span className="inline-flex items-center gap-1.5"><Icon name="download" />Export ▾</span></Button>
-      {open && <div role="menu" className="absolute left-0 z-30 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+    <div ref={ref} className="relative">
+      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}
+        className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"><span className="inline-flex items-center gap-1.5"><Icon name="download" />Export ▾</span></button>
+      {open && <div role="menu" data-popover style={pos} className="z-50 overflow-y-auto rounded-lg border border-brand-100 bg-white py-1 shadow-xl">
         {FORMATS.map(([f, label]) => <button key={f} type="button" role="menuitem" className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setOpen(false); onExport(f); }}>{label} (.{f})</button>)}</div>}
     </div>
   );

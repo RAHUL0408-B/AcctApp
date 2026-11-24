@@ -77,6 +77,11 @@ export function fmt(paise: number): string {
 }
 
 /** "1234.50" -> 123450 paise without floating point maths */
+/** Like toPaise, but a leading minus is allowed (discount or return lines). */
+export function toSignedPaise(s: string): number {
+  const t = s.replace(/,/g, '').trim();
+  return t.startsWith('-') ? -toPaise(t.slice(1)) : toPaise(t);
+}
 export function toPaise(s: string): number {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.replace(/,/g, '').trim());
   if (!m) throw new Error(`Invalid amount "${s}"`);

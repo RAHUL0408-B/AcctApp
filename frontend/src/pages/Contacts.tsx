@@ -256,7 +256,7 @@ function ContactForm(p: Props & { id?: number; startName?: string; onDone?: (sav
   const { error, busy, run, setError } = useAction();
   useEffect(() => {
     api('/config/states').then(setStates);
-    api<TdsSection[]>('/config/tds-sections').then(setTds).catch(() => setTds([]));
+    api<TdsSection[]>(`/orgs/${org.id}/tds-sections`).catch(() => api<TdsSection[]>('/config/tds-sections')).then(setTds).catch(() => setTds([]));
     if (!id) return;
     api<Contact[]>(`/orgs/${org.id}/contacts?archived=true`).then((l) => {
       const c = l.find((x) => x.id === id);
@@ -297,7 +297,7 @@ function ContactForm(p: Props & { id?: number; startName?: string; onDone?: (sav
       ...opt(f.email, 'email'), ...opt(f.phone, 'phone'),
       ...opt(f.addressLine1, 'addressLine1'), ...opt(f.addressLine2, 'addressLine2'), ...opt(f.city, 'city'), ...opt(f.pincode, 'pincode'),
       ...(f.sameShip ? {} : { ...opt(f.shipLine1, 'shipLine1'), ...opt(f.shipLine2, 'shipLine2'), ...opt(f.shipCity, 'shipCity'), ...opt(f.shipStateCode, 'shipStateCode'), ...opt(f.shipPincode, 'shipPincode') }),
-      ...(supplier && f.defaultTdsSection ? { defaultTdsSection: f.defaultTdsSection } : {}),
+      ...(f.defaultTdsSection ? { defaultTdsSection: f.defaultTdsSection } : {}),
       ...(supplier && rate != null ? { lowerTdsRateBp: Math.round(rate * 100) } : {}), ...(supplier ? opt(f.lowerTdsCert, 'lowerTdsCert') : {}),
       rcmDefault: supplier && f.rcmDefault,
       ...opt(f.bankAccountName, 'bankAccountName'), ...opt(f.bankName, 'bankName'), ...opt(f.bankAccountNo.replace(/\s/g, ''), 'bankAccountNo'), ...opt(f.bankIfsc.toUpperCase(), 'bankIfsc'),
@@ -358,6 +358,15 @@ function ContactForm(p: Props & { id?: number; startName?: string; onDone?: (sav
             <Field label="Delivery PIN code" inputMode="numeric" value={f.shipPincode} onChange={set('shipPincode')} />
           </div>)}
       </Card>
+
+      {!supplier && (
+        <Card title="TDS this customer deducts">
+          <div className="grid gap-3 md:grid-cols-3">
+            <Select label="TDS section the customer deducts" aria-label="Customer TDS section" value={f.defaultTdsSection} onChange={set('defaultTdsSection')}>
+              <option value="">No TDS</option>{tds.map((s) => <option key={s.code} value={s.code}>{s.code} {s.description}</option>)}</Select>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Filled in on new invoices for this customer: the TDS is shown as TDS receivable and the customer pays the net. It can be changed or typed by hand on each invoice.</p>
+        </Card>)}
 
       {supplier && (
         <Card title="Tax on bills from this supplier">

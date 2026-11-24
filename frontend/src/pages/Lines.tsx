@@ -1,6 +1,6 @@
 // Shared line-item editor used by invoices, bills, quotes, purchase orders and repeating invoices.
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmt, toPaise } from '../api';
+import { api, fmt, toPaise, toSignedPaise } from '../api';
 import type { Org } from '../App';
 import { Icon } from '../table';
 import { Button, ErrorMsg, Field, useAction } from '../ui';
@@ -23,7 +23,7 @@ export const UNITS: [string, string][] = [
 
 /** Convert editor lines to the API shape (rate in paise, numbers parsed). Throws on a bad amount. */
 export function linesToApi(lines: Line[]) {
-  return lines.map((l) => ({ description: l.description, quantity: Number(l.quantity), rate: toPaise(l.rate), gstRateBp: Number(l.gstRateBp),
+  return lines.map((l) => ({ description: l.description, quantity: Number(l.quantity), rate: toSignedPaise(l.rate), gstRateBp: Number(l.gstRateBp),
     ...(l.hsnSac ? { hsnSac: l.hsnSac } : {}), ...(l.unit ? { unit: l.unit } : {}), ...(l.accountId ? { accountId: Number(l.accountId) } : {}),
     ...(l.itemId ? { itemId: Number(l.itemId) } : {}), ...(l.trackingOptionId ? { trackingOptionId: Number(l.trackingOptionId) } : {}),
     ...(l.cess && Number(l.cess) > 0 ? { cessRateBp: Math.round(Number(l.cess) * 100) } : {}), ...(l.itcBlocked === '1' ? { itcBlocked: true } : {}) }));
@@ -75,7 +75,7 @@ export function ContactPicker({ label, contacts, value, onChange, org, accounts,
   );
 }
 
-const lineAmount = (qty: string, rate: string) => { try { return Math.round(Math.round(Number(qty || 0) * 1000) * toPaise(rate || '0') / 1000); } catch { return 0; } };
+const lineAmount = (qty: string, rate: string) => { try { return Math.round(Math.round(Number(qty || 0) * 1000) * toSignedPaise(rate || '0') / 1000); } catch { return 0; } };
 
 /** GST split the way the server works it out: same state = CGST + SGST (half rate each), different state = IGST. */
 export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
@@ -98,10 +98,11 @@ export function taxSummary(lines: Line[], intra: boolean, noTax = false) {
 
 type ItemForm = { id?: number; code: string; name: string; kind: string; hsnSac: string; unit: string; rate: string; gstRateBp: string; accountId: string; line?: number };
 
-export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds, dutyOk = false, fxRate }:
+export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 'INR', intra = true, noTax = false, contactDefaultId, tds, dutyOk = false, fxRate, gstNA = false }:
   { org: Org; lines: Line[]; setLines: (l: Line[]) => void; sales: boolean; accounts: Account[]; currency?: string; intra?: boolean; noTax?: boolean;
     /** Customs duty may be added as a line (export and SEZ invoices, when the organisation says duty applies). */ dutyOk?: boolean;
     /** Rupees per unit of a foreign currency: the totals are shown in rupees as well. */ fxRate?: number;
+    /** GST does not apply at all (a bill from an unregistered supplier): the rate shows N/A and the GST rows go. */ gstNA?: boolean;
     /** The chosen contact's default sales or purchase account, shown as what "Default" means. */ contactDefaultId?: number | null;
     /** TDS this bill will carry, to show the balance payable after it. */ tds?: { section: string; amount: number } | null }) {
   const [rates, setRates] = useState<{ rateBp: number; label: string }[]>([]);
@@ -111,7 +112,7 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
   const [search, setSearch] = useState('');
   const { error, busy, run } = useAction();
   const loadItems = () => api<Item[]>(`/orgs/${org.id}/items`).then((l) => { setItems(l); return l; });
-  useEffect(() => { api('/config/gst-rates').then(setRates); loadItems(); api<TrackingCategory[]>(`/orgs/${org.id}/tracking`).then(setTracking); }, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api(`/orgs/${org.id}/gst-rates`).catch(() => api('/config/gst-rates')).then(setRates); loadItems(); api<TrackingCategory[]>(`/orgs/${org.id}/tracking`).then(setTracking); }, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const trackingOptions = tracking.flatMap((c) => c.options.map((o) => ({ id: o.id, label: `${c.name}: ${o.name}` })));
   // Cess and blocked credit are rare, so their columns appear only when asked for (or when a line already uses them).
   const [extra, setExtra] = useState(false);
@@ -230,8 +231,11 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
             <td className="pr-1"><select aria-label={`Unit ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.unit ?? ''} onChange={(e) => set(i, 'unit', e.target.value)}>
               <option value="">—</option>{UNITS.map(([c, n]) => <option key={c} value={c} title={n}>{c}</option>)}</select></td>
             <td className="pr-1"><input aria-label={`Rate ${i + 1}`} className="w-full rounded border border-slate-300 px-2 py-1 text-right" inputMode="decimal" value={l.rate} onChange={(e) => set(i, 'rate', e.target.value)} /></td>
-            <td className="pr-1"><select aria-label={`GST ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.gstRateBp} onChange={(e) => set(i, 'gstRateBp', e.target.value)}>
-              {rates.map((r) => <option key={r.rateBp} value={r.rateBp}>{r.label}</option>)}</select></td>
+            <td className="pr-1">{gstNA
+              ? <select aria-label={`GST ${i + 1}`} disabled title="GST does not apply: the supplier is not registered" className="w-full cursor-not-allowed rounded border border-slate-200 bg-slate-100 px-1 py-1 text-slate-400"><option>N/A</option></select>
+              : <select aria-label={`GST ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.gstRateBp} onChange={(e) => set(i, 'gstRateBp', e.target.value)}>
+                {rates.map((r) => <option key={r.rateBp} value={r.rateBp}>{r.label}</option>)}
+                {!rates.some((r) => String(r.rateBp) === String(l.gstRateBp)) && <option value={l.gstRateBp}>{Number(l.gstRateBp) / 100}%</option>}</select>}</td>
             <td className="pr-1"><select aria-label={`Account ${i + 1}`} className="w-full rounded border border-slate-300 px-1 py-1" value={l.accountId} onChange={(e) => set(i, 'accountId', e.target.value)}>
               <option value="">Default: {defaultFor(l)}</option>{options.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
               {dutyLedgers.length > 0 && <optgroup label="Duties and taxes (customs duty)">{dutyLedgers.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}</optgroup>}</select></td>
@@ -249,14 +253,15 @@ export function LinesEditor({ org, lines, setLines, sales, accounts, currency = 
       <div className="mt-4 flex justify-end">
         <table className="w-full max-w-md text-sm" data-testid="doc-totals">
           <tbody>
-            <tr><td className="py-1 text-slate-600">Taxable value (before GST){currency !== 'INR' ? ` (${currency})` : ''}</td><td className="py-1 text-right font-medium tabular-nums" data-testid="taxable-total">{cur}{fmt(sum.subtotal)}</td></tr>
+            <tr><td className="py-1 text-slate-600">{gstNA ? 'Value' : 'Taxable value (before GST)'}{currency !== 'INR' ? ` (${currency})` : ''}</td><td className="py-1 text-right font-medium tabular-nums" data-testid="taxable-total">{cur}{fmt(sum.subtotal)}</td></tr>
             {sum.rows.flatMap(([bp, r]) => intra
               ? [<tr key={`c${bp}`} className="text-slate-600"><td className="py-0.5 pl-3">CGST @ {bp / 200}% on {cur}{fmt(r.taxable)}<span className="block text-[11px] text-slate-400">{acct(codes[0])}</span></td><td className="py-0.5 text-right tabular-nums">{cur}{fmt(r.cgst)}</td></tr>,
                  <tr key={`s${bp}`} className="text-slate-600"><td className="py-0.5 pl-3">SGST @ {bp / 200}% on {cur}{fmt(r.taxable)}<span className="block text-[11px] text-slate-400">{acct(codes[1])}</span></td><td className="py-0.5 text-right tabular-nums">{cur}{fmt(r.sgst)}</td></tr>]
               : [<tr key={`i${bp}`} className="text-slate-600"><td className="py-0.5 pl-3">IGST @ {bp / 100}% on {cur}{fmt(r.taxable)}<span className="block text-[11px] text-slate-400">{acct(codes[2])}</span></td><td className="py-0.5 text-right tabular-nums">{cur}{fmt(r.igst)}</td></tr>])}
             {sum.cess > 0 && <tr className="text-slate-600"><td className="py-0.5 pl-3">Compensation cess</td><td className="py-0.5 text-right tabular-nums" data-testid="cess-total">{cur}{fmt(sum.cess)}</td></tr>}
             {!sales && lines.some((l) => l.itcBlocked === '1') && <tr className="text-amber-700"><td colSpan={2} className="py-0.5 pl-3 text-xs">GST on lines marked "No ITC" is added to their cost and is not claimed.</td></tr>}
-            <tr><td className="py-1 text-slate-600">Total GST</td><td className="py-1 text-right font-medium tabular-nums" data-testid="gst-total">{cur}{fmt(sum.gst)}</td></tr>
+            {gstNA ? <tr className="text-slate-500"><td colSpan={2} className="py-1 text-xs" data-testid="gst-na">No GST: the supplier is not registered under GST.</td></tr>
+              : <tr><td className="py-1 text-slate-600">Total GST</td><td className="py-1 text-right font-medium tabular-nums" data-testid="gst-total">{cur}{fmt(sum.gst)}</td></tr>}
             <tr className="border-t-2 border-slate-300"><td className="pt-2 font-semibold">Total {sales ? 'invoice' : 'bill'} value</td><td className="pt-2 text-right text-base font-semibold tabular-nums" data-testid="grand-total">{cur}{fmt(sum.total)}</td></tr>
             {tds && <>
               <tr className="text-slate-600"><td className="py-1 pl-3">Less TDS u/s {tds.section}</td><td className="py-1 text-right tabular-nums" data-testid="tds-total">− {cur}{fmt(tds.amount)}</td></tr>

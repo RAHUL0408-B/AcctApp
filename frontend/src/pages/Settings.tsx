@@ -6,6 +6,9 @@ import type { Org } from '../App';
 import { Button, Card, ErrorMsg, Field, Ok, useAction } from '../ui';
 import { EditMode, useEditing } from '../editmode';
 import { DataTable, ExportMenu, type Column } from '../table';
+import { GstRatesCard, TdsSectionsCard } from './TaxRates';
+import { PickList } from '../combo';
+import { askText } from '../ui';
 import { Empty, PageHeader, Select } from '../kit';
 
 type S = Record<string, any>;
@@ -521,12 +524,23 @@ function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; 
   const [f, setF] = useState<{ gstin: string; pan: string; tan: string; gstScheme: string; lutNumber: string; lutFrom: string; lutTo: string; strict: boolean; customs: boolean } | null>(null);
   const [ledgers, setLedgers] = useState<{ id: number; code: string; name: string; group: string; subGroup: string | null; isActive: boolean }[]>([]);
   const [nl, setNl] = useState({ name: '', subGroup: 'Other Statutory Dues' });
+  const [subs, setSubs] = useState<string[]>(['Output Tax Liability', 'TDS Payable', 'Other Statutory Dues']);
   const [ok, setOk] = useState('');
   const { error, busy, run } = useAction();
   const load = () => {
     api(`/orgs/${org.id}/settings`).then((s) => setF({ gstin: s.gstin ?? '', pan: s.pan ?? '', tan: s.tan ?? '', gstScheme: s.gstScheme, lutNumber: s.lutNumber ?? '', lutFrom: s.lutFrom ?? '', lutTo: s.lutTo ?? '', strict: !!s.strictInvoiceChecks, customs: !!s.customsDuty }));
     api<any[]>(`/orgs/${org.id}/accounts`).then((a) => setLedgers(a.filter((x) => /duties|tax|gst|tds|statutory/i.test(`${x.group} ${x.subGroup ?? ''}`) && x.type === 'liability')));
+    api<{ key: string; groups: { name: string; sub: { name: string }[] }[] }[]>(`/orgs/${org.id}/account-structure`).then((t) => {
+      const g = t.find((x) => x.key === 'cl')?.groups.find((x) => x.name === 'Duties & Taxes');
+      if (g) setSubs((s) => [...new Set([...s, ...g.sub.map((x) => x.name)])]);
+    }).catch(() => undefined);
   };
+  /** A new sub-group under Duties & Taxes, made from the sub-group list itself. */
+  const newSub = () => run(async () => {
+    const name = await askText('New sub-group under Duties & Taxes', { label: 'Sub-group name', placeholder: 'e.g. Professional Tax Payable' }); if (!name?.trim()) return;
+    await api(`/orgs/${org.id}/account-groups`, { body: { fsli: 'cl', name: name.trim(), parent: 'Duties & Taxes' } });
+    setSubs((s) => [...new Set([...s, name.trim()])]); setNl((x) => ({ ...x, subGroup: name.trim() })); setOk(`Sub-group "${name.trim()}" created.`);
+  });
   useEffect(load, [org.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!f) return <p className="text-slate-500">Loading…</p>;
   const editable = canManage && editing;
@@ -567,8 +581,9 @@ function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; 
         {editable && (
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <div className="w-64"><Field label="New duty or tax ledger" aria-label="New duty ledger" placeholder="e.g. Customs Duty Payable" value={nl.name} onChange={(e) => setNl({ ...nl, name: e.target.value })} /></div>
-            <Select label="Sub-group" aria-label="Duty sub-group" value={nl.subGroup} onChange={(e) => setNl({ ...nl, subGroup: e.target.value })}>
-              {['Output Tax Liability', 'TDS Payable', 'Other Statutory Dues'].map((x) => <option key={x}>{x}</option>)}</Select>
+            <div className="w-64 text-sm"><span className="mb-1 block font-medium text-slate-600">Sub-group</span>
+              <PickList ariaLabel="Duty sub-group" value={nl.subGroup} onChange={(v) => setNl({ ...nl, subGroup: v })} options={subs.map((x) => ({ value: x, label: x }))}
+                footer={{ label: 'New sub-group…', onClick: newSub }} /></div>
             <Button disabled={busy || !nl.name.trim()} onClick={() => run(async () => {
               const r = await api(`/orgs/${org.id}/accounts`, { body: { fsli: 'cl', group: 'Duties & Taxes', subGroup: nl.subGroup, name: nl.name.trim() } });
               setOk(`Ledger ${r.code} · ${nl.name.trim()} created under Current Liabilities › Duties & Taxes › ${nl.subGroup}.`); setNl({ ...nl, name: '' }); load();
@@ -577,6 +592,8 @@ function DutiesAndTaxes({ org, canManage, go }: { org: Org; canManage: boolean; 
           </div>)}
         <p className="mt-2 text-xs text-slate-500">GST, cess and TDS ledgers are created and posted to automatically. Add your own here for other duties, such as customs duty paid on imports.</p>
       </Card>
+      <TdsSectionsCard org={org} editable={editable} />
+      <GstRatesCard org={org} editable={editable} />
     </>
   );
 }

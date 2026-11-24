@@ -18,11 +18,13 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
   const [show, setShow] = useState(startNew);
   useEffect(() => { if (startNew) setShow(true); }, [startNew]);
   const [editing, setEditing] = useState<number | null>(null);
-  const [f, setF] = useState({ contactId: '', issueDate: today(), expiryDate: '', notes: '' });
+  const [f, setF] = useState({ contactId: '', issueDate: today(), expiryDate: '', notes: '', tdsSection: '', tdsForced: false });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   // Converting: the quote or order is shown as the invoice or bill that will be posted, so it can be changed first.
   const [conv, setConv] = useState<{ id: number; number: string; contactId: string; issueDate: string; dueDate: string; docNumber: string; supplierRef: string; notes: string; lines: Line[] } | null>(null);
   const [ok, setOk] = useState('');
+  const [tdsList, setTdsList] = useState<{ code: string; description: string }[]>([]);
+  useEffect(() => { api(`/orgs/${org.id}/tds-sections`).then(setTdsList).catch(() => setTdsList([])); }, [org.id]);
   const { error, busy, run } = useAction();
   const load = useCallback(() => api<Pre[]>(`/orgs/${org.id}/pre-documents?kind=${kind}`).then(setList), [org.id, kind]);
   useEffect(() => {
@@ -31,10 +33,11 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
   }, [load, org.id, sales]);
   const intraFor = (contactId: string) => { const st = contacts.find((c) => String(c.id) === contactId)?.stateCode; return orgState && st ? orgState === st : true; };
 
-  const reset = () => { setF({ contactId: '', issueDate: today(), expiryDate: '', notes: '' }); setLines([emptyLine()]); setEditing(null); setShow(false); };
+  const reset = () => { setF({ contactId: '', issueDate: today(), expiryDate: '', notes: '', tdsSection: '', tdsForced: false }); setLines([emptyLine()]); setEditing(null); setShow(false); };
   const create = () => run(async () => {
     if (!f.contactId) throw new Error(`Choose a ${sales ? 'customer' : 'supplier'} from the list`);
-    const b = { contactId: Number(f.contactId), issueDate: f.issueDate, ...(f.expiryDate ? { expiryDate: f.expiryDate } : {}), ...(f.notes ? { notes: f.notes } : {}), lines: linesToApi(lines) };
+    const b = { contactId: Number(f.contactId), issueDate: f.issueDate, ...(f.expiryDate ? { expiryDate: f.expiryDate } : {}), ...(f.notes ? { notes: f.notes } : {}), lines: linesToApi(lines),
+      ...(f.tdsSection ? { tdsSection: f.tdsSection, tdsForced: f.tdsForced } : {}) };
     if (editing) { const r = await api(`/orgs/${org.id}/pre-documents/${editing}`, { method: 'PUT', body: b }); setOk(`Updated: total ₹${fmt(r.total)}`); }
     else { const r = await api(`/orgs/${org.id}/pre-documents`, { body: { kind, ...b } }); setOk(`Created ${r.number}: total ₹${fmt(r.total)}`); }
     reset(); load();
@@ -42,14 +45,14 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
   /** A copy as a new quote / order: same party and lines, today's date and the next number. */
   const duplicate = (p: Pre) => run(async () => {
     const d = await api(`/orgs/${org.id}/pre-documents/${p.id}`);
-    setF({ contactId: String(d.contactId), issueDate: today(), expiryDate: '', notes: d.notes ?? '' });
+    setF({ contactId: String(d.contactId), issueDate: today(), expiryDate: '', notes: d.notes ?? '', tdsSection: d.tdsSection ?? '', tdsForced: !!d.tdsForced });
     setLines(linesFromApi(d.lines)); setEditing(null); setConv(null); setShow(true); setOk(`Copied from ${p.number}. Check it, then create it: it gets the next number.`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
   const startEdit = (p: Pre) => run(async () => {
     setOk('');
     const d = await api(`/orgs/${org.id}/pre-documents/${p.id}`);
-    setF({ contactId: String(d.contactId), issueDate: d.issueDate, expiryDate: d.expiryDate ?? '', notes: d.notes ?? '' });
+    setF({ contactId: String(d.contactId), issueDate: d.issueDate, expiryDate: d.expiryDate ?? '', notes: d.notes ?? '', tdsSection: d.tdsSection ?? '', tdsForced: !!d.tdsForced });
     setLines(linesFromApi(d.lines.map((l: any) => ({ ...l, rate: l.rate })))); setEditing(p.id); setConv(null); setShow(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   });
   const status = (id: number, s: string) => run(async () => { await api(`/orgs/${org.id}/pre-documents/${id}/status`, { body: { status: s } }); load(); });
@@ -77,6 +80,10 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
             <ContactPicker label={sales ? 'Customer' : 'Supplier'} org={org} kind={sales ? 'customer' : 'supplier'} onSaved={() => { api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind === 'both' || x.kind === (sales ? 'customer' : 'supplier')))); }} contacts={contacts} value={f.contactId} onChange={(id) => setF({ ...f, contactId: id })} />
             <Field label="Date" type="date" value={f.issueDate} onChange={(e) => setF({ ...f, issueDate: e.target.value })} />
             <Field label={sales ? 'Valid until' : 'Delivery by'} type="date" value={f.expiryDate} onChange={(e) => setF({ ...f, expiryDate: e.target.value })} />
+            <div><Select label={sales ? 'Add TDS receivable (the customer deducts)' : 'Add TDS payable (you deduct)'} aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value, tdsForced: e.target.value ? f.tdsForced : false })}>
+              <option value="">No TDS</option>{tdsList.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>
+              {f.tdsSection && <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-600"><input type="checkbox" aria-label="Apply TDS irrespective of threshold" checked={f.tdsForced} onChange={(e) => setF({ ...f, tdsForced: e.target.checked })} />Apply TDS irrespective of threshold</label>}
+              {f.tdsSection && <p className="mt-1 text-xs text-slate-500">Carried to the {sales ? 'invoice' : 'bill'} when this is converted.</p>}</div>
           </div>
           <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} intra={intraFor(f.contactId)} />
           <div className="mt-4 flex gap-3"><Button disabled={busy} onClick={create}>{editing ? 'Save changes' : 'Create'}</Button>{editing && <Button variant="ghost" onClick={reset}>Cancel</Button>}</div>
@@ -168,7 +175,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
   useEffect(() => {
     load();
     api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind !== (bill ? 'customer' : 'supplier'))));
-    if (bill) api('/config/tds-sections').then(setTds);
+    api(`/orgs/${org.id}/tds-sections`).catch(() => api('/config/tds-sections')).then(setTds);
     // Arrived from "Make it repeating" on an invoice or bill: start from its details.
     try {
       const raw = sessionStorage.getItem('repeat-from');
@@ -194,7 +201,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
   const save = () => form.run(async () => {
     if (!f.contactId) throw new Error(`Choose the ${bill ? 'supplier' : 'customer'}.`);
     const body = { docType: kind, contactId: Number(f.contactId), frequency: f.frequency, nextDate: f.nextDate, ...(f.endDate ? { endDate: f.endDate } : {}), dueDays: Number(f.dueDays),
-      autoEmail: !bill && f.postMode === 'auto' && f.autoEmail, ...(bill && f.tdsSection ? { tdsSection: f.tdsSection } : {}), ...(f.notes ? { notes: f.notes } : {}),
+      autoEmail: !bill && f.postMode === 'auto' && f.autoEmail, ...(f.tdsSection ? { tdsSection: f.tdsSection } : {}), ...(f.notes ? { notes: f.notes } : {}),
       postMode: f.postMode, supplyType: f.supplyType, lines: linesToApi(lines) };
     if (editing) await api(`/orgs/${org.id}/recurring/${editing}`, { method: 'PUT', body });
     else await api(`/orgs/${org.id}/recurring`, { body });
@@ -223,6 +230,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
     { key: 'end', label: 'Ends', value: (r) => r.endDate },
     { key: 'mode', label: 'Posting', value: (r) => (r.postMode === 'review' ? 'Waits for review' : 'Automatic') },
     { key: 'extra', label: bill ? 'TDS' : 'Email', value: (r) => (bill ? r.tdsSection ?? 'No' : r.autoEmail ? 'Yes' : 'No') },
+    ...(!bill ? [{ key: 'tds', label: 'TDS receivable', value: (r: Rec) => r.tdsSection ?? 'No', hidden: true }] : []),
     { key: 'notes', label: 'Narration', value: (r) => r.notes, hidden: true },
     { key: 'made', label: 'Made', value: (r) => r.made ?? 0, noSearch: true },
     { key: 'total', label: 'Posted total', value: (r) => r.postedTotal ?? 0, money: true, noSearch: true },
@@ -249,7 +257,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
             <Field label="Stop after (optional)" type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
             <Field label="Payment due (days)" value={f.dueDays} onChange={(e) => setF({ ...f, dueDays: e.target.value })} />
             <Select label="Supply type" aria-label="Supply type" value={f.supplyType} onChange={(e) => setF({ ...f, supplyType: e.target.value })}>{SUPPLY_OPTS[kind].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
-            {bill && <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>}
+            {<Select label={bill ? 'TDS section' : 'TDS receivable (the customer deducts)'} aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}><option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>}
             <fieldset className="text-sm md:col-span-2"><legend className="mb-1 font-medium text-slate-600">Posting</legend>
               <label className="mr-4 inline-flex items-center gap-2"><input type="radio" name="post-mode" checked={f.postMode === 'review'} onChange={() => setF({ ...f, postMode: 'review', autoEmail: false })} />Wait for me to review and post</label>
               <label className="inline-flex items-center gap-2"><input type="radio" name="post-mode" checked={f.postMode === 'auto'} onChange={() => setF({ ...f, postMode: 'auto' })} />Post automatically</label></fieldset>

@@ -27,7 +27,7 @@ const TYPE_NAME: Record<string, string> = { invoice: 'Invoice', credit_note: 'Cr
 /** Currencies offered even before any are saved in Settings, Currencies. */
 const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY', 'CHF', 'CNY', 'HKD', 'SAR', 'QAR', 'KWD', 'OMR', 'BHD', 'NZD', 'ZAR', 'MYR', 'THB', 'NPR', 'LKR', 'BDT'];
 
-const blankForm = { contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '', number: '', notes: '' };
+const blankForm = { contactId: '', issueDate: today(), dueDate: '', supplierRef: '', tdsSection: '', tdsForced: false, tdsManual: '', originalDocId: '', supplyType: 'regular', currency: 'INR', fxRate: '', number: '', notes: '' };
 const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10);
 
 export function Documents({ org, kind, canPost, accounts, startNew = false, startType, openId, fromDueId, restricted = false, role = 'owner', go }:
@@ -94,7 +94,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const loadTemplates = useCallback(() => api<Template[]>(`/orgs/${org.id}/doc-templates`).then((t) => setTemplates(t.filter((x) => x.docType === (sales ? 'invoice' : 'bill')))), [org.id, sales]);
   useEffect(() => {
     load(); loadTemplates(); loadContacts();
-    api('/config/tds-sections').then(setTds); api('/config/states').then(setStates);
+    api(`/orgs/${org.id}/tds-sections`).catch(() => api('/config/tds-sections')).then(setTds); api('/config/states').then(setStates);
     api<{ code: string; rate: number }[]>(`/orgs/${org.id}/currencies`).then((l) => setRates(Object.fromEntries(l.map((x) => [x.code, x.rate])))).catch(() => undefined);
     api<OrgSettings>(`/orgs/${org.id}/settings`).then(setSettings).catch(() => undefined);
   }, [load, loadTemplates, loadContacts, org.id, kind]);
@@ -157,13 +157,15 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const subtotal = useMemo(() => taxSummary(lines, intra, noTax).subtotal, [lines, intra, noTax]);
   useEffect(() => {
     setTdsPreview(null);
-    if (docType !== 'bill' || !f.tdsSection || !f.contactId || !subtotal || foreign) return;
+    if ((docType !== 'bill' && docType !== 'invoice') || !f.tdsSection || !f.contactId || !subtotal || foreign) return;
+    // An amount typed by hand replaces the one worked out.
+    if (f.tdsManual.trim()) { try { setTdsPreview({ section: f.tdsSection, amount: toPaise(f.tdsManual) }); } catch { /* shown on saving */ } return; }
     const t = setTimeout(() => {
-      api(`/orgs/${org.id}/tds-preview?section=${encodeURIComponent(f.tdsSection)}&contactId=${f.contactId}&amount=${subtotal}&date=${f.issueDate}${editing ? `&except=${editing.id}` : ''}`)
+      api(`/orgs/${org.id}/tds-preview?section=${encodeURIComponent(f.tdsSection)}&contactId=${f.contactId}&amount=${subtotal}&date=${f.issueDate}&type=${docType}${f.tdsForced ? '&force=1' : ''}${editing ? `&except=${editing.id}` : ''}`)
         .then((r) => setTdsPreview({ section: r.section, amount: Math.min(r.tds, taxSummary(lines, intra, noTax).total) })).catch(() => setTdsPreview(null));
     }, 300);
     return () => clearTimeout(t);
-  }, [org.id, docType, f.tdsSection, f.contactId, f.issueDate, subtotal, foreign, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [org.id, docType, f.tdsSection, f.tdsForced, f.tdsManual, f.contactId, f.issueDate, subtotal, foreign, editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Particulars the law asks for on a tax invoice (Rule 46) that are still missing: shown while filling the form.
   useEffect(() => {
@@ -183,7 +185,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     ...(placeOfSupply() ? { placeOfSupply: placeOfSupply() } : {}),
     ...(foreign ? { currency: f.currency, fxRate: Number(f.fxRate) } : {}),
     ...(f.dueDate ? { dueDate: f.dueDate } : {}), ...(f.supplierRef ? { supplierRef: f.supplierRef } : {}), ...(numberToSend ? { number: numberToSend } : editing ? { number: f.number } : {}), ...(f.notes ? { notes: f.notes } : {}),
-    ...(f.tdsSection && docType === 'bill' ? { tdsSection: f.tdsSection } : {}), ...(f.originalDocId && isNote ? { originalDocId: Number(f.originalDocId) } : {}),
+    ...(f.tdsSection && (docType === 'bill' || docType === 'invoice') ? { tdsSection: f.tdsSection, ...(f.tdsForced ? { tdsForced: true } : {}), ...(f.tdsManual.trim() ? { tdsAmount: toPaise(f.tdsManual) } : {}) } : {}), ...(f.originalDocId && isNote ? { originalDocId: Number(f.originalDocId) } : {}),
   });
   const resetForm = () => {
     setF(blankForm); setLines([emptyLine()]); setIntraOverride(null); setPosChoice(''); setFiles([]); setExistingFiles([]); setEditing(null); setShowForm(false);
@@ -245,7 +247,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     const fullDoc = await api(`/orgs/${org.id}/documents/${d.id}`);
     const atts = await api<Attachment[]>(`/orgs/${org.id}/files?linkType=document&linkId=${d.id}`);
     setDocType(fullDoc.docType);
-    setF({ contactId: String(fullDoc.contactId), issueDate: fullDoc.issueDate, dueDate: fullDoc.dueDate ?? '', supplierRef: fullDoc.supplierRef ?? '', tdsSection: fullDoc.tdsSection ?? '', originalDocId: fullDoc.originalDocId ? String(fullDoc.originalDocId) : '',
+    setF({ contactId: String(fullDoc.contactId), issueDate: fullDoc.issueDate, dueDate: fullDoc.dueDate ?? '', supplierRef: fullDoc.supplierRef ?? '', tdsSection: fullDoc.tdsSection ?? '', tdsForced: !!fullDoc.tdsForced, tdsManual: '', originalDocId: fullDoc.originalDocId ? String(fullDoc.originalDocId) : '',
       supplyType: fullDoc.supplyType, currency: fullDoc.currency, fxRate: fullDoc.currency !== 'INR' ? String(fullDoc.fxRate) : '', number: fullDoc.number, notes: fullDoc.notes ?? '' });
     setNumberTouched(true); setDueTouched(true); setNumberClash('');
     setLines(linesFromApi(fullDoc.lines)); setFiles([]); setExistingFiles(atts);
@@ -424,7 +426,7 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
     { key: 'total', label: 'Total', value: (d) => d.total, money: true, render: (d) => (
       <span>{go && d.bookedCode ? <button type="button" className="font-medium text-brand-700 hover:underline" title={`Open the ledger ${d.bookedCode} this was booked to`} aria-label={`Ledger of ${d.number}`} onClick={() => go(`reports/ledger-${d.bookedCode}`)}>{fmt(d.total)}</button> : fmt(d.total)}
         {d.currency !== 'INR' && d.foreignTotal != null && <span className="block text-xs text-slate-500">{d.currency} {fmt(d.foreignTotal)}</span>}</span>) },
-    ...(!sales ? [{ key: 'tds', label: 'TDS', value: (d: Doc) => d.tdsAmount || null, money: true, noSearch: true } as Column<Doc>] : []),
+    { key: 'tds', label: sales ? 'TDS receivable' : 'TDS', value: (d: Doc) => d.tdsAmount || null, money: true, noSearch: true, hidden: sales },
     { key: 'outstanding', label: 'Outstanding', value: (d) => ((d.docType === 'invoice' || d.docType === 'bill') && d.status === 'posted' ? d.outstanding ?? null : null), money: true, noSearch: true },
     { key: 'status', label: 'Status', value: (d) => statusOf(d), render: (d) => <><Badge text={statusOf(d)} />{d.isArchived && <span className="ml-1 text-xs">archived</span>}</> },
     { key: 'supply', label: 'Supply type', value: (d) => SUPPLY_NAME[d.supplyType] ?? d.supplyType, hidden: true },
@@ -465,8 +467,13 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
               onChange={(e) => { setNumberTouched(true); setNumberClash(''); setF({ ...f, number: e.target.value }); }} onBlur={checkNumber} />
               {numberClash ? <p role="alert" className="mt-1 text-xs font-medium text-red-700">{numberClash}</p> : !editing && <p className="mt-1 text-xs text-slate-500">{numberTouched ? 'Your number' : 'Next in your series; type over it to change'}</p>}</div>
             {docType === 'bill' && <Field label="Supplier bill no." value={f.supplierRef} onChange={(e) => setF({ ...f, supplierRef: e.target.value })} />}
-            {docType === 'bill' && <Select label="TDS section" aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value })}>
-              <option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>}
+            {(docType === 'bill' || docType === 'invoice') && <div>
+              <Select label={docType === 'bill' ? 'TDS section (TDS payable)' : 'TDS deducted by the customer (TDS receivable)'} aria-label="TDS section" value={f.tdsSection} onChange={(e) => setF({ ...f, tdsSection: e.target.value, ...(e.target.value ? {} : { tdsForced: false, tdsManual: '' }) })}>
+                <option value="">No TDS</option>{tds.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.description}</option>)}</Select>
+              {f.tdsSection && <div className="mt-1 space-y-1 text-xs">
+                <label className="flex items-center gap-1.5 text-slate-600"><input type="checkbox" aria-label="Apply TDS irrespective of threshold" checked={f.tdsForced} onChange={(e) => setF({ ...f, tdsForced: e.target.checked })} />Apply TDS irrespective of threshold</label>
+                <label className="flex items-center gap-1.5 text-slate-600">TDS amount ₹<input aria-label="TDS amount" inputMode="decimal" placeholder={tdsPreview ? fmt(tdsPreview.amount) : 'worked out'} value={f.tdsManual} onChange={(e) => setF({ ...f, tdsManual: e.target.value })}
+                  className="w-28 rounded border border-slate-300 px-2 py-0.5 text-right" /><span className="text-slate-400">(leave empty to work it out)</span></label></div>}</div>}
             <Select label="Supply type" aria-label="Supply type" value={f.supplyType} onChange={(e) => { setF({ ...f, supplyType: e.target.value }); setIntraOverride(null); }}>{SUPPLY[kind].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select>
             <Select label="Currency" aria-label="Currency" value={f.currency} disabled={isNote && !!original}
               onChange={(e) => { const c = e.target.value; setF({ ...f, currency: c, fxRate: c !== 'INR' && fxDefaults[c] ? String(fxDefaults[c]) : c === 'INR' ? '' : f.fxRate }); }}>
@@ -531,7 +538,8 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
 
           <LinesEditor org={org} lines={lines} setLines={setLines} sales={sales} accounts={accounts} currency={f.currency} fxRate={foreign ? Number(f.fxRate) || undefined : undefined} intra={intra} noTax={noTax}
             dutyOk={sales && !!settings.customsDuty && (f.supplyType.startsWith('export') || f.supplyType.startsWith('sez'))}
-            contactDefaultId={sales ? contact?.defaultSalesAccountId : contact?.defaultPurchaseAccountId} tds={docType === 'bill' ? tdsPreview : null} />
+            contactDefaultId={sales ? contact?.defaultSalesAccountId : contact?.defaultPurchaseAccountId} tds={docType === 'bill' || docType === 'invoice' ? tdsPreview : null}
+            gstNA={!sales && f.supplyType === 'unregistered'} />
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <label className="block text-sm"><span className="mb-1 block font-medium text-slate-600">Notes (printed on the document)</span>

@@ -60,7 +60,7 @@ const EXTRA_COLS: [string, (b: z.infer<typeof contactSchema>) => unknown][] = [
   ['msme_type', (b) => b.msmeType ?? null], ['udyam_no', (b) => b.udyamNo ?? null], ['msme_agreed_days', (b) => b.msmeAgreedDays ?? null],
 ];
 async function saveExtras(c: PoolClient, id: number, b: z.infer<typeof contactSchema>) {
-  if (b.defaultTdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1', [b.defaultTdsSection])).rowCount) throw new BadRequestException(`Unknown TDS section ${b.defaultTdsSection}`);
+  if (b.defaultTdsSection && !(await c.query('SELECT 1 FROM tds_sections WHERE code=$1 UNION ALL SELECT 1 FROM org_tds_sections WHERE code=$1', [b.defaultTdsSection])).rowCount) throw new BadRequestException(`Unknown TDS section ${b.defaultTdsSection}`);
   if (b.shipStateCode && !(await c.query('SELECT 1 FROM gst_states WHERE code=$1', [b.shipStateCode])).rowCount) throw new BadRequestException('Unknown delivery state code');
   await c.query(`UPDATE contacts SET ${EXTRA_COLS.map(([col], i) => `${col}=$${i + 2}`).join(', ')} WHERE id=$1`, [id, ...EXTRA_COLS.map(([, f]) => f(b))]);
 }
@@ -117,7 +117,7 @@ export const OUTSTANDING_SQL = `
 const shapeDoc = (r: any) => ({
   id: Number(r.id), docType: r.doc_type, number: r.number, contactId: Number(r.contact_id), contactName: r.contact_name,
   issueDate: r.issue_date, dueDate: r.due_date, placeOfSupply: r.place_of_supply, subtotal: Number(r.subtotal),
-  cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), cess: Number(r.cess ?? 0), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount),
+  cgst: Number(r.cgst), sgst: Number(r.sgst), igst: Number(r.igst), cess: Number(r.cess ?? 0), tdsSection: r.tds_section, tdsAmount: Number(r.tds_amount), tdsForced: !!r.tds_forced,
   total: Number(r.total), netPayable: Number(r.net_payable), status: r.status, supplierRef: r.supplier_ref,
   originalDocId: r.original_doc_id ? Number(r.original_doc_id) : null, supplyType: r.supply_type,
   notes: r.notes ?? null, replacedBy: r.replaced_by ? Number(r.replaced_by) : null,

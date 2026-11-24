@@ -224,7 +224,7 @@ await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await
 await page.getByTestId('tb-debit').waitFor();
 assert.equal(await page.getByTestId('tb-debit').innerText(), await page.getByTestId('tb-credit').innerText());
 await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'GSTR-3B', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
-await page.getByText('3.1(a) Outward taxable').waitFor();
+await page.getByText('(a) Outward taxable supplies (other than zero rated, nil rated and exempted)').waitFor();
 await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Balance sheet', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('✓ Assets = Liabilities + Equity').waitFor();
 step('exports to PDF/Excel; cash flow closes at 1,164.50; trial balance, GSTR-3B and balance sheet agree');

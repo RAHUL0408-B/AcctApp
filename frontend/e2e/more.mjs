@@ -179,7 +179,7 @@ await page.getByTestId('grid-net').waitFor();
 await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Budget vs actual', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('bva').getByText('4000 Service Revenue').waitFor();
 await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'GSTR-3B', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
-await page.getByText('3.1(b) Zero-rated (exports, SEZ)').waitFor();
+await page.getByText('(b) Outward taxable supplies (zero rated)').waitFor();
 await page.getByRole('cell', { name: '83,250.00' }).first().waitFor();
 step('P&L by month, budget vs actual and GSTR-3B with the zero-rated export');
 

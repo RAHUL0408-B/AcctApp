@@ -295,23 +295,7 @@ function ReportView({ rep, d, org, reload, level = 'ledger', openLedger, openSou
       <tbody>{d.lines.map((l: any) => <tr key={l.code}><td>{l.code} {l.name}</td><td className="text-right">{fmt(l.budget)}</td><td className="text-right">{fmt(l.actual)}</td>
         <td className={`text-right ${l.favourable ? 'text-green-700' : 'text-red-700'}`}>{fmt(l.variance)}</td></tr>)}
         <tr className="border-t-2 font-semibold"><td>Profit</td><td className="text-right">{fmt(d.totals.profitBudget)}</td><td className="text-right">{fmt(d.totals.profitActual)}</td><td className="text-right">{fmt(d.totals.profitActual - d.totals.profitBudget)}</td></tr></tbody></table>);
-  if (rep === 'gstr3b') {
-    const o = d.section31a_outwardTaxable, itc = d.section4_itcAvailable, n = d.netTaxPayable;
-    const rv = d.section4b2_itcReversed, rc = d.section4a5_itcReclaimed, inel = d.section4d_ineligibleItc;
-    const heads = (x: any) => <><td className="text-right">{fmt(x?.igst ?? 0)}</td><td className="text-right">{fmt(x?.cgst ?? 0)}</td><td className="text-right">{fmt(x?.sgst ?? 0)}</td></>;
-    return (
-      <div className="text-sm"><table className="w-full" data-testid="gstr3b"><thead><tr className="text-left text-slate-500"><th /><th className="text-right">Taxable</th><th className="text-right">IGST</th><th className="text-right">CGST</th><th className="text-right">SGST</th><th className="text-right">Cess</th></tr></thead>
-        <tbody><tr className="border-t"><td>3.1(a) Outward taxable</td><td className="text-right">{fmt(o.taxable)}</td><td className="text-right">{fmt(o.igst)}</td><td className="text-right">{fmt(o.cgst)}</td><td className="text-right">{fmt(o.sgst)}</td></tr>
-          <tr className="border-t"><td>3.1(b) Zero-rated (exports, SEZ)</td><td className="text-right">{fmt(d.section31b_zeroRated.taxable)}</td><td className="text-right">{fmt(d.section31b_zeroRated.igst)}</td><td /><td /></tr>
-          <tr className="border-t"><td>3.1(c) Nil / exempt</td><td className="text-right">{fmt(d.section31c_nilRatedExempt.taxable)}</td><td /><td /><td /></tr>
-          <tr className="border-t"><td>3.1(d) Inward reverse charge</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.taxable)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.igst)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.cgst)}</td><td className="text-right">{fmt(d.section31d_inwardReverseCharge.sgst)}</td></tr>
-          {rc && (rc.igst + rc.cgst + rc.sgst) > 0 && <tr className="border-t"><td>4(A)(5) Credit claimed again (Rule 37, paid)</td><td />{heads(rc)}<td /></tr>}
-          {rv && (rv.igst + rv.cgst + rv.sgst) > 0 && <tr className="border-t text-red-700"><td>4(B)(2) Credit reversed (Rule 37, unpaid 180 days)</td><td />{heads(rv)}<td /></tr>}
-          <tr className="border-t"><td>4(C) Net ITC available</td><td />{heads(itc)}<td className="text-right">{fmt(itc.cess ?? 0)}</td></tr>
-          {inel && (inel.igst + inel.cgst + inel.sgst + (inel.cess ?? 0)) > 0 && <tr className="border-t text-slate-500"><td>4(D)(1) Ineligible ITC, section 17(5) (not claimed)</td><td />{heads(inel)}<td className="text-right">{fmt(inel.cess ?? 0)}</td></tr>}
-          <tr className="border-t-2 font-semibold"><td>Net payable (negative = carry forward)</td><td />{heads(n)}<td className="text-right">{fmt(n.cess ?? 0)}</td></tr></tbody></table>
-        <p className="mt-2 text-xs text-amber-700">{d.note}</p></div>);
-  }
+  if (rep === 'gstr3b') return <Gstr3bView d={d} />;
   return null;
 }
 
@@ -533,6 +517,57 @@ function LedgerView({ d, onLink }: { d: any; onLink?: (l: any) => void }) {
               <tbody>{rows.map((i) => <tr key={i} className={(d.boldRows ?? []).includes(i) ? 'total-row' : ''}>{show.map((ci) => cell(i, ci))}</tr>)}</tbody></table></div>}
           </section>);
       })}</div>
+    </div>
+  );
+}
+
+/**
+ * GSTR-3B laid out like the form on the GST portal: table 3.1 (outward and reverse-charge supplies), table 4 (eligible
+ * ITC: available, reversed, net, ineligible) and 6.1 (tax payable), each head in its own column.
+ */
+function Gstr3bView({ d }: { d: any }) {
+  const z = { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+  const h = (x: any) => ({ ...z, ...(x ?? {}) });
+  const o = h(d.section31a_outwardTaxable), zr = h(d.section31b_zeroRated), nil = h(d.section31c_nilRatedExempt), rcm = h(d.section31d_inwardReverseCharge);
+  const net = h(d.section4_itcAvailable), rv = h(d.section4b2_itcReversed), rc = h(d.section4a5_itcReclaimed), inel = h(d.section4d_ineligibleItc), pay = h(d.netTaxPayable);
+  const heads = ['igst', 'cgst', 'sgst', 'cess'] as const;
+  // 4(A)(5) all other ITC = net + reversed - reverse charge - reclaimed, so that A - B = C as on the portal.
+  const other = Object.fromEntries(heads.map((k) => [k, net[k] + rv[k] - rcm[k] - rc[k]])) as Record<string, number>;
+  const availTotal = Object.fromEntries(heads.map((k) => [k, other[k] + rcm[k] + rc[k]])) as Record<string, number>;
+  const money = (v: number | null) => <td className="whitespace-nowrap text-right tabular-nums">{v == null ? '' : fmt(v)}</td>;
+  const row = (label: string, x: Record<string, number> | null, taxable: number | null = null, cls = '') => (
+    <tr className={cls}><td className="pl-6">{label}</td>{money(taxable)}{heads.map((k) => <Fragment key={k}>{money(x ? x[k] ?? 0 : null)}</Fragment>)}</tr>);
+  const section = (no: string, title: string) => <tr><td colSpan={6} className="bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-900"><span className="mr-2 rounded bg-brand-600 px-1.5 py-0.5 text-xs text-white">{no}</span>{title}</td></tr>;
+  return (
+    <div className="text-sm">
+      <table className="w-full" data-testid="gstr3b">
+        <thead><tr className="text-left"><th>Nature of supplies / details</th><th className="text-right">Total taxable value</th><th className="text-right">Integrated tax</th><th className="text-right">Central tax</th><th className="text-right">State / UT tax</th><th className="text-right">Cess</th></tr></thead>
+        <tbody>
+          {section('3.1', 'Details of outward supplies and inward supplies liable to reverse charge')}
+          {row('(a) Outward taxable supplies (other than zero rated, nil rated and exempted)', o, o.taxable)}
+          {row('(b) Outward taxable supplies (zero rated)', { ...zr, cgst: 0, sgst: 0 }, zr.taxable)}
+          {row('(c) Other outward supplies (nil rated, exempted)', null, nil.taxable)}
+          {row('(d) Inward supplies (liable to reverse charge)', rcm, rcm.taxable)}
+          {row('(e) Non-GST outward supplies', null, 0)}
+          {section('4', 'Eligible ITC')}
+          <tr><td className="pl-3 font-medium text-slate-700" colSpan={6}>(A) ITC available (whether in full or part)</td></tr>
+          {row('(3) Inward supplies liable to reverse charge (other than 1 & 2 above)', rcm)}
+          {rc.igst + rc.cgst + rc.sgst > 0 && row('(5) Credit claimed again after payment (Rule 37)', rc)}
+          {row('(5) All other ITC', other)}
+          {row('Total (A)', availTotal, null, 'total-row')}
+          <tr><td className="pl-3 font-medium text-slate-700" colSpan={6}>(B) ITC reversed</td></tr>
+          {row('(2) Others (Rule 37: not paid within 180 days)', rv)}
+          {row('(C) Net ITC available (A) − (B)', net, null, 'total-row')}
+          <tr><td className="pl-3 font-medium text-slate-700" colSpan={6}>(D) Ineligible ITC</td></tr>
+          {row('(1) As per section 17(5)', inel)}
+          {section('6.1', 'Payment of tax')}
+          {row('Tax payable (3.1 a + b + d)', Object.fromEntries(heads.map((k) => [k, o[k] + zr[k] + rcm[k]])) as Record<string, number>)}
+          {row('Paid through ITC (net ITC, 4C)', net)}
+          <tr className="total-row" data-testid="gstr3b-net"><td className="pl-6">Net payable in cash (negative = credit carried forward)</td><td />{heads.map((k) => <Fragment key={k}>{money(pay[k] ?? 0)}</Fragment>)}</tr>
+        </tbody>
+      </table>
+      <p className="mt-2 text-xs text-amber-700">{d.note}</p>
+      <p className="mt-1 text-xs text-slate-500">Working paper in the GSTR-3B layout. Check it with your CA before filing on the GST portal.</p>
     </div>
   );
 }

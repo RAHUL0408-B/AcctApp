@@ -56,7 +56,7 @@ export function Projects({ org, canPost, accounts }: { org: Org; canPost: boolea
         </Card>
       )}
       <Card>
-        <DataTable id="projects" rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle="Projects" empty="No projects yet." searchLabel="Search projects"
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="projects" rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle="Projects" empty="No projects yet." searchLabel="Search projects"
           columns={[
             { key: 'name', label: 'Project', value: (p) => p.name, render: (p) => <b>{p.name}</b> },
             { key: 'customer', label: 'Customer', value: (p) => p.contactName },

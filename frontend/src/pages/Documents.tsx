@@ -88,6 +88,15 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const downloadPdf = (ids: number[], name?: string) => run(() => ids.length === 1
     ? download(`/orgs/${org.id}/documents/${ids[0]}/pdf`, `${(name ?? 'document').replace(/\//g, '-')}.pdf`)
     : download(`/orgs/${org.id}/documents-pdf?ids=${ids.join(',')}`, 'documents.pdf'));
+  /** Each selected document as its own PDF file, named by its number. */
+  const downloadSeparate = (ids: number[]) => run(async () => {
+    for (const id of ids) {
+      const d = docs.find((x) => x.id === id);
+      await download(`/orgs/${org.id}/documents/${id}/pdf`, `${(d?.number ?? `document-${id}`).replace(/\//g, '-')}.pdf`);
+      await new Promise((r) => setTimeout(r, 350)); // browsers allow several downloads when they are spaced out
+    }
+    setOk(`${ids.length} PDF file${ids.length === 1 ? '' : 's'} downloaded.`);
+  });
 
   const load = useCallback(() => api<Doc[]>(`/orgs/${org.id}/documents?archived=${showArchived}`).then((d) => setDocs(d.filter((x) => types.some(([t]) => t === x.docType) && (showArchived || !x.isArchived)))), [org.id, kind, showArchived]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadContacts = useCallback(() => api<Contact[]>(`/orgs/${org.id}/contacts`).then((c) => setContacts(c.filter((x) => x.kind === 'both' || x.kind === (sales ? 'customer' : 'supplier')))), [org.id, sales]);
@@ -127,9 +136,11 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
   const defaultsFor = (c: Contact | undefined) => {
     if (!c) return {};
     if (sales) {
-      if (c.country && c.country !== 'IN') return { supplyType: lutValid ? 'export_lut' : 'export_igst' };
-      if (c.isSez) return { supplyType: lutValid ? 'sez_lut' : 'sez_igst' };
-      return { supplyType: 'regular' };
+      // The TDS the customer deducts (its default section) fills in; it can be changed on the invoice.
+      const tds = { tdsSection: c.defaultTdsSection ?? '', tdsForced: false, tdsManual: '' };
+      if (c.country && c.country !== 'IN') return { supplyType: lutValid ? 'export_lut' : 'export_igst', tdsSection: '' };
+      if (c.isSez) return { supplyType: lutValid ? 'sez_lut' : 'sez_igst', ...tds };
+      return { supplyType: 'regular', ...tds };
     }
     return { supplyType: c.rcmDefault ? 'reverse_charge' : !c.gstin && (c.country ?? 'IN') === 'IN' ? 'unregistered' : 'regular', tdsSection: c.defaultTdsSection ?? '' };
   };
@@ -573,11 +584,12 @@ export function Documents({ org, kind, canPost, accounts, startNew = false, star
             {batchDocs.length > 0 && <Button disabled={busy} onClick={openBatch}>{sales ? `Receive payment for ${batchDocs.length}` : `Pay ${batchDocs.length} bill(s) together`}</Button>}
             {sales && <Button variant="ghost" disabled={busy} onClick={() => remind([...selected])}><span className="inline-flex items-center gap-1.5"><Icon name="bell" />Send reminders</span></Button>}
             <Button variant="ghost" disabled={busy} onClick={() => downloadPdf([...selected])}>Download as one PDF</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => downloadSeparate([...selected])}>Download separate PDFs</Button>
             <Button variant="ghost" disabled={busy} onClick={() => bulk(showArchived ? 'restore' : 'archive')}>{showArchived ? 'Restore selected' : 'Archive selected'}</Button>
             <Button variant="danger" disabled={busy} onClick={() => bulk('delete')}>Delete selected</Button>
             <Button variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button></div>
         )}
-        <DataTable id={`docs-${kind}`} rows={shownDocs} columns={columns} rowKey={(d) => d.id} orgId={org.id} exportTitle={title} searchLabel={`Search ${title.toLowerCase()} by number, ${sales ? 'customer' : 'supplier'}, date or amount`}
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id={`docs-${kind}`} rows={shownDocs} columns={columns} rowKey={(d) => d.id} orgId={org.id} exportTitle={title} searchLabel={`Search ${title.toLowerCase()} by number, ${sales ? 'customer' : 'supplier'}, date or amount`}
           rowClass={(d) => (d.isArchived ? 'text-slate-400' : '')}
           toolbar={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}
           leadingHead={full ? <input type="checkbox" aria-label="Select all" checked={shownDocs.length > 0 && shownDocs.every((d) => selected.has(d.id))} onChange={() => setSelected(shownDocs.every((d) => selected.has(d.id)) ? new Set() : new Set(shownDocs.map((d) => d.id)))} /> : undefined}

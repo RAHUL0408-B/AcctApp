@@ -29,7 +29,7 @@ export function BatchPayments({ org, canPost, go, focusId }: { org: Org; canPost
         {focusId && <div className="mb-3"><Callout tone="info">Batch #{focusId} is highlighted below. To change one of its payments, undo the whole batch and record it again.</Callout></div>}
         {!list ? <p className="text-sm text-slate-500">Loading…</p> : (
           <div data-testid="batch-rows">
-          <DataTable id="batches" rows={list} rowKey={(b) => b.id} orgId={org.id} exportTitle="Batch payments" empty="No batch payments yet." searchLabel="Search batches (number, party, reference)"
+          <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="batches" rows={list} rowKey={(b) => b.id} orgId={org.id} exportTitle="Batch payments" empty="No batch payments yet." searchLabel="Search batches (number, party, reference)"
             rowClass={(b) => (b.id === focusId ? 'bg-amber-50 font-medium' : '')}
             columns={[
               { key: 'id', label: '#', value: (b) => b.id },

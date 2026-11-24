@@ -243,7 +243,7 @@ step('journal: voucher number from its own series, reference number, accounts ty
 // ---- 20, 21, 41, 23: reports
 await menu('Reporting', 'All reports');
 await heading('Reports');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Ledger' });
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Ledger', exact: true }).click();
 await page.getByText('then click Run').waitFor();                                        // nothing loads until Run
 await page.getByLabel('From account').fill('1000 · Cash in Hand');
 await page.getByLabel('To account').fill('1000 · Cash in Hand');

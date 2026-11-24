@@ -18,7 +18,7 @@ export interface Contact {
   shipLine1?: string | null; shipLine2?: string | null; shipCity?: string | null; shipStateCode?: string | null; shipPincode?: string | null;
   constitution?: string | null; isSez?: boolean; defaultTdsSection?: string | null; lowerTdsRateBp?: number | null; lowerTdsCert?: string | null; rcmDefault?: boolean;
 }
-interface Statement { contact: { name: string }; openingBalance: number; closingBalance: number; lines: { date: string; ref: string; type: string; amount: number; balance: number }[] }
+interface Statement { contact: { name: string }; openingBalance: number; closingBalance: number; lines: { date: string; ref: string; type: string; amount: number; balance: number; docId?: number }[] }
 interface TdsSection { code: string; description: string }
 
 /** Kinds of business (constitution). Individuals and HUFs deduct TDS at the lower rate. */
@@ -161,7 +161,7 @@ function ContactList(p: Props) {
       )}
 
       <Card>
-        <DataTable id={`contacts-${only ?? 'all'}`} rows={shown} columns={columns} rowKey={(c) => c.id} orgId={org.id} exportTitle={label}
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id={`contacts-${only ?? 'all'}`} rows={shown} columns={columns} rowKey={(c) => c.id} orgId={org.id} exportTitle={label}
           searchLabel={`Search ${label.toLowerCase()}`} empty={`No ${label.toLowerCase()} yet.`} initialSort={{ key: 'name', dir: 1 }}
           rowClass={(c) => (c.isArchived ? 'text-slate-400' : '')}
           toolbar={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}
@@ -222,10 +222,26 @@ function ContactPage(p: Props & { id: number }) {
             <Button variant="ghost" onClick={() => { const r = { from: '', to: today() }; setRange(r); load(r); }}>All dates</Button>
           </div>
           <ErrorMsg msg={error} />
-          <table className="w-full text-sm" data-testid="statement"><thead><tr className="text-left"><th>Date</th><th>Type</th><th>Reference</th><th className="text-right">Amount</th><th className="text-right">Balance</th></tr></thead>
-            <tbody>{stmt.openingBalance !== 0 && <tr><td /><td /><td>Opening balance</td><td /><td className="text-right">{fmt(stmt.openingBalance)}</td></tr>}
-              {stmt.lines.map((l, i) => <tr key={i}><td>{l.date}</td><td>{label(l.type)}</td><td>{l.ref}</td><td className="text-right">{fmt(l.amount)}</td><td className="text-right">{fmt(l.balance)}</td></tr>)}
-              <tr className="border-t-2 font-semibold"><td /><td /><td>Balance</td><td /><td className="text-right" data-testid="statement-closing">{fmt(stmt.closingBalance)}</td></tr></tbody></table>
+          <div className="mb-3 grid gap-3 sm:grid-cols-3 text-sm">
+            <div className="rounded-lg bg-brand-50/60 px-3 py-2"><p className="text-xs text-slate-500">Opening balance</p><p className="font-semibold tabular-nums">₹{fmt(stmt.openingBalance)}</p></div>
+            <div className="rounded-lg bg-brand-50/60 px-3 py-2"><p className="text-xs text-slate-500">Movement in the period</p><p className="font-semibold tabular-nums">₹{fmt(stmt.closingBalance - stmt.openingBalance)}</p></div>
+            <div className="rounded-lg bg-brand-50 px-3 py-2"><p className="text-xs text-slate-500">Closing balance</p><p className="font-semibold tabular-nums text-brand-900" data-testid="statement-closing">₹{fmt(stmt.closingBalance)}</p></div>
+          </div>
+          <div data-testid="statement">
+            <DataTable id={`statement-${c.kind}`} rows={stmt.lines.map((l, i) => ({ ...l, i }))} rowKey={(l) => l.i} orgId={org.id} exportTitle={`Statement: ${c.name}`}
+              exportSubtitle={`${range.from || 'From the start'} to ${range.to || today()} · opening ₹${fmt(stmt.openingBalance)} · closing ₹${fmt(stmt.closingBalance)}`}
+              searchLabel="Search reference or type" dateKey="date" facets={['type']} totals empty="Nothing in these dates." initialSort={{ key: 'date', dir: 1 }}
+              columns={[
+                { key: 'date', label: 'Date', value: (l) => l.date },
+                { key: 'type', label: 'Type', value: (l) => label(l.type) },
+                { key: 'ref', label: 'Reference', value: (l) => l.ref, render: (l) => (p.go && l.docId ? <button type="button" className="link" onClick={() => p.go!(`${['invoice', 'credit_note'].includes(l.type) || (l.type === 'payment' && c.kind !== 'supplier') ? 'invoices' : 'bills'}/open-${l.docId}`)}>{l.ref}</button> : l.ref) },
+                { key: 'debit', label: c.kind === 'supplier' ? 'Billed' : 'Debit', value: (l) => (l.amount > 0 ? l.amount : null), money: true, noSearch: true,
+                  render: (l) => (l.amount > 0 ? (p.go && l.docId ? <button type="button" className="link tabular-nums" onClick={() => p.go!(`${c.kind === 'supplier' ? 'bills' : 'invoices'}/open-${l.docId}`)}>{fmt(l.amount)}</button> : fmt(l.amount)) : '') },
+                { key: 'credit', label: c.kind === 'supplier' ? 'Paid / noted' : 'Credit', value: (l) => (l.amount < 0 ? -l.amount : null), money: true, noSearch: true,
+                  render: (l) => (l.amount < 0 ? (p.go && l.docId ? <button type="button" className="link tabular-nums" onClick={() => p.go!(`${c.kind === 'supplier' ? 'bills' : 'invoices'}/open-${l.docId}`)}>{fmt(-l.amount)}</button> : fmt(-l.amount)) : '') },
+                { key: 'balance', label: 'Balance', value: (l) => l.balance, money: true, noSearch: true },
+              ]} />
+          </div>
         </Card>
       )}
     </>

@@ -653,21 +653,21 @@ export class ExtrasController {
       // Positive = they owe us (customer) / we owe them (supplier). Payments and credit/debit notes reduce it.
       const rows = (await c.query(
         `SELECT * FROM (
-           SELECT d.issue_date AS date, d.number AS ref, d.doc_type AS type,
-                  CASE d.doc_type WHEN 'invoice' THEN d.total WHEN 'bill' THEN d.net_payable ELSE -d.total END AS amount, d.id AS sort_id
+           SELECT d.issue_date::text AS date, d.number AS ref, d.doc_type AS type,
+                  CASE d.doc_type WHEN 'invoice' THEN d.net_payable WHEN 'bill' THEN d.net_payable ELSE -d.total END AS amount, d.id AS sort_id, d.id AS doc_id
              FROM documents d WHERE d.contact_id=$1 AND d.status='posted'
            UNION ALL
-           SELECT p.pay_date, 'Payment ' || d.number, 'payment', -p.amount, p.id + 1000000000
+           SELECT p.pay_date::text, 'Payment ' || d.number, 'payment', -p.amount, p.id + 1000000000, d.id
              FROM payments p JOIN documents d ON d.id=p.doc_id WHERE d.contact_id=$1 AND d.status='posted') x
          ORDER BY date, sort_id`, [id])).rows;
       let running = 0, opening = 0;
-      const lines: { date: string; ref: string; type: string; amount: number; balance: number }[] = [];
+      const lines: { date: string; ref: string; type: string; amount: number; balance: number; docId: number }[] = [];
       for (const r of rows) {
         const amt = Number(r.amount);
         if (from && r.date < from) { opening += amt; running += amt; continue; }
         if (to && r.date > to) continue;
         running += amt;
-        lines.push({ date: r.date, ref: r.ref, type: r.type, amount: amt, balance: running });
+        lines.push({ date: r.date, ref: r.ref, type: r.type, amount: amt, balance: running, docId: Number(r.doc_id) });
       }
       return { contact: num(ct, 'id'), openingBalance: opening, lines, closingBalance: running };
     });
@@ -680,7 +680,7 @@ export class ExtrasController {
     return withOrg(orgId, async (c) => {
       const t = today(), fy = financialYearOf(t);
       const banks = (await c.query(
-        `SELECT b.id,b.name,COALESCE((SELECT SUM(debit-credit) FROM journal_lines WHERE account_id=b.account_id),0) AS balance,
+        `SELECT b.id,b.name,(SELECT code FROM accounts WHERE id=b.account_id) AS code,COALESCE((SELECT SUM(debit-credit) FROM journal_lines WHERE account_id=b.account_id),0) AS balance,
                 (SELECT COUNT(*) FROM bank_transactions x WHERE x.bank_account_id=b.id AND x.status='unreconciled') AS unreconciled FROM bank_accounts b ORDER BY b.name`)).rows.map((r) => num(r, 'id', 'balance', 'unreconciled'));
       const cash = Number((await c.query("SELECT COALESCE(SUM(l.debit-l.credit),0) AS s FROM journal_lines l JOIN accounts a ON a.id=l.account_id WHERE a.code='1000'")).rows[0].s);
       const ar = await aged(c, 'receivables', t), ap = await aged(c, 'payables', t);
@@ -698,11 +698,22 @@ export class ExtrasController {
         `SELECT COALESCE(SUM(CASE WHEN a.type='income' THEN l.credit-l.debit END),0) AS inc, COALESCE(SUM(CASE WHEN a.type='expense' THEN l.debit-l.credit END),0) AS exp
            FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.id=l.account_id WHERE e.entry_date BETWEEN $1 AND $2 AND e.kind = 'normal'`, [fy.start, fy.end])).rows[0];
       const tasks = (await c.query("SELECT count(*) FILTER (WHERE status='open')::int AS open, count(*) FILTER (WHERE status='open' AND due_date < CURRENT_DATE)::int AS overdue FROM tasks")).rows[0];
+      // Work waiting to be posted, shown as tasks on the home page: repeating invoices and bills to review, journals sent
+      // for approval, and repeating journals whose date has come.
+      const due = [
+        ...(await c.query(`SELECT d.id, d.due_date::text AS date, r.doc_type AS kind, ct.name AS party FROM recurring_due d JOIN recurring_invoices r ON r.id=d.recurring_id
+            JOIN contacts ct ON ct.id=r.contact_id WHERE d.status='pending' ORDER BY d.due_date, d.id LIMIT 20`)).rows
+          .map((r) => ({ key: `due-${r.id}`, kind: r.kind === 'bill' ? 'Repeating bill' : 'Repeating invoice', text: `${r.party}, due ${r.date}`, date: r.date, page: `${r.kind === 'bill' ? 'bills' : 'invoices'}/new-from-due-${r.id}` })),
+        ...(await c.query("SELECT id, entry_date::text AS date, narration FROM journal_drafts WHERE status='pending' ORDER BY id LIMIT 20")).rows
+          .map((r) => ({ key: `jd-${r.id}`, kind: 'Journal to approve', text: r.narration, date: r.date, page: 'approvals' })),
+        ...(await c.query("SELECT id, name, next_date::text AS date FROM journal_rules WHERE active AND NOT COALESCE(is_archived,false) AND deleted_at IS NULL AND next_date <= CURRENT_DATE ORDER BY next_date LIMIT 20")).rows
+          .map((r) => ({ key: `jr-${r.id}`, kind: 'Repeating journal', text: `${r.name}, due ${r.date}`, date: r.date, page: 'journal/repeating' })),
+      ];
       return {
         banks, cashInHand: cash, totalCash: banks.reduce((s, b) => s + b.balance, 0) + cash,
-        receivables: { total: ar.totals.total, overdue: ar.totals.total - ar.totals.notDue, top: ar.contacts.sort((a: any, b: any) => b.total - a.total).slice(0, 5).map((x: any) => ({ contact: x.contact, total: x.total })) },
+        receivables: { total: ar.totals.total, overdue: ar.totals.total - ar.totals.notDue, top: ar.contacts.sort((a: any, b: any) => b.total - a.total).slice(0, 5).map((x: any) => ({ contact: x.contact, contactId: x.contactId, total: x.total })) },
         payables: { total: ap.totals.total, overdue: ap.totals.total - ap.totals.notDue },
-        months, ytd: { label: fy.label, income: Number(ytd.inc), expense: Number(ytd.exp), profit: Number(ytd.inc) - Number(ytd.exp) }, tasks,
+        months, ytd: { label: fy.label, income: Number(ytd.inc), expense: Number(ytd.exp), profit: Number(ytd.inc) - Number(ytd.exp) }, tasks, due, fyStart: fy.start,
       };
     });
   }

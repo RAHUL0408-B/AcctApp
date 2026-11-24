@@ -84,7 +84,7 @@ await page.getByLabel('Bank name').fill('SBI');
 await page.getByLabel('Account number').fill('30001234567');
 await page.getByLabel('IFSC code').fill('SBIN0001234');
 await page.getByLabel('Default purchase account').fill('5');
-await page.getByRole('listbox', { name: 'Default purchase account options' }).getByRole('option').first().click();
+await page.getByRole('listbox', { name: 'Suggestions' }).getByRole('option').first().click();
 await page.getByLabel('Not registered under GST').check();
 await btn('Add contact').click();
 await page.getByText('SBI ••4567').waitFor();
@@ -246,7 +246,7 @@ item(20, 'purchase order reviewed and changed before the bill was posted');
 
 // 17. Export every account's ledger at once
 await menu('Reporting', 'All reports');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Ledger' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Ledger', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 f = await download(() => page.locator('main').getByRole('button', { name: 'Export ▾' }).click().then(() => page.getByRole('menuitem', { name: 'Excel (.xlsx)' }).click()));
 assert.strictEqual(f.name, 'all-ledgers.xlsx');
 item(17, 'all accounts exported at once from Reports');

@@ -62,7 +62,7 @@ export function Items({ org, canPost, accounts }: { org: Org; canPost: boolean; 
         </Card>
       )}
       <Card>
-        <DataTable id="items" rows={items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Products and services" empty="No products or services yet." searchLabel="Search products and services (name, code, HSN)"
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="items" rows={items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Products and services" empty="No products or services yet." searchLabel="Search products and services (name, code, HSN)"
           columns={[
             { key: 'code', label: 'Code', value: (i) => i.code, render: (i) => <b>{i.code}</b> },
             { key: 'name', label: 'Name', value: (i) => i.name },
@@ -210,7 +210,7 @@ export function FixedAssets({ org, canManage, accounts = [] }: { org: Org; canMa
         </Card>
       )}
       <Card title={`Register (book value of active assets ₹${fmt(totalBook)})`}>
-        <DataTable id="assets" rows={list} rowKey={(a) => a.id} orgId={org.id} exportTitle="Fixed asset register" empty="No assets yet." searchLabel="Search assets"
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="assets" rows={list} rowKey={(a) => a.id} orgId={org.id} exportTitle="Fixed asset register" empty="No assets yet." searchLabel="Search assets"
           columns={[
             { key: 'code', label: 'Code', value: (a) => a.code },
             { key: 'name', label: 'Asset', value: (a) => a.name, render: (a) => <b>{a.name}</b> },

@@ -5,15 +5,16 @@ import { BarChart, PageHeader, Stat } from '../kit';
 import { Button, Card } from '../ui';
 
 interface Dash {
-  banks: { id: number; name: string; balance: number; unreconciled: number }[]; cashInHand: number; totalCash: number;
-  receivables: { total: number; overdue: number; top: { contact: string; total: number }[] }; payables: { total: number; overdue: number };
+  banks: { id: number; name: string; code?: string; balance: number; unreconciled: number }[]; cashInHand: number; totalCash: number;
+  receivables: { total: number; overdue: number; top: { contact: string; contactId?: number; total: number }[] }; payables: { total: number; overdue: number };
+  due?: { key: string; kind: string; text: string; date: string; page: string }[]; fyStart?: string;
   months: { month: string; income: number; expense: number; cashIn: number; cashOut: number }[];
   ytd: { label: string; income: number; expense: number; profit: number }; tasks: { open: number; overdue: number };
 }
 interface Guide { completed: number; total: number; steps: { key: string; label: string; text: string; page: string; done: boolean }[] }
 
 /** Cards the user can hide with "Edit homepage". Remembered per organisation in this browser. */
-const CARDS: [string, string][] = [['figures', 'Key figures'], ['charts', 'Charts'], ['bank', 'Bank accounts'], ['owed', 'Who owes you most'], ['tasks', 'Tasks']];
+const CARDS: [string, string][] = [['figures', 'Key figures'], ['due', 'Due for posting'], ['charts', 'Charts'], ['bank', 'Bank accounts'], ['owed', 'Who owes you most'], ['tasks', 'Tasks']];
 const store = (key: string) => ({
   get: <T,>(fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') as T; } catch { return fallback; } },
   set: (v: unknown) => localStorage.setItem(key, JSON.stringify(v)),
@@ -75,11 +76,18 @@ export function Dashboard({ org, go, lastLogin }: { org: Org; go: (page: string)
       )}
 
       {show('figures') && <div className="grid gap-4 md:grid-cols-4">
-        <Stat label="Cash and bank" value={`₹${fmt(d.totalCash)}`} sub={`${d.banks.length} bank account(s)`} testId="total-cash" onOpen={() => go('bank')} openLabel="Bank accounts" />
+        <Stat label="Cash and bank" value={`₹${fmt(d.totalCash)}`} sub={`${d.banks.length} bank account(s)`} testId="total-cash" onOpen={() => go(`reports/ledgers-1000~1099~${d.fyStart ?? new Date().getFullYear() + '-04-01'}~${new Date().toISOString().slice(0, 10)}`)} openLabel="Cash and bank entries" />
         <Stat label="Owed to you" value={`₹${fmt(d.receivables.total)}`} sub={`₹${fmt(d.receivables.overdue)} overdue`} tone={d.receivables.overdue > 0 ? 'bad' : 'default'} testId="receivables" onOpen={() => go('reports/ar-run')} openLabel="Aged receivables" />
         <Stat label="You owe" value={`₹${fmt(d.payables.total)}`} sub={`₹${fmt(d.payables.overdue)} overdue`} tone={d.payables.overdue > 0 ? 'bad' : 'default'} testId="payables" onOpen={() => go('reports/ap-run')} openLabel="Aged payables" />
         <Stat label={`Profit ${d.ytd.label}`} value={`₹${fmt(d.ytd.profit)}`} sub={`Income ₹${fmt(d.ytd.income)} · Expenses ₹${fmt(d.ytd.expense)}`} tone={d.ytd.profit < 0 ? 'bad' : 'good'} testId="ytd-profit" onOpen={() => go('reports/pnl-run')} openLabel="Profit and loss" />
       </div>}
+      {show('due') && !!d.due?.length && (
+        <div className="mt-4"><Card title={`Due for posting (${d.due.length})`}>
+          <ul className="divide-y divide-slate-100 text-sm" data-testid="due-tasks">{d.due.map((t) => (
+            <li key={t.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span><span className="mr-2 rounded bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-800">{t.kind}</span>{t.text}</span>
+              <button type="button" className="link text-sm" onClick={() => go(t.page)}>Open</button></li>))}</ul>
+        </Card></div>)}
       {show('charts') && <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Card title="Income and expenses, last 6 months"><BarChart data={d.months.map((m) => ({ label: label(m.month), values: [m.income, m.expense] }))} series={[{ name: 'Income', color: '#6c5ce7' }, { name: 'Expenses', color: '#e11d48' }]} /></Card>
         <Card title="Cash in and out, last 6 months"><BarChart data={d.months.map((m) => ({ label: label(m.month), values: [m.cashIn, m.cashOut] }))} series={[{ name: 'Cash in', color: '#2563eb' }, { name: 'Cash out', color: '#f59e0b' }]} /></Card>
@@ -87,11 +95,11 @@ export function Dashboard({ org, go, lastLogin }: { org: Org; go: (page: string)
       <div className="mt-4 grid gap-4 md:grid-cols-3">
         {show('bank') && <Card title="Bank accounts" actions={<button className="text-sm text-brand-700 underline" onClick={() => go('bank')}>Open</button>}>
           {d.banks.length === 0 ? <p className="text-sm text-slate-500">No bank account connected yet.</p> : d.banks.map((b) => (
-            <p key={b.id} className="flex justify-between py-1 text-sm"><span>{b.name}{b.unreconciled > 0 && <span className="ml-2 rounded bg-amber-100 px-1.5 text-xs text-amber-800">{b.unreconciled} to reconcile</span>}</span><span>₹{fmt(b.balance)}</span></p>))}
+            <p key={b.id} className="flex justify-between py-1 text-sm"><span>{b.name}{b.unreconciled > 0 && <span className="ml-2 rounded bg-amber-100 px-1.5 text-xs text-amber-800">{b.unreconciled} to reconcile</span>}</span>{b.code ? <button type="button" className="link" aria-label={`Ledger of ${b.name}`} onClick={() => go(`reports/ledger-${b.code}`)}>₹{fmt(b.balance)}</button> : <span>₹{fmt(b.balance)}</span>}</p>))}
           {toReconcile === 0 && d.banks.length > 0 && <p className="mt-2 text-xs text-green-700">✓ Everything reconciled</p>}
         </Card>}
         {show('owed') && <Card title="Who owes you most" actions={<button className="text-sm text-brand-700 underline" onClick={() => go('invoices')}>Invoices</button>}>
-          {d.receivables.top.length === 0 ? <p className="text-sm text-slate-500">Nobody owes you anything.</p> : d.receivables.top.map((c) => <p key={c.contact} className="flex justify-between py-1 text-sm"><span>{c.contact}</span><span>₹{fmt(c.total)}</span></p>)}
+          {d.receivables.top.length === 0 ? <p className="text-sm text-slate-500">Nobody owes you anything.</p> : d.receivables.top.map((c) => <p key={c.contact} className="flex justify-between py-1 text-sm"><span>{c.contactId ? <button type="button" className="link" onClick={() => go(`customers/${c.contactId}`)}>{c.contact}</button> : c.contact}</span><span>{c.contactId ? <button type="button" className="link" onClick={() => go(`customers/${c.contactId}`)}>₹{fmt(c.total)}</button> : `₹${fmt(c.total)}`}</span></p>)}
         </Card>}
         {show('tasks') && <Card title="Tasks" actions={<button className="text-sm text-brand-700 underline" onClick={() => go('tasks')}>Open</button>}>
           <p className="text-sm">{d.tasks.open} open{d.tasks.overdue > 0 && <span className="ml-2 font-medium text-red-700">{d.tasks.overdue} overdue</span>}</p>

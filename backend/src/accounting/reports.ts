@@ -52,6 +52,7 @@ export async function ledgerStatement(c: PoolClient, accountId: number, from: st
   let running = sign * n(open.net);
   const lines = (await c.query(
     `SELECT e.id AS entry_id, e.entry_date::text AS date, e.narration, e.reference, e.voucher_no, l.debit, l.credit,
+            (SELECT string_agg(DISTINCT a2.name, ', ') FROM journal_lines l2 JOIN accounts a2 ON a2.id=l2.account_id WHERE l2.entry_id=e.id AND l2.account_id<>l.account_id) AS counter,
             COALESCE(d.id, pd.id, vd.id) AS doc_id, COALESCE(d.doc_type, pd.doc_type, vd.doc_type) AS doc_type, COALESCE(d.number, pd.number, vd.number) AS doc_number
        FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
        LEFT JOIN documents d ON d.journal_entry_id = e.id
@@ -60,7 +61,7 @@ export async function ledgerStatement(c: PoolClient, accountId: number, from: st
       WHERE l.account_id=$1 AND ($2::date IS NULL OR e.entry_date >= $2::date) AND ($3::date IS NULL OR e.entry_date <= $3::date)
       ORDER BY e.entry_date, e.id, l.id`, [accountId, from, to])).rows.map((r) => {
     running += sign * (n(r.debit) - n(r.credit));
-    return { entryId: n(r.entry_id), date: r.date, narration: r.narration, reference: r.reference ?? r.voucher_no ?? r.doc_number ?? null, debit: n(r.debit), credit: n(r.credit), balance: running,
+    return { entryId: n(r.entry_id), date: r.date, narration: r.narration, counter: (r.counter as string | null) ?? '', reference: r.reference ?? r.voucher_no ?? r.doc_number ?? null, debit: n(r.debit), credit: n(r.credit), balance: running,
       source: r.doc_id ? { kind: 'document' as const, id: n(r.doc_id), docType: r.doc_type as string, number: r.doc_number as string } : { kind: 'journal' as const, id: n(r.entry_id), voucherNo: (r.voucher_no as string | null) ?? null } };
   });
   return { account: { id: n(acc.id), code: acc.code, name: acc.name, type: acc.type }, openingBalance: sign * n(open.net), lines, closingBalance: running };
@@ -104,7 +105,7 @@ export async function gstr1(c: PoolClient, from: string, to: string) {
     `SELECT d.*, ct.gstin AS party_gstin, ct.name AS party, o.state_code AS org_state
        FROM documents d JOIN contacts ct ON ct.id=d.contact_id JOIN organizations o ON o.id=d.org_id
       WHERE d.status='posted' AND d.doc_type IN ('invoice','credit_note') AND d.issue_date BETWEEN $1 AND $2 ORDER BY d.issue_date, d.id`, [from, to])).rows;
-  const shape = (d: any) => ({ number: d.number, date: new Date(d.issue_date).toISOString().slice(0, 10), party: d.party, gstin: d.party_gstin, placeOfSupply: d.place_of_supply,
+  const shape = (d: any) => ({ id: d.id != null ? Number(d.id) : undefined, docType: d.doc_type, number: d.number, date: new Date(d.issue_date).toISOString().slice(0, 10), party: d.party, gstin: d.party_gstin, placeOfSupply: d.place_of_supply,
     value: n(d.total), taxable: n(d.subtotal), igst: n(d.igst), cgst: n(d.cgst), sgst: n(d.sgst), cess: n(d.cess ?? 0) });
   const isExport = (d: any) => String(d.supply_type).startsWith('export');
   const inv = docs.filter((d) => d.doc_type === 'invoice' && !isExport(d)), cn = docs.filter((d) => d.doc_type === 'credit_note');

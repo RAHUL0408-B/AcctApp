@@ -127,7 +127,7 @@ await nav('Customers');
 await heading('Customers');
 await page.getByRole('button', { name: 'Acme Retail', exact: true }).click();
 await page.getByTestId('statement-closing').waitFor();
-assert.equal(await page.getByTestId('statement-closing').innerText(), '590.00');
+assert.equal((await page.getByTestId('statement-closing').innerText()).replace('₹', ''), '590.00');
 step('customer statement: 590 + 1,180 - 1,180 payment = 590 owed');
 
 // ---- bill with TDS
@@ -209,7 +209,7 @@ if (process.env.SHOT_DIR) await page.screenshot({ path: process.env.SHOT_DIR + '
 
 // ---- reports
 await nav('All reports');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Profit & loss' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Profit & loss', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('net-profit').waitFor();
 assert.equal(await page.getByTestId('net-profit').innerText(), '-59,115.50');
 step('P&L: 1,500 income - 60,000 fees - 15.50 charges - 600 depreciation = -59,115.50');
@@ -217,15 +217,15 @@ const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('mai
 assert.equal(dl.suggestedFilename(), 'pnl.pdf');
 const [dlx] = await Promise.all([page.waitForEvent('download'), page.locator('main').getByRole('button', { name: 'Export ▾' }).click().then(() => page.getByRole('menuitem', { name: 'Excel (.xlsx)' }).click())]);
 assert.equal(dlx.suggestedFilename(), 'pnl.xlsx');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Cash flow' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Cash flow', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('cf-closing').waitFor();
 assert.equal(await page.getByTestId('cf-closing').innerText(), '1,164.50');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Trial balance' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Trial balance', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('tb-debit').waitFor();
 assert.equal(await page.getByTestId('tb-debit').innerText(), await page.getByTestId('tb-credit').innerText());
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'GSTR-3B' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'GSTR-3B', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('3.1(a) Outward taxable').waitFor();
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Balance sheet' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Balance sheet', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('✓ Assets = Liabilities + Equity').waitFor();
 step('exports to PDF/Excel; cash flow closes at 1,164.50; trial balance, GSTR-3B and balance sheet agree');
 

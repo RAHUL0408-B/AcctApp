@@ -67,13 +67,13 @@ export async function buildTable(c: PoolClient, name: ReportName, p: ReportParam
       for (const a of accs) {
         const l = await ledgerStatement(c, a.id, p.from, p.to);
         if (!l || (!one && !l.lines.length && !l.openingBalance)) continue;
-        bold.push(rows.length); rows.push(['', `${l.account.code} ${l.account.name}`, '', 0, 0, '']); links.push({ kind: 'account', id: l.account.id, code: l.account.code });
-        rows.push(['', 'Opening balance', '', 0, 0, l.openingBalance]); links.push(null);
-        for (const x of l.lines) { rows.push([x.date, x.narration, x.reference ?? '', x.debit, x.credit, x.balance]); links.push(x.source); }
-        bold.push(rows.length); rows.push(['', 'Closing balance', '', l.lines.reduce((s, x) => s + x.debit, 0), l.lines.reduce((s, x) => s + x.credit, 0), l.closingBalance]); links.push(null);
+        bold.push(rows.length); rows.push(['', `${l.account.code} ${l.account.name}`, '', '', 0, 0, '']); links.push({ kind: 'account', id: l.account.id, code: l.account.code });
+        rows.push(['', '', 'Opening balance', '', 0, 0, l.openingBalance]); links.push(null);
+        for (const x of l.lines) { rows.push([x.date, x.counter, x.narration, x.reference ?? '', x.debit, x.credit, x.balance]); links.push(x.source); }
+        bold.push(rows.length); rows.push(['', '', 'Period total / closing balance', '', l.lines.reduce((s, x) => s + x.debit, 0), l.lines.reduce((s, x) => s + x.credit, 0), l.closingBalance]); links.push(null);
       }
       const range = p.fromCode || p.toCode ? `, accounts ${p.fromCode ?? 'first'} to ${p.toCode ?? 'last'}` : '';
-      return { title: one && accs[0] ? `Ledger: ${accs[0].code} ${accs[0].name}` : 'Ledgers', subtitle: `${p.from} to ${p.to}${range}`, columns: [T('Date'), T('Narration'), T('Reference'), M('Debit'), M('Credit'), M('Balance')], rows, boldRows: bold, links };
+      return { title: one && accs[0] ? `Ledger: ${accs[0].code} ${accs[0].name}` : 'Ledgers', subtitle: `${p.from} to ${p.to}${range}`, columns: [T('Date'), T('Counter-ledger'), T('Narration'), T('Reference'), M('Debit'), M('Credit'), M('Running balance')], rows, boldRows: bold, links };
     }
     case 'fixed-assets': {
       const r = (await c.query(

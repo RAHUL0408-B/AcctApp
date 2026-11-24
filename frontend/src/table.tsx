@@ -195,13 +195,18 @@ export function DataTable<T>({ id, rows, columns, rowKey, orgId, exportTitle, ex
   const defaults: View = useMemo(() => ({ order: columns.map((c) => c.key), hidden: columns.filter((c) => c.hidden).map((c) => c.key), sort: initialSort }), [columns, initialSort]);
   const [view, setView] = useState<View>(() => readView(id) ?? defaults);
   const [saved, setSaved] = useState(() => !!readView(id));
-  const [q, setQ] = useState('');
+  // Search, filters, page and opened rows are kept for this browser tab, so Back to a list shows it as it was left.
+  const kept = useMemo(() => { try { return JSON.parse(sessionStorage.getItem(`dt:${id}`) ?? 'null'); } catch { return null; } }, [id]);
+  const [q, setQ] = useState<string>(kept?.q ?? '');
   const [choosing, setChoosing] = useState(false);
-  const [filtering, setFiltering] = useState(false);
-  const [colFilter, setColFilter] = useState<Record<string, string>>({});
-  const [from, setFrom] = useState(''), [to, setTo] = useState('');
-  const [open, setOpen] = useState<Set<string | number>>(new Set());
-  const [size, setSize] = useState(startSize), [pg, setPg] = useState(0);
+  const [filtering, setFiltering] = useState<boolean>(!!kept?.filtering);
+  const [colFilter, setColFilter] = useState<Record<string, string>>(kept?.colFilter ?? {});
+  const [from, setFrom] = useState<string>(kept?.from ?? ''), [to, setTo] = useState<string>(kept?.to ?? '');
+  const [open, setOpen] = useState<Set<string | number>>(() => new Set(kept?.open ?? []));
+  const [size, setSize] = useState<number>(kept?.size ?? startSize), [pg, setPg] = useState<number>(kept?.pg ?? 0);
+  useEffect(() => {
+    try { sessionStorage.setItem(`dt:${id}`, JSON.stringify({ q, filtering, colFilter, from, to, open: [...open], size, pg })); } catch { /* storage may be off */ }
+  }, [id, q, filtering, colFilter, from, to, open, size, pg]);
   const stopChoosing = useCallback(() => setChoosing(false), []);
   const chooser = useOutside(choosing, stopChoosing);
   const { btn: chooserBtn, pos: chooserPos } = useAnchor(choosing, stopChoosing, 300);
@@ -239,7 +244,8 @@ export function DataTable<T>({ id, rows, columns, rowKey, orgId, exportTitle, ex
   const pages = Math.max(1, Math.ceil(sorted.length / size));
   const page = Math.min(pg, pages - 1);
   const shown = sorted.slice(page * size, page * size + size);
-  useEffect(() => { setPg(0); }, [q, from, to, JSON.stringify(colFilter), size]); // eslint-disable-line react-hooks/exhaustive-deps
+  const firstRun = useRef(true);
+  useEffect(() => { if (firstRun.current) { firstRun.current = false; return; } setPg(0); }, [q, from, to, JSON.stringify(colFilter), size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const change = (v: View) => { setView(v); setSaved(false); };
   const sortBy = (k: string) => change({ ...view, sort: view.sort?.key === k ? { key: k, dir: view.sort.dir === 1 ? -1 : 1 } : { key: k, dir: 1 } });

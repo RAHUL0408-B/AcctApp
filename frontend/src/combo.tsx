@@ -1,7 +1,7 @@
 // A themed type-to-search dropdown used for accounts, contacts, products, countries and the like.
 // Typing completes the rest of the best match (Tab or Enter takes it), the arrow keys move through the list,
 // and an optional "+ Create new …" sits at the bottom of the list.
-import { ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 export interface ComboOption {
   /** The text put in the box when this option is chosen (and matched exactly by the page). */
@@ -108,7 +108,7 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
       <button type="button" tabIndex={-1} aria-hidden onMouseDown={(e) => { e.preventDefault(); setOpen(!open); input.current?.focus(); }}
         className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[10px] text-brand-700">▼</button>
       {open && !disabled && (
-        <div ref={list} id={id} role="listbox" aria-label={`${ariaLabel} options`} data-popover style={pos}
+        <div ref={list} id={id} role="listbox" aria-label="Suggestions" data-popover style={pos}
           className="z-[60] flex flex-col overflow-hidden rounded-lg border border-brand-100 bg-white text-sm shadow-xl" onMouseDown={(e) => e.preventDefault()}>
           {columns && shown.length > 0 && <div className="grid grid-cols-[6rem_1fr_7rem] gap-2 border-b border-brand-100 bg-brand-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-brand-800"><span>{columns[0]}</span><span>{columns[1]}</span><span>{columns[2] ?? ''}</span></div>}
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -140,7 +140,7 @@ export function Combo({ value, onText, options, ariaLabel, placeholder, onCreate
  * the right (a number range) and an optional action at the bottom ("+ New group…").
  */
 export function PickList({ value, onChange, options, ariaLabel, placeholder = 'Choose…', footer, disabled, className }: {
-  value: string; onChange: (v: string) => void; options: { value: string; label: string; right?: string }[]; ariaLabel: string; placeholder?: string;
+  value: string; onChange: (v: string) => void; options: { value: string; label: string; right?: string; group?: string }[]; ariaLabel: string; placeholder?: string;
   footer?: { label: string; onClick: () => void }; disabled?: boolean; className?: string;
 }) {
   const [open, setOpen] = useState(false), [hi, setHi] = useState(0);
@@ -177,12 +177,13 @@ export function PickList({ value, onChange, options, ariaLabel, placeholder = 'C
         <span className={`truncate ${chosen ? 'text-slate-900' : 'text-slate-500'}`}>{chosen?.label ?? placeholder}</span>
         <span aria-hidden className="text-xs text-brand-700">▾</span></button>
       {open && (
-        <div ref={box} id={id} role="listbox" aria-label={`${ariaLabel} options`} data-popover style={pos} className="z-[60] flex flex-col overflow-hidden rounded-lg border border-brand-100 bg-white text-sm shadow-xl">
+        <div ref={box} id={id} role="listbox" aria-label="Choices" data-popover style={pos} className="z-[60] flex flex-col overflow-hidden rounded-lg border border-brand-100 bg-white text-sm shadow-xl">
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
-            {options.map((o, i) => (
-              <div key={o.value} role="option" aria-selected={o.value === value} data-value={o.value} onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
+            {options.map((o, i) => (<Fragment key={o.value}>
+              {o.group && o.group !== options[i - 1]?.group && <p role="presentation" className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-brand-700">{o.group}</p>}
+              <div role="option" aria-selected={o.value === value} data-value={o.value} onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
                 className={`flex cursor-pointer items-center justify-between gap-3 px-3 py-2 ${i === hi ? 'bg-brand-50 text-brand-900' : 'text-slate-800'} ${o.value === value ? 'font-medium' : ''}`}>
-                <span className="truncate">{o.label}</span>{o.right && <span className="shrink-0 text-xs tabular-nums text-slate-500">{o.right}</span>}</div>))}
+                <span className="truncate">{o.label}</span>{o.right && <span className="shrink-0 text-xs tabular-nums text-slate-500">{o.right}</span>}</div></Fragment>))}
             {!options.length && <p className="px-3 py-2 text-slate-500">Nothing to choose yet.</p>}
           </div>
           {footer && <div className="border-t border-brand-100 p-1">

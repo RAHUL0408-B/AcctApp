@@ -105,7 +105,7 @@ export function PreDocs({ org, kind, canPost, accounts, startNew = false }: { or
         </Card>
       )}
       <Card>
-        <DataTable id={`pre-${kind}`} rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle={sales ? 'Quotes' : 'Purchase orders'} empty="Nothing here yet."
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id={`pre-${kind}`} rows={list} rowKey={(p) => p.id} orgId={org.id} exportTitle={sales ? 'Quotes' : 'Purchase orders'} empty="Nothing here yet."
           searchLabel={`Search ${sales ? 'quotes' : 'purchase orders'}`}
           columns={[
             { key: 'number', label: 'Number', value: (p) => p.number, render: (p) => (canPost && p.status !== 'converted'
@@ -275,7 +275,7 @@ export function Recurring({ org, canPost, accounts, kind = 'invoice', go }: { or
         </Card>
       )}
       <Card>
-        <DataTable id={`recurring-${kind}`} rows={shown} columns={columns} rowKey={(r) => r.id} orgId={org.id} exportTitle={bill ? 'Repeating bills' : 'Repeating invoices'} empty={`No repeating ${noun}s yet.`}
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id={`recurring-${kind}`} rows={shown} columns={columns} rowKey={(r) => r.id} orgId={org.id} exportTitle={bill ? 'Repeating bills' : 'Repeating invoices'} empty={`No repeating ${noun}s yet.`}
           toolbar={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived</label>}
           trailing={(r) => (canPost ? <RowMenu label={`Actions for ${r.contactName} schedule`} actions={[
             { label: 'Edit', icon: 'edit', onClick: () => edit(r), hidden: !!r.isArchived },

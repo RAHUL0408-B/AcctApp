@@ -4,7 +4,7 @@ import type { Org } from '../App';
 import { Button, Callout, Card, ErrorMsg, Ok, useAction , ask } from '../ui';
 import { FORMATS, Icon, exportTable, type ExportFormat, type ExportTable } from '../table';
 import { CombinePanel } from '../export';
-import { Combo } from '../combo';
+import { Combo, PickList } from '../combo';
 
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
 const REPORTS = [
@@ -50,22 +50,27 @@ export function rollUp(items: Item[], level: Level): { key: string; label: strin
 
 export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { id: number; code: string; name: string }[]; initial?: string; go?: (p: string) => void }) {
   // "reports/ar-run" (from a dashboard figure) opens the report already run; a menu link waits for Run.
-  const known = (k?: string) => { const x = k === 'alll' || k?.startsWith('ledger-') ? 'ledger' : k?.replace(/-run$/, ''); return x && REPORTS.some(([r]) => r === x) ? x : undefined; };
+  const known = (k?: string) => { const x = k === 'alll' || k?.startsWith('ledger-') || k?.startsWith('ledgers-') ? 'ledger' : k?.replace(/-run$/, ''); return x && REPORTS.some(([r]) => r === x) ? x : undefined; };
+  const saved = (() => { try { return JSON.parse(sessionStorage.getItem(`report-state-${org.id}`) ?? 'null'); } catch { return null; } })();
   const [rep, setRep] = useState<string>(known(initial) ?? 'pnl');
   useEffect(() => {
     const k = known(initial);
     if (!k) return;
     setRep(k); setData(null);
     const one = /^ledger-(.+)$/.exec(initial ?? '');        // "reports/ledger-5000": that account's ledger, already run
+    // "reports/ledgers-1000~1099~2026-04-01~2026-04-30": a range of ledgers for given dates (a cash flow month opened)
+    const range = /^ledgers-([^~]*)~([^~]*)~(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/.exec(initial ?? '');
     if (one) { setFromCode(one[1]); setToCode(one[1]); load('ledger', { fromCode: one[1], toCode: one[1] }); }
+    else if (range) { setFromCode(range[1]); setToCode(range[2]); setFrom(range[3]); setTo(range[4]); load('ledger', { fromCode: range[1], toCode: range[2] }, { from: range[3], to: range[4] }); }
     else if (initial?.endsWith('-run')) load(k);
   }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
   const [days, setDays] = useState('30');
   const [, setFavTick] = useState(0);
   const isFav = favouriteReports().some((f) => f.key === rep);
-  const [from, setFrom] = useState(fyStart()), [to, setTo] = useState(today());
-  const [fromCode, setFromCode] = useState(''), [toCode, setToCode] = useState('');
-  const [level, setLevel] = useState<Level>('ledger');
+  const [from, setFrom] = useState<string>(saved?.from ?? fyStart()), [to, setTo] = useState<string>(saved?.to ?? today());
+  const [fromCode, setFromCode] = useState<string>(saved?.fromCode ?? ''), [toCode, setToCode] = useState<string>(saved?.toCode ?? '');
+  const [level, setLevel] = useState<Level>(saved?.level ?? 'ledger');
+  useEffect(() => { try { sessionStorage.setItem(`report-state-${org.id}`, JSON.stringify({ from, to, fromCode, toCode, level })); } catch { /* storage may be off */ } }, [org.id, from, to, fromCode, toCode, level]);
   const [categories, setCategories] = useState<{ id: number; name: string }[]>([]), [budgets, setBudgets] = useState<{ id: number; name: string }[]>([]);
   const [categoryId, setCategoryId] = useState(''), [budgetId, setBudgetId] = useState('');
   useEffect(() => {
@@ -77,19 +82,19 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
   const latest = useRef(0); // only the newest request may set the result; slower, older responses are dropped
   const codeOf = (t: string) => { const v = t.trim(); const a = accounts.find((x) => `${x.code} · ${x.name}`.toLowerCase() === v.toLowerCase()) ?? accounts.find((x) => x.code === v); return a ? a.code : v.split(' ')[0]; };
 
-  const query = (r = rep, codes?: { fromCode: string; toCode: string }) => {
+  const query = (r = rep, codes?: { fromCode: string; toCode: string }, dates?: { from: string; to: string }) => {
     const p = new URLSearchParams();
-    if (RANGED.includes(r)) { p.set('from', from); p.set('to', to); } else p.set('asOf', to);
+    if (RANGED.includes(r)) { p.set('from', dates?.from ?? from); p.set('to', dates?.to ?? to); } else p.set('asOf', dates?.to ?? to);
     if (r === 'ledger') { const fc = codes ? codes.fromCode : codeOf(fromCode), tc = codes ? codes.toCode : codeOf(toCode); if (fc) p.set('fromCode', fc); if (tc) p.set('toCode', tc); }
     if (r === 'pnlt') p.set('categoryId', categoryId);
     if (r === 'bva') p.set('budgetId', budgetId);
     if (r === 'stcf') p.set('days', days);
     return p;
   };
-  const load = (r = rep, codes?: { fromCode: string; toCode: string }) => run(async () => {
+  const load = (r = rep, codes?: { fromCode: string; toCode: string }, dates?: { from: string; to: string }) => run(async () => {
     const mine = ++latest.current;
     setData(null);
-    const q = query(r, codes);
+    const q = query(r, codes, dates);
     if ((r === 'pnlt' && !categoryId) || (r === 'bva' && !budgetId)) throw new Error(r === 'pnlt' ? 'Add a cost centre group under Accounting first.' : 'Create a budget under Accounting first.');
     const url = { tb: `/trial-balance?asOf=${to}`, pnl: `/reports/pnl?${q}`, bs: `/reports/balance-sheet?${q}`, ledger: `/report-table/all-ledgers?${q}`,
       cf: `/reports/cash-flow?${q}`, ar: `/reports/aged-receivables?${q}`, ap: `/reports/aged-payables?${q}`, gstr1: `/reports/gstr1?${q}`, gstr3b: `/reports/gstr3b?${q}`,
@@ -100,8 +105,10 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
     if (mine === latest.current) setData({ rep: r, d });
   });
   const choose = (k: string) => { setRep(k); setData(null); };
-  /** Click an account anywhere in a report: its ledger for the same dates. */
-  const openLedger = (code: string) => { setRep('ledger'); setFromCode(code); setToCode(code); load('ledger', { fromCode: code, toCode: code }); };
+  /** Click an account anywhere in a report: its ledger for the same dates. A screen of its own, so Back returns to the report. */
+  const openLedger = (code: string) => { if (go) { go(`reports/ledger-${code}`); return; } setRep('ledger'); setFromCode(code); setToCode(code); load('ledger', { fromCode: code, toCode: code }); };
+  /** Run: shown as its own screen ("reports/pnl-run"), so Back from a drill-down comes back to it. */
+  const runNow = () => { if (go && initial !== `${rep}-run`) go(`reports/${rep}-run`); else load(); };
   /** Click a ledger line: the invoice, bill or journal behind it. */
   const openSource = (l: any) => {
     if (!go || !l) return;
@@ -132,8 +139,8 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
       <Card>
         <div className="flex flex-wrap items-end gap-3 text-sm">
           <label className="block"><span className="mb-1 block font-medium text-slate-600">Report</span>
-            <select aria-label="Report" className={`${inputCls} min-w-56 bg-white`} value={rep} onChange={(e) => choose(e.target.value)}>
-              {MENU.map(([g, keys]) => <optgroup key={g} label={g}>{keys.map((k) => <option key={k} value={k}>{nameOf(k)}</option>)}</optgroup>)}</select></label>
+            <PickList ariaLabel="Report" className="min-w-60" value={rep} onChange={choose}
+              options={MENU.flatMap(([g, keys]) => keys.map((k) => ({ value: k, label: nameOf(k), group: g })))} /></label>
           {RANGED.includes(rep) && <label className="block"><span className="mb-1 block font-medium text-slate-600">From</span><input aria-label="From" type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} /></label>}
           {rep === 'stcf' ? <label className="block"><span className="mb-1 block font-medium text-slate-600">Next</span><select aria-label="Days ahead" className={inputCls} value={days} onChange={(e) => setDays(e.target.value)}>{['30', '60', '90'].map((d) => <option key={d} value={d}>{d} days</option>)}</select></label>
             : <label className="block"><span className="mb-1 block font-medium text-slate-600">{RANGED.includes(rep) ? 'To' : 'As at'}</span><input aria-label="To" type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></label>}
@@ -150,7 +157,7 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
             : <span className="pb-2 text-slate-500">Create a budget under Accounting first.</span>)}
           {(rep === 'pnl' || rep === 'bs') && <label className="block"><span className="mb-1 block font-medium text-slate-600">Show</span>
             <select aria-label="Show by" className={inputCls} value={level} onChange={(e) => setLevel(e.target.value as Level)}><option value="ledger">Each ledger</option><option value="group">Groups</option><option value="fsli">Statement lines</option></select></label>}
-          <Button disabled={busy} onClick={() => load()}>Run</Button>
+          <Button disabled={busy} onClick={runNow}>Run</Button>
           <ReportExport onExport={exportAs} disabled={busy} />
           <Button variant="ghost" aria-expanded={combine} onClick={() => setCombine(!combine)}>Several reports in one file…</Button>
           <Button variant="ghost" aria-pressed={isFav} onClick={() => { toggleFavourite(rep); setFavTick((n) => n + 1); }}>{isFav ? '★ Favourite' : '☆ Add to favourites'}</Button>
@@ -160,7 +167,8 @@ export function Reports({ org, accounts, initial, go }: { org: Org; accounts: { 
       </Card>
       {combine && <CombinePanel title="Export several reports in one file" choices={manyChoices} chosen={EXPORT[rep] ? [rep] : []} busy={false} onExport={exportMany} onClose={() => setCombine(false)} />}
       {data && data.rep === rep
-        ? <Card title={nameOf(rep)}><ReportView rep={rep} d={data.d} org={org} reload={() => load()} level={level} openLedger={openLedger} openSource={openSource} /></Card>
+        ? <Card title={nameOf(rep)}><ReportView rep={rep} d={data.d} org={org} reload={() => load()} level={level} openLedger={openLedger} openSource={openSource} go={go}
+          openRange={go ? (month: string) => { const [y, mo] = month.split('-').map(Number); const end = new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10); go(`reports/ledgers-1000~1099~${month}-01~${end}`); } : undefined} /></Card>
         : !busy && <Callout tone="info">Choose the dates{rep === 'ledger' ? ' and accounts' : ''}, then click <b>Run</b> to see {nameOf(rep)}.</Callout>}
     </>
   );
@@ -224,21 +232,22 @@ function screenTable(rep: string, d: any, o: { from: string; to: string; level: 
 
 /** A report line; with a code, the label and amount open that account's ledger. */
 const Row = ({ label, v, bold, code, open }: { label: string; v: number; bold?: boolean; code?: string; open?: (code: string) => void }) => (
-  <tr className={`border-t border-slate-100 ${bold ? 'font-semibold' : ''}`}>
+  <tr className={`border-t border-slate-100 ${bold ? 'total-row' : ''}`}>
     <td className="py-1">{code && open ? <button type="button" className="text-left hover:text-brand-700 hover:underline" title="Open the ledger" onClick={() => open(code)}>{label}</button> : label}</td>
-    <td className="text-right">{code && open ? <button type="button" className="text-brand-700 hover:underline" aria-label={`Ledger of ${label}`} onClick={() => open(code)}>{fmt(v)}</button> : fmt(v)}</td></tr>
+    <td className="text-right tabular-nums">{code && open ? <button type="button" className="link" aria-label={`Ledger of ${label}`} onClick={() => open(code)}>{fmt(v)}</button> : fmt(v)}</td></tr>
 );
-const Link = ({ code, open, children }: { code: string; open: (c: string) => void; children: React.ReactNode }) =>
-  <button type="button" className="hover:text-brand-700 hover:underline" onClick={() => open(code)}>{children}</button>;
+const Link = ({ code, open, children, amount }: { code: string; open: (c: string) => void; children: React.ReactNode; amount?: boolean }) =>
+  <button type="button" className={amount ? 'link tabular-nums' : 'text-left hover:text-brand-700 hover:underline'} onClick={() => open(code)}>{children}</button>;
 
-function ReportView({ rep, d, org, reload, level = 'ledger', openLedger, openSource }: { rep: string; d: any; org: Org; reload: () => void; level?: Level; openLedger: (code: string) => void; openSource: (l: any) => void }) {
-  if (rep === 'ledger') return <TableReport d={d} org={org} reload={reload} selectable={false} onLink={openSource} />;
+function ReportView({ rep, d, org, reload, level = 'ledger', openLedger, openSource, openRange, go }: { rep: string; d: any; org: Org; reload: () => void; level?: Level; openLedger: (code: string) => void; openSource: (l: any) => void;
+  openRange?: (month: string) => void; go?: (p: string) => void }) {
+  if (rep === 'ledger') return <LedgerView d={d} onLink={openSource} />;
   if (TABLE[rep]) return <TableReport d={d} org={org} reload={reload} selectable={['invw', 'billw', 'preg'].includes(rep)} />;
   if (rep === 'tb') return (
     <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead>
       <tbody>{d.accounts.map((a: any) => <tr key={a.code} className="border-t border-slate-100"><td><Link code={a.code} open={openLedger}>{a.code} {a.name}</Link></td>
-        <td className="text-right">{a.debit ? <Link code={a.code} open={openLedger}>{fmt(a.debit)}</Link> : ''}</td><td className="text-right">{a.credit ? <Link code={a.code} open={openLedger}>{fmt(a.credit)}</Link> : ''}</td></tr>)}
-        <tr className="border-t-2 font-semibold"><td>Total {d.balanced ? '✓' : '✗'}</td><td className="text-right" data-testid="tb-debit">{fmt(d.totalDebit)}</td><td className="text-right" data-testid="tb-credit">{fmt(d.totalCredit)}</td></tr></tbody></table>);
+        <td className="text-right">{a.debit ? <Link amount code={a.code} open={openLedger}>{fmt(a.debit)}</Link> : ''}</td><td className="text-right">{a.credit ? <Link amount code={a.code} open={openLedger}>{fmt(a.credit)}</Link> : ''}</td></tr>)}
+        <tr className="total-row"><td>Total {d.balanced ? '✓' : '✗'}</td><td className="text-right" data-testid="tb-debit">{fmt(d.totalDebit)}</td><td className="text-right" data-testid="tb-credit">{fmt(d.totalCredit)}</td></tr></tbody></table>);
   if (rep === 'pnl') return (
     <table className="w-full text-sm"><tbody>
       <tr><td className="pt-2 font-semibold text-slate-500">Income</td></tr>{rollUp(d.income.items, level).map((i) => <Row key={i.key} label={i.label} v={i.amount} code={i.code} open={openLedger} />)}<Row label="Total income" v={d.income.total} bold />
@@ -255,22 +264,21 @@ function ReportView({ rep, d, org, reload, level = 'ledger', openLedger, openSou
   if (rep === 'cf') return (
     <table className="w-full text-sm" data-testid="cashflow"><thead><tr className="text-left text-slate-500"><th>Month</th><th className="text-right">Opening</th><th className="text-right">Cash in</th><th className="text-right">Cash out</th><th className="text-right">Closing</th></tr></thead>
       <tbody><tr><td colSpan={4}>Opening balance</td><td className="text-right">{fmt(d.openingBalance)}</td></tr>
-        {d.months.map((m: any) => <tr key={m.month} className="border-t border-slate-100"><td>{m.month}</td><td className="text-right">{fmt(m.opening)}</td><td className="text-right text-green-700">{fmt(m.cashIn)}</td><td className="text-right text-red-700">{fmt(m.cashOut)}</td><td className="text-right">{fmt(m.closing)}</td></tr>)}
-        <tr className="border-t-2 font-semibold"><td>Total</td><td /><td className="text-right">{fmt(d.totalIn)}</td><td className="text-right">{fmt(d.totalOut)}</td><td className="text-right" data-testid="cf-closing">{fmt(d.closingBalance)}</td></tr></tbody></table>);
+        {d.months.map((m: any) => { const open = () => openRange?.(m.month); return <tr key={m.month} className="border-t border-slate-100"><td>{openRange ? <button type="button" className="link" onClick={open}>{m.month}</button> : m.month}</td><td className="text-right">{fmt(m.opening)}</td>
+          <td className="text-right">{openRange && m.cashIn ? <button type="button" className="link" title="The cash and bank entries of this month" onClick={open}>{fmt(m.cashIn)}</button> : fmt(m.cashIn)}</td>
+          <td className="text-right">{openRange && m.cashOut ? <button type="button" className="link" title="The cash and bank entries of this month" onClick={open}>{fmt(m.cashOut)}</button> : fmt(m.cashOut)}</td><td className="text-right">{fmt(m.closing)}</td></tr>; })}
+        <tr className="total-row"><td>Total</td><td /><td className="text-right">{fmt(d.totalIn)}</td><td className="text-right">{fmt(d.totalOut)}</td><td className="text-right" data-testid="cf-closing">{fmt(d.closingBalance)}</td></tr></tbody></table>);
   if (rep === 'ledger') return (
     <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Date</th><th>Narration</th><th className="text-right">Debit</th><th className="text-right">Credit</th><th className="text-right">Balance</th></tr></thead>
       <tbody><tr><td /><td>Opening balance</td><td /><td /><td className="text-right">{fmt(d.openingBalance)}</td></tr>
         {d.lines.map((l: any, i: number) => <tr key={i} className="border-t border-slate-100"><td>{l.date}</td><td>{l.narration}</td><td className="text-right">{l.debit ? fmt(l.debit) : ''}</td><td className="text-right">{l.credit ? fmt(l.credit) : ''}</td><td className="text-right">{fmt(l.balance)}</td></tr>)}</tbody></table>);
-  if (rep === 'ar' || rep === 'ap') return (
-    <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Contact</th>{['Not due', '1-30', '31-60', '61-90', '90+', 'Total'].map((h) => <th key={h} className="text-right">{h}</th>)}</tr></thead>
-      <tbody>{[...d.contacts, { contact: 'Total', ...d.totals }].map((c: any) => <tr key={c.contact} className={`border-t border-slate-100 ${c.contact === 'Total' ? 'font-semibold' : ''}`}><td>{c.contact}</td>
-        {['notDue', 'days1to30', 'days31to60', 'days61to90', 'over90', 'total'].map((k) => <td key={k} className="text-right">{fmt(c[k])}</td>)}</tr>)}</tbody></table>);
+  if (rep === 'ar' || rep === 'ap') return <AgedReport d={d} sales={rep === 'ar'} go={go} />;
   if (rep === 'gstr1') return (
     <div className="space-y-4 text-sm">
       <Gstr1Json org={org} />
       {(['b2b', 'b2cl', 'exp', 'cdnr', 'cdnur'] as const).map((s) => (
         <div key={s}><h3 className="font-semibold uppercase">{s} ({d[s].length})</h3>
-          {d[s].length > 0 && <table className="w-full"><tbody>{d[s].map((x: any) => <tr key={x.number} className="border-t border-slate-100"><td>{x.number}</td><td>{x.date}</td><td>{x.gstin ?? x.party}</td><td>POS {x.placeOfSupply}</td><td className="text-right">{fmt(x.taxable)}</td><td className="text-right">IGST {fmt(x.igst)} · CGST {fmt(x.cgst)} · SGST {fmt(x.sgst)}{x.cess ? ` · Cess ${fmt(x.cess)}` : ''}</td></tr>)}</tbody></table>}</div>))}
+          {d[s].length > 0 && <table className="w-full"><tbody>{d[s].map((x: any) => <tr key={x.number} className="border-t border-slate-100"><td>{go && x.id ? <button type="button" className="link" onClick={() => go(`invoices/open-${x.id}`)}>{x.number}</button> : x.number}</td><td>{x.date}</td><td>{x.gstin ?? x.party}</td><td>POS {x.placeOfSupply}</td><td className="text-right">{fmt(x.taxable)}</td><td className="text-right">IGST {fmt(x.igst)} · CGST {fmt(x.cgst)} · SGST {fmt(x.sgst)}{x.cess ? ` · Cess ${fmt(x.cess)}` : ''}</td></tr>)}</tbody></table>}</div>))}
       <div><h3 className="font-semibold">B2CS (by place of supply and rate)</h3>{d.b2cs.map((x: any, i: number) => <p key={i}>POS {x.pos} @ {x.rateBp / 100}%: taxable {fmt(x.taxable)}</p>)}</div>
       <div><h3 className="font-semibold">HSN summary</h3>{d.hsn.map((x: any, i: number) => <p key={i}>{x.hsn} @ {x.rateBp / 100}% · qty {x.quantity} · taxable {fmt(x.taxable)}</p>)}</div>
       <p className="text-xs text-slate-500">Working paper only. Review with your CA before filing on the GST portal.</p>
@@ -439,6 +447,89 @@ function TableReport({ d, org, reload, selectable, onLink }: { d: any; org: Org;
             </tr>))}</tbody></table>
         {d.rows.length === 0 && <p className="py-6 text-center text-slate-500">Nothing to show for these dates.</p>}
       </div>
+    </div>
+  );
+}
+
+/** Aged receivables or payables: each amount opens the invoices or bills behind it; a name opens the contact and its statement. */
+function AgedReport({ d, sales, go }: { d: any; sales: boolean; go?: (p: string) => void }) {
+  const [pick, setPick] = useState<{ contact: string; contactId?: number; bucket: string; label: string } | null>(null);
+  const B: [string, string, (days: number) => boolean][] = [['notDue', 'Not due', (x) => x <= 0], ['days1to30', '1-30', (x) => x >= 1 && x <= 30], ['days31to60', '31-60', (x) => x > 30 && x <= 60],
+    ['days61to90', '61-90', (x) => x > 60 && x <= 90], ['over90', '90+', (x) => x > 90], ['total', 'Total', () => true]];
+  const rows = [...d.contacts, { contact: 'Total', ...d.totals }];
+  const docs = pick ? d.contacts.filter((c: any) => pick.contact === 'Total' || c.contact === pick.contact)
+    .flatMap((c: any) => c.documents.map((x: any) => ({ ...x, contact: c.contact, contactId: c.contactId }))).filter((x: any) => B.find((b) => b[0] === pick.bucket)![2](x.daysOverdue)) : [];
+  const page = sales ? 'invoices' : 'bills', contactPage = sales ? 'customers' : 'suppliers';
+  return (
+    <div className="space-y-4">
+      <table className="w-full text-sm"><thead><tr className="text-left"><th>Contact</th>{B.map((b) => <th key={b[0]} className="text-right">{b[1]}</th>)}</tr></thead>
+        <tbody>{rows.map((c: any) => <tr key={c.contact} className={c.contact === 'Total' ? 'total-row' : 'border-t border-slate-100'}>
+          <td>{c.contact !== 'Total' && go && c.contactId ? <button type="button" className="link" title="Open the contact and its statement" onClick={() => go(`${contactPage}/${c.contactId}`)}>{c.contact}</button> : c.contact}</td>
+          {B.map(([k, label]) => <td key={k} className="text-right tabular-nums">{c[k] ? <button type="button" className="link" aria-label={`${c.contact} ${label}: ${fmt(c[k])}`} onClick={() => setPick({ contact: c.contact, contactId: c.contactId, bucket: k, label })}>{fmt(c[k])}</button> : fmt(c[k])}</td>)}</tr>)}</tbody></table>
+      {pick && (
+        <div role="region" aria-label="Documents behind the amount" className="rounded-lg border border-brand-100 bg-brand-50/30 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="font-semibold text-brand-900">{pick.contact === 'Total' ? 'All contacts' : pick.contact} · {pick.label}: {docs.length} {sales ? 'invoice' : 'bill'}{docs.length === 1 ? '' : 's'}</p>
+            <span className="flex gap-2">{go && pick.contactId && <Button variant="ghost" onClick={() => go(`${contactPage}/${pick.contactId}`)}>Statement of {pick.contact}</Button>}<Button variant="ghost" onClick={() => setPick(null)}>Close</Button></span>
+          </div>
+          <table className="w-full text-sm"><thead><tr className="text-left"><th>Number</th><th>Contact</th><th>Due date</th><th className="text-right">Days overdue</th><th className="text-right">Outstanding</th></tr></thead>
+            <tbody>{docs.map((x: any) => <tr key={x.id}><td>{go ? <button type="button" className="link" onClick={() => go(`${page}/open-${x.id}`)}>{x.number}</button> : x.number}</td><td>{x.contact}</td><td>{x.dueDate}</td>
+              <td className="text-right">{x.daysOverdue || '—'}</td><td className="text-right tabular-nums">{fmt(x.outstanding)}</td></tr>)}</tbody>
+            <tfoot><tr><td colSpan={4}>Total</td><td className="text-right tabular-nums">{fmt(docs.reduce((s: number, x: any) => s + x.outstanding, 0))}</td></tr></tfoot></table>
+        </div>)}
+    </div>
+  );
+}
+
+/**
+ * The ledger, account by account: a heading per account that folds away, then date, counter-ledger, narration, reference,
+ * debit, credit and running balance, and the period total with the closing balance. Columns can be hidden; search finds lines.
+ */
+function LedgerView({ d, onLink }: { d: any; onLink?: (l: any) => void }) {
+  const links: (any | null)[] = d.links ?? [];
+  const cols: { header: string; type: string }[] = d.columns;
+  const [hidden, setHidden] = useState<Set<number>>(() => { try { return new Set(JSON.parse(localStorage.getItem('ledger-hidden') ?? '[]')); } catch { return new Set(); } });
+  const [closed, setClosed] = useState<Set<number>>(new Set());
+  const [q, setQ] = useState('');
+  const toggleCol = (i: number) => setHidden((h) => { const n = new Set(h); if (n.has(i)) n.delete(i); else n.add(i); try { localStorage.setItem('ledger-hidden', JSON.stringify([...n])); } catch { /* storage may be off */ } return n; });
+  // Split the server's rows into one section per account.
+  const sections: { head: number; rows: number[] }[] = [];
+  d.rows.forEach((_: unknown, i: number) => { if (links[i]?.kind === 'account') sections.push({ head: i, rows: [] }); else if (sections.length) sections[sections.length - 1].rows.push(i); });
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const match = (i: number) => !words.length || words.every((w) => d.rows[i].join(' ').toLowerCase().includes(w));
+  const show = cols.map((_, i) => i).filter((i) => i > 0 ? !hidden.has(i) : true);
+  const cell = (i: number, ci: number) => {
+    const v = d.rows[i][ci], money = cols[ci].type === 'money';
+    const text = money ? (typeof v === 'number' && (v !== 0 || ci === cols.length - 1) ? fmt(v) : '—') : String(v ?? '') || '—';
+    const link = onLink && links[i] && links[i].kind !== 'account' && text !== '—' && (cols[ci].header === 'Narration' || cols[ci].header === 'Reference' || (money && ci !== cols.length - 1));
+    return <td key={ci} className={money ? 'whitespace-nowrap text-right tabular-nums' : ''}>{link
+      ? <button type="button" className="link text-left" title={links[i].kind === 'journal' ? 'Open the journal entry' : 'Open the document'} onClick={() => onLink!(links[i])}>{text}</button> : text}</td>;
+  };
+  return (
+    <div className="text-sm" data-testid="table-report">
+      <p className="mb-2 text-slate-500">{d.subtitle}</p>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input type="search" aria-label="Search the ledger" placeholder="Search narration, counter-ledger, reference…" value={q} onChange={(e) => setQ(e.target.value)}
+          className="w-72 max-w-full rounded-md border border-slate-300 px-3 py-1.5 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" />
+        <details className="relative"><summary className="cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700">Columns</summary>
+          <div className="absolute z-30 mt-1 w-56 rounded-lg border border-brand-100 bg-white p-2 shadow-xl">{cols.map((c, i) => i > 0 && <label key={i} className="flex items-center gap-2 px-1 py-1">
+            <input type="checkbox" aria-label={`Show ${c.header}`} checked={!hidden.has(i)} onChange={() => toggleCol(i)} />{c.header}</label>)}</div></details>
+        {sections.length > 1 && <Button variant="ghost" onClick={() => setClosed(closed.size ? new Set() : new Set(sections.map((s) => s.head)))}>{closed.size ? 'Expand all' : 'Collapse all'}</Button>}
+      </div>
+      {sections.length === 0 && <p className="py-6 text-center text-slate-500">Nothing to show for these dates.</p>}
+      <div className="space-y-3">{sections.map((s) => {
+        const rows = s.rows.filter(match); if (words.length && !rows.length) return null;
+        const open = !closed.has(s.head);
+        return (
+          <section key={s.head} className="overflow-hidden rounded-lg border border-brand-100">
+            <button type="button" aria-expanded={open} onClick={() => setClosed((c) => { const n = new Set(c); if (n.has(s.head)) n.delete(s.head); else n.add(s.head); return n; })}
+              className="flex w-full items-center gap-2 bg-white px-3 py-2 text-left font-semibold text-brand-900 hover:bg-brand-50/50">
+              <span aria-hidden className="text-brand-600">{open ? '▾' : '▸'}</span>{String(d.rows[s.head][1])}</button>
+            {open && <div className="overflow-x-auto px-2 pb-2"><table className="w-full">
+              <thead><tr className="text-left">{show.map((ci) => <th key={ci} className={cols[ci].type === 'money' ? 'text-right' : ''}>{cols[ci].header}</th>)}</tr></thead>
+              <tbody>{rows.map((i) => <tr key={i} className={(d.boldRows ?? []).includes(i) ? 'total-row' : ''}>{show.map((ci) => cell(i, ci))}</tr>)}</tbody></table></div>}
+          </section>);
+      })}</div>
     </div>
   );
 }

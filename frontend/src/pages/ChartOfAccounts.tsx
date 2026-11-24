@@ -145,7 +145,7 @@ export function ChartOfAccounts({ org, canManage, reload }: { org: Org; canManag
           columns: ['Code', 'Ledger', 'Statement line', 'Group', 'Sub-group', 'Type', '17(5) blocked', 'Status'].map((h) => ({ header: h })),
           rows: [...shown].sort((a, b) => a.code.localeCompare(b.code, 'en', { numeric: true })).map((a) => [a.code, a.name, fsliName(a.fsli), a.group, a.subGroup, a.type, a.itcBlocked ? 'Yes' : '', a.isActive ? 'Active' : 'Archived']) })} />}</div>}>
         {view === 'list'
-          ? <DataTable id="coa" rows={shown} columns={columns} rowKey={(a) => a.id} orgId={org.id} exportTitle="Chart of accounts" searchLabel="Search by number, name or group" trailing={actions} initialSort={{ key: 'code', dir: 1 }} />
+          ? <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="coa" rows={shown} columns={columns} rowKey={(a) => a.id} orgId={org.id} exportTitle="Chart of accounts" searchLabel="Search by number, name or group" trailing={actions} initialSort={{ key: 'code', dir: 1 }} />
           : <div className="space-y-5" data-testid="coa-tree">{tree.map((x) => {
               const mine = shown.filter((a) => a.fsli === x.key);
               if (!mine.length) return null;

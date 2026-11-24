@@ -166,7 +166,7 @@ await salesPage.getByRole('button', { name: 'New invoice' }).click();
 await heading(salesPage, 'Invoices');
 await salesPage.locator('[role=combobox][aria-label="Contact"]:not([data-count="0"])').first().waitFor();
 await salesPage.getByLabel('Contact', { exact: true }).click();
-const names = await salesPage.getByRole('listbox', { name: 'Contact options' }).getByRole('option').evaluateAll((o) => o.map((x) => x.dataset.value));
+const names = await salesPage.getByRole('listbox', { name: 'Suggestions' }).getByRole('option').evaluateAll((o) => o.map((x) => x.dataset.value));
 assert.deepStrictEqual(names, ['Kapoor Stores'], 'only customers are offered');
 await salesPage.getByLabel('Contact', { exact: true }).fill('Kapoor Stores');
 await salesPage.getByLabel('Description 1').fill('Brand design');

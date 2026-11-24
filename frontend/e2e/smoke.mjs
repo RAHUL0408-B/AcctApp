@@ -70,7 +70,7 @@ step('unbalanced entry rejected');
 
 await openSection('Reporting');
 await page.getByRole('button', { name: 'All reports', exact: true }).click();
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Trial balance' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Trial balance', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('tb-debit').waitFor();
 assert.equal(await page.getByTestId('tb-debit').innerText(), '5,000.50');
 assert.equal(await page.getByTestId('tb-credit').innerText(), '5,000.50');
@@ -82,7 +82,7 @@ await page.getByRole('button', { name: /^Actions for entry/ }).first().click(); 
 await page.getByText('Reversal posted.').waitFor();
 await openSection('Reporting');
 await page.getByRole('button', { name: 'All reports', exact: true }).click();
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Trial balance' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Trial balance', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('✓').first().waitFor();
 step('entry reversed; books still balanced');
 

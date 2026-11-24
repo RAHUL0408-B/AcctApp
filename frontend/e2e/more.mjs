@@ -174,11 +174,11 @@ step('tracking category Branch (Mumbai, Pune) and a Rs 1,000/month revenue budge
 
 // ---- reports
 await nav('All reports');
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'P&L by month' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'P&L by month', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('grid-net').waitFor();
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'Budget vs actual' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'Budget vs actual', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByTestId('bva').getByText('4000 Service Revenue').waitFor();
-await page.getByLabel('Report', { exact: true }).selectOption({ label: 'GSTR-3B' }); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
+await page.getByRole('combobox', { name: 'Report', exact: true }).click(); await page.getByRole('option', { name: 'GSTR-3B', exact: true }).click(); await page.locator('main').getByRole('button', { name: 'Run', exact: true }).click();
 await page.getByText('3.1(b) Zero-rated (exports, SEZ)').waitFor();
 await page.getByRole('cell', { name: '83,250.00' }).first().waitFor();
 step('P&L by month, budget vs actual and GSTR-3B with the zero-rated export');

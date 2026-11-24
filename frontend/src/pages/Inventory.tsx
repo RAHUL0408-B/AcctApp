@@ -34,7 +34,7 @@ export function Inventory({ org, canManage }: { org: Org; canManage: boolean }) 
         <Stat label="Stock agrees with the ledger" value={s.agrees ? 'Yes' : 'No'} tone={s.agrees ? 'good' : 'bad'} />
       </div>
       <Card title="Stock on hand">
-        <DataTable id="stock" rows={s.items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Stock on hand" empty="No tracked items. Turn on stock tracking when you add a goods item under Products and services." searchLabel="Search stock"
+        <DataTable dateKey="date" facets={['status', 'type', 'kind', 'group', 'side']} id="stock" rows={s.items} rowKey={(i) => i.id} orgId={org.id} exportTitle="Stock on hand" empty="No tracked items. Turn on stock tracking when you add a goods item under Products and services." searchLabel="Search stock"
           columns={[
             { key: 'code', label: 'Code', value: (i) => i.code, render: (i) => <b>{i.code}</b> },
             { key: 'name', label: 'Item', value: (i) => i.name },
